@@ -246,7 +246,10 @@ kbd { font-family: var(--font-sans); font-size: 11px; font-weight: 600; border: 
 .chip.warm { background: var(--warn-fill); border-color: var(--warn-edge); color: var(--warn-text); box-shadow: none; }
 .chip.bad { border-color: var(--text); color: var(--text); }
 /* a letter tile where a logo would be: a round tile on the second surface, no outside logos */
-.av { width: 34px; height: 34px; border-radius: 50%; background: var(--surface-2); border: 0; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-sans); font-size: 10px; font-weight: 700; flex: none; color: var(--text); letter-spacing: 0; }
+.av { width: 34px; height: 34px; border-radius: 50%; background: var(--surface-2); border: 0; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-sans); font-size: 10px; font-weight: 700; flex: none; color: var(--text); letter-spacing: 0; position: relative; overflow: hidden; }
+/* a logo over the letters (core avatar), filling the tile's circle on white: a logo drawn for a light page reads on Cream and Black alike,
+   and while it loads the letters do not show through. One that does not load is taken away, and the letters are the tile */
+.av-im { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: #fff; }
 .av.sm { width: 28px; height: 28px; font-size: 9px; }
 .av.lg { width: 44px; height: 44px; font-size: 12px; }
 .who { display: flex; align-items: center; gap: 12px; min-width: 0; }

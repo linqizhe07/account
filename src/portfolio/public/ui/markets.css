@@ -164,6 +164,12 @@
 @keyframes mk-peek-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .mk-peek:not([hidden]) { animation: none; } }
 
+/* the logos' credit (markets.js mkCredit): Elbstream's free logos are shown with a link to elbstream.com, at 12pt, wherever one is */
+.mk-credit { margin: -14px 0 0; font-size: 12pt; color: var(--dim); text-align: right; }
+.mk-credit a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.mk-credit a:hover { color: var(--text); }
+.mk-d .mk-credit { margin: 0; text-align: left; }
+
 /* ---- connecting an account (ui/connect.js): what it is, as tiles that are cards, then one short form ------------------------------ */
 .pick .tile { border-radius: var(--radius-m); padding: 14px; gap: 4px; }
 .pick.wide .tile { padding: 14px 16px; }

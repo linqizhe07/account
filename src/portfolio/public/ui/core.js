@@ -297,8 +297,23 @@ const isLive = (o) => ["open", "partial", "pending"].includes(o.status);
 const byOf = (p) => (p.authority !== "agent" ? "You" : `${keyName(p.agent)}, ${p.card ? "approved by you" : "inside its limit"}`);
 /* one icon from the sprite in account.html: stroke drawings, nobody's logo */
 const icon = (name, cls = "") => `<svg class="ico${cls ? ` ${cls}` : ""}" aria-hidden="true" focusable="false"><use href="#i-${esc(name)}"></use></svg>`;
-/* a letter tile where a logo would be */
-const avatar = (sym, size = "") => `<span class="av${size ? ` ${size}` : ""}" aria-hidden="true">${esc(String(sym || "?").replace(/[^A-Za-z0-9$]/g, "").slice(0, 4).toUpperCase() || "?")}</span>`;
+/* the logos that did not load on this page: not asked for again, their letter tiles stand (avatar) */
+const ICON_MISS = new Set();
+/* a letter tile where a logo would be — and over it the logo itself where there is one (`img`: the address of an image the page loads from
+   where its owner publishes it, live/icons.ts; no referrer goes with it). One that does not load is taken away and not asked for again, and
+   the letters are the tile */
+const avatar = (sym, size = "", img = "") => `<span class="av${size ? ` ${size}` : ""}" aria-hidden="true">${esc(String(sym || "?").replace(/[^A-Za-z0-9$]/g, "").slice(0, 4).toUpperCase() || "?")}${img && !ICON_MISS.has(img) ? `<img class="av-im" src="${esc(img)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}</span>`;
+/* a logo's error does not bubble: heard once, in capture, for every tile on the page */
+document.addEventListener(
+  "error",
+  (e) => {
+    const t = e.target;
+    if (!t || !t.classList || !t.classList.contains("av-im")) return;
+    ICON_MISS.add(t.getAttribute("src"));
+    t.remove();
+  },
+  true,
+);
 /** a change, up or down: the glyph, a word for a screen reader, the amount — never the colour alone */
 function chg(n, unit = "%") {
   if (n === undefined || n === null || n === "" || !Number.isFinite(Number(n))) return '<span class="flat">—</span>';

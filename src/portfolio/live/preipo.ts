@@ -100,21 +100,23 @@ export interface PreIpoCompany {
   name: string;
   /** the bases venues give it, upper case (a venue's trailing "x" or "STOCK" is read off before matching) */
   aliases: readonly string[];
+  /** the company's own website, whose icon is the company's on its row (live/icons.ts) */
+  domain: string;
 }
 
 /** the companies, under the names the venues used on 2026-10-06 (OKX, Gate, Kraken Futures, Deribit, KuCoin Futures, MEXC, and Bitget's,
  * Phemex's, Binance's and Bybit's symbols as the exchanges list them) and on 2026-10-08 (Hyperliquid's HIP-3 io:ANTH, io:OAI, xyz:OURA) */
 export const PRE_IPO_COMPANIES: readonly PreIpoCompany[] = [
-  { slug: "anthropic", name: "Anthropic", aliases: ["ANTHROPIC", "ANTH"] },
-  { slug: "openai", name: "OpenAI", aliases: ["OPENAI", "OAI"] },
-  { slug: "anduril", name: "Anduril", aliases: ["ANDURIL"] },
-  { slug: "neuralink", name: "Neuralink", aliases: ["NEURALINK"] },
-  { slug: "figureai", name: "Figure AI", aliases: ["FIGUREAI"] },
-  { slug: "kalshi", name: "Kalshi", aliases: ["KALSHI"] },
-  { slug: "polymarket", name: "Polymarket", aliases: ["POLYMARKET"] },
-  { slug: "oura", name: "Oura", aliases: ["OURA"] },
-  { slug: "moonshot", name: "Moonshot AI (Kimi)", aliases: ["MOONSHOT", "KIMISTOCK"] },
-  { slug: "ymtc", name: "YMTC", aliases: ["YMTC"] },
+  { slug: "anthropic", name: "Anthropic", aliases: ["ANTHROPIC", "ANTH"], domain: "anthropic.com" },
+  { slug: "openai", name: "OpenAI", aliases: ["OPENAI", "OAI"], domain: "openai.com" },
+  { slug: "anduril", name: "Anduril", aliases: ["ANDURIL"], domain: "anduril.com" },
+  { slug: "neuralink", name: "Neuralink", aliases: ["NEURALINK"], domain: "neuralink.com" },
+  { slug: "figureai", name: "Figure AI", aliases: ["FIGUREAI"], domain: "figure.ai" },
+  { slug: "kalshi", name: "Kalshi", aliases: ["KALSHI"], domain: "kalshi.com" },
+  { slug: "polymarket", name: "Polymarket", aliases: ["POLYMARKET"], domain: "polymarket.com" },
+  { slug: "oura", name: "Oura", aliases: ["OURA"], domain: "ouraring.com" },
+  { slug: "moonshot", name: "Moonshot AI (Kimi)", aliases: ["MOONSHOT", "KIMISTOCK"], domain: "kimi.com" },
+  { slug: "ymtc", name: "YMTC", aliases: ["YMTC"], domain: "ymtc.com" },
 ];
 
 /** never a pre-IPO contract, whatever a venue's record says: SpaceX is public since 12 June 2026 (Nasdaq SPCX) */

@@ -81,6 +81,7 @@
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { isExcludedCategory, isIpoCategory, isRwaMarket, TABS, type TabId } from "./categories.ts";
 import { normalBase, scopeOf, type CompareMissing, type PlaceRule } from "./compare.ts";
+import { iconOf } from "./icons.ts";
 import { impliedUsd, PER_SHARE, PRE_IPO_CATEGORY, PRE_IPO_GROUP, PRE_IPO_PER_POINT } from "./preipo.ts";
 import type { EventsQuery, Listing, PublicSource } from "./public-markets.ts";
 import { inDollars, type LiveTrader, type Market, type MarketSession, type MarketStats } from "./trade.ts";
@@ -211,6 +212,9 @@ export interface ExploreItem {
   pastEnd?: boolean | undefined;
   /** the venue's event an event market belongs to, where an event holds several, and the market's own short name inside it (Listing) */
   event?: { id: string; title: string; market?: string | undefined } | undefined;
+  /** the logo a page shows beside its name: the address of an image the page loads itself, from where its owner publishes it (live/icons.ts);
+   * none where no source names one */
+  icon?: string | undefined;
   /** a perpetual's funding rate per interval and when it is next paid, from its most traded venue that says */
   fundingRate?: number | undefined;
   nextFundingAt?: string | undefined;
@@ -879,7 +883,10 @@ export async function exploreAcross(sources: ExploreSources, opts: ExploreOption
     const aside: ExploreMissing[] = [];
     const item = rowOf(key, row.kind, row.venues, aside, now);
     if (!item || (q && !matches(item, row.words, q.toLowerCase()))) continue;
-    made.push(item);
+    // its logo: an event's is the venue's own picture where a listing carried one (live/icons.ts)
+    const image = row.kind === "event" ? [...row.venues.values()].flat().map((g) => (g.m as Listing).image).find((x): x is string => typeof x === "string" && x !== "") : undefined;
+    const icon = iconOf(item, image);
+    made.push(icon ? { ...item, icon } : item);
     missing.push(...aside);
   }
   // Predictions is a few of the busiest when nothing is searched for: the other event rows are not shown anywhere. An event under an

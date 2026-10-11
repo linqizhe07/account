@@ -160,6 +160,25 @@ describe("one row for one thing", () => {
   });
 });
 
+describe("a row's logo", () => {
+  it("names the logo a page shows beside each row (live/icons.ts): a coin's, a share's, a Kalshi series' and Polymarket's own picture", async () => {
+    const okx = trader({ markets: [mk("BTC/USDT", "spot", "BTC", "USDT", { price: 62_000, volumeUsd24h: 1e9 })] });
+    const alpaca = trader({ markets: [mk("AAPL", "stock", "AAPL", "USD", { name: "Apple Inc.", price: 230 })] });
+    const k = trader({ markets: [], events: kalshi("KXFEDDECISION-26OCT-H0", "Fed decision?", 0.83, { closeTime: iso(NOW + 30 * 24 * HOUR), category: "Economics" }) });
+    // the picture is the public listing's, also where the market is shown from a connected venue's legs
+    const legs = polymarket("lula-2026", "Will Lula win?", [["Yes", 0.4], ["No", 0.6]], { volumeUsd24h: 1e6 });
+    const pic = "https://polymarket-upload.s3.us-east-2.amazonaws.com/lula.png";
+    const gamma = pub("polymarket", "Polymarket", { kind: "events", connectTo: "polymarket", connector: "live:polymarket-trade", listings: legs.map((m) => ({ ...m, types: [], image: pic })) });
+    const mm = trader({ markets: [], events: legs });
+    const out = await exploreAcross({ connected: [venue("okx", "OKX", okx), venue("alpaca", "Alpaca", alpaca), venue("kalshi", "Kalshi", k, "live:kalshi"), venue("metamask", "MetaMask", mm)], public: [gamma] }, { clock });
+    const icon = (key: string) => out.items.find((i) => i.key === key)?.icon;
+    expect(icon("coin:BTC")).toBe("https://api.elbstream.com/logos/crypto/BTC");
+    expect(icon("stock:AAPL")).toBe("https://api.elbstream.com/logos/symbol/AAPL");
+    expect(icon("kalshi:KXFEDDECISION-26OCT-H0")).toBe("https://kalshi-public-docs.s3.amazonaws.com/series-images-webp/KXFEDDECISION.webp");
+    expect(icon(`pm:${COND}`)).toBe(pic);
+  });
+});
+
 describe("event contracts", () => {
   it("folds a Kalshi market's YES and NO legs into one row with its outcomes, whichever call listed them", async () => {
     const legs = kalshi("KXFED-27APR-T4.00", "Fed above 4.00% after April?", 0.43, { closeTime: iso(NOW + 30 * 24 * HOUR), category: "Economics" });

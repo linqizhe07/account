@@ -171,6 +171,9 @@ export type Listing = Market & {
   eventVolumeUsd24h?: number | undefined;
   /** every category word and tag the venue gives it, for the category shown and the words that leave an event out (categories.ts) */
   tags?: string[] | undefined;
+  /** the venue's own picture for an event market, as its API gives one (Polymarket's `icon` for the market, else for its event; Polymarket
+   * US's `image`): the row's icon (live/icons.ts), shown only from the venue's own host */
+  image?: string | undefined;
   /** the name of the place it trades, where one source speaks for several (Hyperliquid's HIP-3 deployers: "Hyperliquid · io"): explore.ts
    * names the market's venue line with it; absent, the line is the source's name */
   venueName?: string | undefined;
@@ -922,6 +925,8 @@ function polymarketLegs(m: Rec, e: Rec, tags: string[]): Listing[] {
   const eventId = str(e.id) ?? (typeof e.id === "number" ? String(e.id) : undefined);
   // the market's own name inside its event ("October 12" in "US-Iran ceasefire continues through...?"), where the event holds several
   const short = str(m.groupItemTitle);
+  // its picture: the market's own (a candidate's), else its event's
+  const image = str(m.icon) ?? str(e.icon);
   return names.map((outcome, i): Listing => {
     const p = prices[i];
     const first = i === 0;
@@ -947,6 +952,7 @@ function polymarketLegs(m: Rec, e: Rec, tags: string[]): Listing[] {
       ...(volume !== undefined ? { volumeUsd24h: volume } : {}),
       ...(eventVolume !== undefined ? { eventVolumeUsd24h: eventVolume } : {}),
       ...(eventId && str(e.title) ? { event: { id: eventId, title: str(e.title)!, ...(short ? { market: short } : {}) } } : {}),
+      ...(image ? { image } : {}),
     };
   });
 }
@@ -1071,7 +1077,8 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
   /** a market's two legs as a listing: the shared shape with no order types (nothing is ordered through a listing), its category word kept */
   const legs = (m: Rec): Listing[] => {
     const word = str(m.category);
-    return pmusLegs(m).map((l) => ({ symbol: l.symbol, name: l.name, kind: l.kind, base: l.base, quote: l.quote, price: l.price, bid: l.bid, ask: l.ask, open: l.open, types: [], ...(l.group ? { group: l.group } : {}), ...(l.outcome ? { outcome: l.outcome } : {}), ...(l.closeTime ? { closeTime: l.closeTime } : {}), ...(l.category ? { category: l.category } : {}), ...(word ? { tags: [word] } : {}) }));
+    const image = str(m.image);
+    return pmusLegs(m).map((l) => ({ symbol: l.symbol, name: l.name, kind: l.kind, base: l.base, quote: l.quote, price: l.price, bid: l.bid, ask: l.ask, open: l.open, types: [], ...(l.group ? { group: l.group } : {}), ...(l.outcome ? { outcome: l.outcome } : {}), ...(l.closeTime ? { closeTime: l.closeTime } : {}), ...(l.category ? { category: l.category } : {}), ...(word ? { tags: [word] } : {}), ...(image ? { image } : {}) }));
   };
   const read = async (o: { q?: string | undefined; category?: string | undefined; closingWithinMs?: number | undefined; limit: number }): Promise<Listing[] | Refusal> => {
     const q = (o.q ?? "").trim();
