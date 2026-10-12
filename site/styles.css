@@ -195,7 +195,6 @@ h2.on-deep { color: var(--on-deep); }
 .term-bar em { margin-left: auto; font: 500 10px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--on-deep-40); font-style: normal; }
 .tools { display: flex; flex-wrap: wrap; gap: 6px; min-height: 120px; position: relative; z-index: 1; }
 .tools li { font: 500 11px/1 var(--mono); padding: 7px 9px; border-radius: 6px; border: 1px solid var(--deep-line); color: var(--on-deep); opacity: 0; transform: translateY(6px); transition: opacity 320ms ease-out, transform 320ms ease-out; }
-.term.on .tools li { opacity: 1; transform: none; }
 .tools li.write { border-color: var(--mint-40); color: var(--mint); }
 .term-foot { margin-top: 14px; display: flex; align-items: center; gap: 8px; font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--on-deep-40); position: relative; z-index: 1; }
 .cursor { width: 8px; height: 14px; background: var(--mint); animation: blink 1s steps(2) infinite; }
@@ -264,16 +263,48 @@ h2.on-deep { color: var(--on-deep); }
 .foot .bottom { margin-top: clamp(36px, 5vw, 64px); padding-top: 22px; border-top: 1px solid var(--deep-line-2); display: grid; gap: 8px; font-size: 12px; color: var(--on-deep-40); }
 @media (max-width: 720px) { .foot .top { grid-template-columns: 1fr 1fr; } }
 
+/* ---- power-on, spotlight, aurora, board hits, nav, wordmark ---- */
+.instrument .corner { opacity: 0; transform: scale(0.5); transition: opacity 500ms ease-out, transform 500ms ease-out; }
+.instrument .corner.tr { transition-delay: 90ms; }
+.instrument .corner.bl { transition-delay: 180ms; }
+.instrument .corner.br { transition-delay: 270ms; }
+.instrument.on .corner { opacity: 1; transform: none; }
+.instrument.powering::before { content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; background: var(--mint); will-change: opacity; animation: flash 700ms ease-out forwards; }
+@keyframes flash { from { opacity: 0.22; } to { opacity: 0; } }
+.spot { position: absolute; inset: 0; pointer-events: none; z-index: 1; opacity: 0; will-change: opacity; transition: opacity 320ms ease-out; background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), rgba(151, 252, 227, 0.13), transparent 62%); }
+.instrument:hover .spot { opacity: 1; }
+.band-vision { position: relative; overflow: hidden; }
+.band-vision .wrap { position: relative; z-index: 1; }
+.aurora { position: absolute; inset: -30% -10%; pointer-events: none; background: radial-gradient(40% 50% at 30% 40%, rgba(151, 252, 227, 0.14), transparent 70%), radial-gradient(35% 45% at 70% 60%, rgba(68, 114, 89, 0.4), transparent 70%); animation: drift 22s ease-in-out infinite alternate; will-change: transform; }
+@keyframes drift { from { transform: translate3d(-6%, -4%, 0) rotate(-3deg); } to { transform: translate3d(6%, 5%, 0) rotate(3deg); } }
+.board tr.hit td { animation: hit 900ms ease-out; }
+@keyframes hit { from { background: rgba(151, 252, 227, 0.14); } to { background: transparent; } }
+.board tr.new { animation: arrive 480ms ease-out; }
+@keyframes arrive { from { opacity: 0; transform: translateX(-10px); } }
+.nav .pill.active { background: var(--ink); color: var(--white); }
+.wordmark i { color: var(--ink); transition: color 1200ms ease-out; }
+.wordmark.on i { color: var(--green); }
+.boot { display: grid; gap: 6px; margin-bottom: 12px; position: relative; z-index: 1; font: 400 11px/1.5 var(--mono); color: var(--on-deep-60); min-height: 54px; }
+.boot li::before { content: "› "; color: var(--mint-70); }
+.boot.typing li { opacity: 0; }
+.boot.typing li.typed { opacity: 1; }
+.term.on-tools .tools li { opacity: 1; transform: none; }
+
 /* ---- the lighter setting (a phone-sized screen, or a machine whose frames dragged): no scanlines, no blur behind the nav ---- */
 html.lite .instrument::after { display: none; }
 html.lite .nav { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(248, 249, 249, 0.96); }
 html.lite .sat { will-change: auto; }
 html.lite .stats { box-shadow: none; }
+html.lite .spot, html.lite .aurora { display: none; }
 
 /* ---- motion off ---- */
 @media (prefers-reduced-motion: reduce) {
   .fade { opacity: 1; transform: none; transition: none; }
   .ch.flip { animation: none; color: inherit; }
-  .cursor, .tag .live { animation: none; }
+  .cursor, .tag .live, .aurora, .instrument.powering::before, .board tr.hit td, .board tr.new { animation: none; }
   .tools li { opacity: 1; transform: none; transition: none; }
+  .instrument .corner { opacity: 1; transform: none; transition: none; }
+  .spot { display: none; }
+  .boot.typing li { opacity: 1; }
+  .wordmark i { color: var(--green); transition: none; }
 }

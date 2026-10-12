@@ -50,18 +50,22 @@ let lastT = performance.now();
 const decoders = [];
 let slowSince = 0;
 function degrade(t) {
-  // after two seconds of frames that mostly miss 60 fps, drop to the lighter setting once (never back up: flapping would show)
-  if (quality === 0 || frames.length < 60) return;
+  // after four seconds of frames that mostly miss 60 fps, and never in the first six seconds (decoders, counters and the instruments'
+  // power-on all land together then), drop to the lighter setting once; never back up, flapping would show
+  if (quality === 0 || frames.length < 60 || t < 6000) return;
   const d = [...frames].sort((a, b) => a - b);
-  if (d[Math.floor(d.length * 0.75)] > 22) { if (!slowSince) slowSince = t; else if (t - slowSince > 2000) { lite(); for (const s of scenes) s.resize(); } }
+  if (d[Math.floor(d.length * 0.75)] > 22) { if (!slowSince) slowSince = t; else if (t - slowSince > 4000) { lite(); for (const s of scenes) s.resize(); } }
   else slowSince = 0;
 }
 function loop(t) {
   const dt = Math.min(50, t - lastT);
   lastT = t;
-  frames.push(dt);
-  if (frames.length > 120) frames.shift();
-  degrade(t);
+  // a hidden tab is given a frame a second or so by the browser: not this page's doing, so neither measured nor punished
+  if (!document.hidden) {
+    frames.push(dt);
+    if (frames.length > 120) frames.shift();
+    degrade(t);
+  }
   for (const s of scenes) {
     if (!s.visible) continue;
     const fps = quality ? s.fps : Math.min(s.fps, 8);
@@ -97,6 +101,9 @@ function syncSats(items) {
     $("b", sat.el).textContent = q.px;
   });
 }
+const hover = matchMedia("(hover: hover)").matches;
+const par = { tx: 0, ty: 0, x: 0, y: 0 };
+if (hover) $(".hero")?.addEventListener("mousemove", (e) => { par.tx = (e.clientX / innerWidth - 0.5) * 2; par.ty = (e.clientY / innerHeight - 0.5) * 2; });
 scene($("[data-scene=globe]"), (s) => {
   const N = quality ? 1500 : 800;
   const pts = [];
@@ -133,7 +140,8 @@ scene($("[data-scene=globe]"), (s) => {
   const { pts, arcs, rings } = s.state;
   // a phone-sized box keeps the orbits inside its frame
   const R = Math.min(s.w, s.h) * (s.w < 520 ? 0.28 : 0.32), cx = s.w / 2, cy = s.h / 2;
-  const rot = t * 0.00012, tilt = 0.42;
+  if (quality && hover) { par.x += (par.tx - par.x) * 0.04; par.y += (par.ty - par.y) * 0.04; }
+  const rot = t * 0.00012 + par.x * 0.35, tilt = 0.42 + par.y * 0.22;
   const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
   const pr = (p) => {
     const x = p[0] * cr - p[2] * sr, z0 = p[0] * sr + p[2] * cr;
@@ -148,6 +156,15 @@ scene($("[data-scene=globe]"), (s) => {
     g.addColorStop(1, mint(0));
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(cx, cy, R * 1.05, 0, 6.2832); ctx.fill();
+  }
+  // the atmosphere: a thin rim of light just outside the sphere
+  if (quality) {
+    const atm = ctx.createRadialGradient(cx, cy, R * 0.94, cx, cy, R * 1.16);
+    atm.addColorStop(0, mint(0));
+    atm.addColorStop(0.3, mint(0.18));
+    atm.addColorStop(1, mint(0));
+    ctx.fillStyle = atm;
+    ctx.beginPath(); ctx.arc(cx, cy, R * 1.16, 0, 6.2832); ctx.fill();
   }
   // rings
   ctx.lineWidth = 1;
@@ -183,20 +200,36 @@ scene($("[data-scene=globe]"), (s) => {
     const u = ((t / arc.period) + arc.phase) % 1;
     const i = Math.min(P.length - 1, Math.floor(u * P.length));
     const f = P[i];
+    // the trail behind the flight
+    for (let k = 1; k <= 6 && i - k >= 0; k++) {
+      const a0 = P[i - k], a1 = P[i - k + 1];
+      ctx.strokeStyle = mint(0.55 * (1 - k / 7) * ((a1[2] + 1) / 2 + 0.2));
+      ctx.lineWidth = 2.2 - k * 0.3;
+      ctx.beginPath(); ctx.moveTo(a0[0], a0[1]); ctx.lineTo(a1[0], a1[1]); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
     const a = 0.3 + 0.7 * ((f[2] + 1) / 2);
     ctx.fillStyle = mint(0.16 * a); ctx.beginPath(); ctx.arc(f[0], f[1], 7, 0, 6.2832); ctx.fill();
     ctx.fillStyle = mint(a); ctx.beginPath(); ctx.arc(f[0], f[1], 2.2, 0, 6.2832); ctx.fill();
   }
-  // the quotes in orbit
-  for (const sat of sats) {
-    const a = t * sat.speed + sat.phase;
-    const r = s.w < 520 ? 1.02 + (sat.radius - 1.2) * 0.6 : 1.1 + (sat.radius - 1.2) * 0.8;
+  // the quotes in orbit, each on its own faint ring
+  const orbit = (sat, a, r) => {
     let x = Math.cos(a) * r, y = 0, z = Math.sin(a) * r;
     const ci = Math.cos(sat.inc), si = Math.sin(sat.inc);
     [y, z] = [y * ci - z * si, y * si + z * ci];
     const cz = Math.cos(sat.tilt), sz = Math.sin(sat.tilt);
     [x, y] = [x * cz - y * sz, x * sz + y * cz];
-    const q = pr([x, y, z]);
+    return pr([x, y, z]);
+  };
+  for (const sat of sats) {
+    const a = t * sat.speed + sat.phase;
+    const r = s.w < 520 ? 1.02 + (sat.radius - 1.2) * 0.6 : 1.1 + (sat.radius - 1.2) * 0.8;
+    if (quality) {
+      ctx.beginPath();
+      for (let k = 0; k <= 48; k++) { const o = orbit(sat, (k / 48) * 6.2832, r); k ? ctx.lineTo(o[0], o[1]) : ctx.moveTo(o[0], o[1]); }
+      ctx.strokeStyle = mint(0.09); ctx.stroke();
+    }
+    const q = orbit(sat, a, r);
     const depth = (q[2] + 1) / 2;
     const behind = q[2] < 0 && Math.hypot(q[0] - cx, q[1] - cy) < R;
     ctx.fillStyle = mint(behind ? 0.15 : 0.9);
@@ -260,6 +293,15 @@ scene($("[data-scene=radar]"), (s) => {
     ctx.strokeStyle = mint(0.07);
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(g.x, g.y); ctx.stroke();
   }
+  // the compass: ticks on the outer ring, turning slowly
+  const spin = t / 60000;
+  for (let k = 0; k < 72; k++) {
+    const a = (k / 72) * 6.2832 + spin;
+    const long = k % 6 === 0;
+    const r0 = Rmax * (long ? 0.985 : 0.995), r1 = Rmax * 1.02;
+    ctx.strokeStyle = mint(long ? 0.5 : 0.22);
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); ctx.stroke();
+  }
   // the sweep
   const sw = (t / 4200) % 1 * 6.2832;
   const grad = quality && ctx.createConicGradient ? ctx.createConicGradient(sw, cx, cy) : null;
@@ -294,8 +336,15 @@ scene($("[data-scene=radar]"), (s) => {
       ctx.strokeStyle = mint(0.08 + 0.5 * (i / f.trail.length));
       ctx.beginPath(); ctx.moveTo(f.trail[i - 1][0], f.trail[i - 1][1]); ctx.lineTo(f.trail[i][0], f.trail[i][1]); ctx.stroke();
     }
+    // a chevron pointing where the flight goes
+    const prev = f.trail[f.trail.length - 2] ?? [x - ax, y - ay];
+    const h = Math.atan2(y - prev[1], x - prev[0]) + (f.hold > 0 && f.u >= 1 ? Math.PI : 0);
     ctx.fillStyle = mint(0.95);
-    ctx.beginPath(); ctx.arc(x, y, 2.2, 0, 6.2832); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(h) * 5, y + Math.sin(h) * 5);
+    ctx.lineTo(x + Math.cos(h + 2.5) * 4, y + Math.sin(h + 2.5) * 4);
+    ctx.lineTo(x + Math.cos(h - 2.5) * 4, y + Math.sin(h - 2.5) * 4);
+    ctx.closePath(); ctx.fill();
   }
   // gates, pulsing when a flight lands
   for (const g of gates) {
@@ -320,7 +369,7 @@ scene($("[data-scene=door]"), (s) => {
     const from = xs[stage], to = xs[stage + 1];
     return { x: from + (to - from) * (0.15 + rand() * 0.7), v: 0.14 + rand() * 0.06, refuse: stage === 0 && rand() < 0.28, guard: rand() < 0.5, stage, hold: 0, dir: 1, life: 1, label: 0 };
   });
-  return { packets, nextAt: 0, rand, refused: 0 };
+  return { packets, nextAt: 0, rand, passed: 0, carded: 0, refused: 0 };
 }, (ctx, s, t, dt) => {
   const st = s.state;
   const y = s.h * 0.5, xs = [0.06, 0.37, 0.64, 0.94].map((f) => s.w * f);
@@ -340,7 +389,7 @@ scene($("[data-scene=door]"), (s) => {
   // spawn
   if (t > st.nextAt) {
     st.nextAt = t + 520 + st.rand() * 600;
-    st.packets.push({ x: xs[0], v: 0.14 + st.rand() * 0.06, refuse: st.rand() < 0.28, guard: st.rand() < 0.5, stage: 0, hold: 0, dir: 1, life: 1, label: 0 });
+    st.packets.push({ x: xs[0], v: 0.14 + st.rand() * 0.06, refuse: st.rand() < 0.28, guard: st.rand() < 0.5, stage: 0, hold: 0, dir: 1, life: 1, label: 0, trail: [] });
   }
   for (const p of st.packets) {
     if (p.hold > 0) { p.hold -= dt; }
@@ -351,14 +400,18 @@ scene($("[data-scene=door]"), (s) => {
         if (p.refuse) { p.dir = -1; p.label = 900; st.refused++; }
       } else if (p.dir > 0 && p.stage === 1 && p.x >= xs[2]) {
         p.x = xs[2]; p.stage = 2; p.hold = p.guard ? 1100 : 180;
+        if (p.guard) st.carded++;
       } else if (p.dir > 0 && p.x >= xs[3]) {
-        p.x = xs[3]; p.stage = 3; p.hold = 400; p.life = 0.999;
+        p.x = xs[3]; p.stage = 3; p.hold = 400; p.life = 0.999; st.passed++;
       }
     }
     if (p.stage === 3 && p.hold <= 0) p.dead = true;
     if (p.dir < 0 && p.x <= xs[0] + 4) p.dead = true;
     const refusedLook = p.refuse && p.stage >= 1;
     const col = refusedLook ? (a) => `rgba(255,154,116,${a})` : mint;
+    if (!(p.trail = p.trail ?? []).length || Math.abs(p.trail[p.trail.length - 1] - p.x) > 2) p.trail.push(p.x);
+    if (p.trail.length > 9) p.trail.shift();
+    p.trail.forEach((tx, k) => { ctx.fillStyle = col(0.08 + 0.5 * (k / p.trail.length)); ctx.beginPath(); ctx.arc(tx, y, 1.2 + 1.6 * (k / p.trail.length), 0, 6.2832); ctx.fill(); });
     // glow + dot
     ctx.fillStyle = col(0.18); ctx.beginPath(); ctx.arc(p.x, y, 8, 0, 6.2832); ctx.fill();
     ctx.fillStyle = col(0.95); ctx.beginPath(); ctx.arc(p.x, y, 3, 0, 6.2832); ctx.fill();
@@ -377,6 +430,8 @@ scene($("[data-scene=door]"), (s) => {
     }
   }
   st.packets = st.packets.filter((p) => !p.dead);
+  ctx.fillStyle = mint(0.55); ctx.font = "500 9px IBM Plex Mono, monospace"; ctx.textAlign = "right";
+  ctx.fillText(`PASSED ${st.passed} · CARDED ${st.carded} · REFUSED ${st.refused} · DRAWN`, s.w - 8, 12);
 });
 
 /* ============ live quotes: each source on its own; a source that fails is not shown ============ */
@@ -466,8 +521,11 @@ function renderBoard() {
       $(".v", tr).textContent = q.venue;
       $(".m", tr).textContent = q.sym;
       rows.appendChild(tr);
+      if (!reduced) { tr.classList.add("new"); tr.addEventListener("animationend", () => tr.classList.remove("new"), { once: true }); }
     }
+    const was = $(".n", tr).textContent;
     flap($(".n", tr), q.px);
+    if (was && was !== q.px && !reduced) { tr.classList.remove("hit"); void tr.offsetWidth; tr.classList.add("hit"); }
     const c = $(".c", tr);
     if (typeof q.chg === "number") { flap(c, `${q.chg >= 0 ? "+" : ""}${q.chg.toFixed(2)}%`); c.className = `c ${q.chg >= 0 ? "up" : "down"}`; }
     else { c.textContent = "—"; c.className = "c"; }
@@ -485,7 +543,7 @@ async function poll(src) {
   renderBoard();
 }
 for (const src of SOURCES) { poll(src); setInterval(() => !document.hidden && poll(src), src.every * 1000); }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) SOURCES.forEach(poll); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { frames.length = 0; lastT = performance.now(); SOURCES.forEach(poll); } });
 // the venue station of the door shows one live quote at a time
 let doorIdx = 0;
 setInterval(() => {
@@ -546,11 +604,61 @@ const once = new IntersectionObserver((es) => {
     if (el.classList.contains("count")) count(el);
     if (el.classList.contains("decode")) decode(el);
     if (el.classList.contains("fade")) el.classList.add("in");
-    if (el.classList.contains("term")) el.classList.add("on");
   }
 }, { threshold: 0.35 });
-$$(".count, .decode, .fade, .term").forEach((el) => once.observe(el));
+$$(".count, .decode, .fade").forEach((el) => once.observe(el));
 if (reduced) $$(".fade").forEach((el) => el.classList.add("in"));
+const power = new IntersectionObserver((es) => {
+  for (const e of es) {
+    if (!e.isIntersecting) continue;
+    power.unobserve(e.target);
+    const el = e.target;
+    if (el.classList.contains("instrument")) { el.classList.add("on"); if (!reduced) el.classList.add("powering"); }
+    if (el.classList.contains("wordmark")) el.classList.add("on");
+    if (el.classList.contains("term")) bootTerm(el);
+  }
+}, { threshold: 0.2 });
+$$(".instrument, .wordmark").forEach((el) => power.observe(el));
+function bootTerm(term) {
+  const lines = $$("[data-boot] li", term);
+  const last = $("[data-boot-last]", term);
+  const real = $('[data-stat="mcpTools.real"]')?.textContent ?? "";
+  if (last && real) last.textContent = `tools · ${real} registered`;
+  if (reduced) { term.classList.add("on-tools"); return; }
+  $("[data-boot]", term).classList.add("typing");
+  const texts = lines.map((li) => li.textContent);
+  lines.forEach((li) => (li.textContent = ""));
+  let i = 0;
+  const typeLine = () => {
+    if (i >= lines.length) { term.classList.add("on-tools"); return; }
+    const li = lines[i], text = texts[i];
+    li.classList.add("typed");
+    let n = 0;
+    const tick = () => { li.textContent = text.slice(0, ++n); if (n < text.length) setTimeout(tick, 14); else { i++; setTimeout(typeLine, 160); } };
+    tick();
+  };
+  typeLine();
+}
+// the pill of the section in view
+const pillFor = new Map($$(".nav .pills .pill").map((a) => [a.getAttribute("href").slice(1), a]));
+const seen = new IntersectionObserver((es) => {
+  for (const e of es) if (e.isIntersecting) { pillFor.forEach((a) => a.classList.remove("active")); pillFor.get(e.target.id)?.classList.add("active"); }
+}, { rootMargin: "-40% 0px -50% 0px" });
+pillFor.forEach((_, id) => { const sec = document.getElementById(id); if (sec) seen.observe(sec); });
+// a spot of light under the pointer inside each instrument
+if (quality && hover) for (const inst of $$(".instrument")) {
+  let pending = null;
+  inst.addEventListener("mousemove", (e) => {
+    pending = e;
+    if (inst.raf) return;
+    inst.raf = requestAnimationFrame(() => {
+      inst.raf = 0;
+      const r = inst.getBoundingClientRect();
+      inst.style.setProperty("--mx", `${((pending.clientX - r.left) / r.width * 100).toFixed(1)}%`);
+      inst.style.setProperty("--my", `${((pending.clientY - r.top) / r.height * 100).toFixed(1)}%`);
+    });
+  });
+}
 
 (async () => {
   try {
