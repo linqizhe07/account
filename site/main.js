@@ -263,19 +263,7 @@ function renderPrs(list, note) {
   } catch { /* GitHub did not answer: the baked list stays */ }
 })();
 
-/* ---------- the day the numbers were computed ---------- */
-(async () => {
-  try {
-    const n = await get("./data/numbers.json");
-    $("[data-numbers-note]").textContent = `Numbers computed from the repository on ${n.generatedAt}.`;
-  } catch { /* the numbers are in the page either way */ }
-})();
-
-/* ---------- copy buttons, fade-in, lightbox ---------- */
-for (const b of $$("[data-copy]")) b.addEventListener("click", async () => {
-  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select it"; }
-  setTimeout(() => (b.textContent = "Copy"), 1600);
-});
+/* ---------- fade-in, lightbox ---------- */
 if (!reduced && "IntersectionObserver" in window) {
   const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.3 });
   $$(".fade").forEach((el) => io.observe(el));
