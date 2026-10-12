@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.hyperliquid.xyz https://api.kraken.com https://api.coinbase.com https://api.exchange.coinbase.com https://www.okx.com https://gamma-api.polymarket.com https://api.github.com; font-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <title>Gravit — Harness the power of global markets</title>
   <meta name="description" content="One account where AI agents trade, move money and pay across exchanges, brokers, chains and prediction markets, inside the limits you sign.">
-  <meta name="theme-color" content="#03211c">
+  <meta name="theme-color" content="#f8f9f9">
   <link rel="canonical" href="https://linqizhe07.github.io/buyer-agent-demo/">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Gravit — Harness the power of global markets">
@@ -26,7 +26,6 @@
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
-  <canvas class="stars" data-scene="stars" aria-hidden="true"></canvas>
 
   <header class="nav">
     <div class="nav-in wrap">
@@ -62,26 +61,31 @@
             <div><dt>Exchanges</dt><dd data-stat="exchanges.byApiKey">93</dd></div>
           </dl>
         </div>
-        <div class="globe-wrap" aria-hidden="true">
+        <div class="globe-wrap instrument" aria-hidden="true">
           <canvas class="globe" data-scene="globe"></canvas>
           <div class="sats" data-sats></div>
           <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
-          <p class="globe-note">Live quotes in orbit · read without a key</p>
+          <p class="tag"><span class="live"></span>Live quotes in orbit</p>
+          <p class="globe-note">Read without a key</p>
         </div>
       </div>
     </section>
 
-    <section class="section wrap" id="board" aria-labelledby="h-board">
-      <div class="section-head">
-        <p class="eyebrow">Departures · Read without a key · Connect to trade</p>
-        <h2 id="h-board" class="decode">Crypto, stocks, RWAs, perps, pre-IPO and predictions. One ticket.</h2>
-      </div>
-      <div class="board" data-board hidden>
-        <table>
-          <thead><tr><th>Venue</th><th>Market</th><th>Last</th><th>24h</th><th class="when">Seen</th></tr></thead>
-          <tbody data-board-rows></tbody>
-        </table>
-        <p class="fine board-note">Fetched by your browser from each venue's public API. A venue that does not answer is not shown.</p>
+    <section class="band band-board" id="board" aria-labelledby="h-board">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow on-deep">Departures · Read without a key · Connect to trade</p>
+          <h2 id="h-board" class="decode on-deep">Crypto, stocks, RWAs, perps, pre-IPO and predictions. One ticket.</h2>
+        </div>
+        <div class="board instrument" data-board hidden>
+          <p class="tag"><span class="live"></span>Departures</p>
+          <table>
+            <thead><tr><th>Venue</th><th>Market</th><th>Last</th><th>24h</th><th class="when">Seen</th></tr></thead>
+            <tbody data-board-rows></tbody>
+          </table>
+          <p class="fine on-deep board-note">Fetched by your browser from each venue's public API. A venue that does not answer is not shown.</p>
+          <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+        </div>
       </div>
     </section>
 
@@ -100,9 +104,10 @@
           <p class="lede">Runways for money, a tower that approves, a gate per agent key, a log of every flight.</p>
         </div>
       </div>
-      <div class="radar-wrap wrap">
+      <div class="radar-wrap instrument wrap">
         <canvas class="radar" data-scene="radar" aria-hidden="true"></canvas>
         <div class="gates" data-gates aria-hidden="true"></div>
+        <p class="tag"><span class="live"></span>Airport · drawn</p>
         <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
       </div>
       <p class="fine wrap radar-note">An illustration: the account is the hub, every venue a gate, agents fly inside their limits. The names are the venues the account connects; the flights are drawn.</p>
@@ -114,7 +119,8 @@
         <h2 id="h-door" class="decode">Every order goes through one door.</h2>
         <p class="lede">An agent signs with its own key. The account checks the limit you signed. In Guard it waits for you on a card; in Beast it goes at once. The venue answers in its own words.</p>
       </div>
-      <div class="door-wrap">
+      <div class="door-wrap instrument">
+        <p class="tag"><span class="live"></span>One door · drawn, venue live</p>
         <canvas class="door" data-scene="door" aria-hidden="true"></canvas>
         <ol class="stations" aria-hidden="true">
           <li><b>Agent</b><span>its own key</span></li>
@@ -134,7 +140,7 @@
         <p class="lede">An agent gets a seat: its own key, made on your machine, and the limits you sign. <span data-stat="mcpTools.real">32</span> tools over MCP to read, trade, move, pay, earn, ask and remember. Over a limit, it is refused.</p>
         <a class="pill pill-accent" href="https://github.com/linqizhe07/buyer-agent-demo#给-agent-的接口">Start building <span class="arr">↗</span></a>
       </div>
-      <div class="term" data-term aria-label="The agent's tools">
+      <div class="term instrument" data-term aria-label="The agent's tools">
         <div class="term-bar"><span></span><span></span><span></span><em>portfolio · mcp · stdio</em></div>
         <ol class="tools" data-tools></ol>
         <p class="term-foot"><span class="cursor"></span><span data-tools-note>tools registered on a real account</span></p>

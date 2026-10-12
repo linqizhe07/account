@@ -41,7 +41,7 @@ function scene(canvas, setup, draw, fps = 60) {
   s.resize = size;
   size();
   new ResizeObserver(() => size()).observe(canvas);
-  if (canvas.dataset.scene !== "stars") new IntersectionObserver((es) => (s.visible = es[0].isIntersecting), { rootMargin: "60px" }).observe(canvas);
+  new IntersectionObserver((es) => (s.visible = es[0].isIntersecting), { rootMargin: "60px" }).observe(canvas);
   scenes.push(s);
   return s;
 }
@@ -73,19 +73,6 @@ function loop(t) {
   requestAnimationFrame(loop);
 }
 if (!reduced) requestAnimationFrame(loop);
-
-/* ============ stars: a slow field behind everything ============ */
-scene($("[data-scene=stars]"), (s) => {
-  const rand = rng(21);
-  const n = Math.min(quality ? 320 : 140, Math.round((s.w * s.h) / 9000));
-  return Array.from({ length: n }, () => ({ x: rand() * s.w, y: rand() * s.h, r: 0.6 + rand() * 1.3, p: rand() * 6.28, k: 0.6 + rand() * 0.8 }));
-}, (ctx, s, t) => {
-  ctx.clearRect(0, 0, s.w, s.h);
-  for (const st of s.state) {
-    ctx.fillStyle = mint(0.12 + 0.42 * (0.5 + 0.5 * Math.sin(t / 1600 * st.k + st.p)));
-    ctx.fillRect(st.x, st.y, st.r, st.r);
-  }
-}, 12);
 
 /* ============ the globe: a dotted sphere, a scan, flights, and the live quotes in orbit ============ */
 const sats = [];
@@ -145,7 +132,7 @@ scene($("[data-scene=globe]"), (s) => {
 }, (ctx, s, t) => {
   const { pts, arcs, rings } = s.state;
   // a phone-sized box keeps the orbits inside its frame
-  const R = Math.min(s.w, s.h) * (s.w < 520 ? 0.29 : 0.34), cx = s.w / 2, cy = s.h / 2;
+  const R = Math.min(s.w, s.h) * (s.w < 520 ? 0.28 : 0.32), cx = s.w / 2, cy = s.h / 2;
   const rot = t * 0.00012, tilt = 0.42;
   const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
   const pr = (p) => {
@@ -203,7 +190,7 @@ scene($("[data-scene=globe]"), (s) => {
   // the quotes in orbit
   for (const sat of sats) {
     const a = t * sat.speed + sat.phase;
-    const r = s.w < 520 ? 1.02 + (sat.radius - 1.2) * 0.6 : sat.radius;
+    const r = s.w < 520 ? 1.02 + (sat.radius - 1.2) * 0.6 : 1.1 + (sat.radius - 1.2) * 0.8;
     let x = Math.cos(a) * r, y = 0, z = Math.sin(a) * r;
     const ci = Math.cos(sat.inc), si = Math.sin(sat.inc);
     [y, z] = [y * ci - z * si, y * si + z * ci];
@@ -214,7 +201,9 @@ scene($("[data-scene=globe]"), (s) => {
     const behind = q[2] < 0 && Math.hypot(q[0] - cx, q[1] - cy) < R;
     ctx.fillStyle = mint(behind ? 0.15 : 0.9);
     ctx.beginPath(); ctx.arc(q[0], q[1], 2.4, 0, 6.2832); ctx.fill();
-    sat.el.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) translate(-50%, -50%) scale(${(0.8 + 0.3 * depth).toFixed(3)})`;
+    const half = Math.min(s.w * 0.22, 6 + sat.el.textContent.length * 3.6);
+    const lx = Math.max(half + 10, Math.min(s.w - half - 10, q[0])), ly = Math.max(30, Math.min(s.h - 30, q[1]));
+    sat.el.style.transform = `translate(${lx.toFixed(1)}px, ${ly.toFixed(1)}px) translate(-50%, -50%) scale(${(0.8 + 0.3 * depth).toFixed(3)})`;
     sat.el.style.opacity = behind ? "0.28" : (0.55 + 0.45 * depth).toFixed(2);
   }
 });
@@ -456,7 +445,7 @@ function flap(cell, text) {
     const c = cell.children[i];
     if (c.textContent !== ch) {
       c.textContent = ch;
-      if (!reduced) { c.classList.remove("flip"); void c.offsetWidth; c.classList.add("flip"); }
+      if (!reduced) { c.classList.remove("flip"); void c.offsetWidth; c.classList.add("flip"); c.addEventListener("animationend", () => c.classList.remove("flip"), { once: true }); }
     }
   });
 }
@@ -516,7 +505,7 @@ setInterval(() => {
   if (frames.length < 30) return;
   const d = [...frames].sort((a, b) => a - b);
   const p95 = d[Math.floor(d.length * 0.95)];
-  hudFrame.textContent = `${p95.toFixed(1)} ms · ${Math.round(1000 / Math.max(1, d[Math.floor(d.length * 0.5)]))} fps${quality ? "" : " · lite"}`;
+  hudFrame.textContent = quality ? `${p95.toFixed(1)} ms · ${Math.round(1000 / Math.max(1, d[Math.floor(d.length * 0.5)]))} fps` : `${p95.toFixed(1)} ms · lite`;
 }, 500);
 
 /* ============ counters, decoders, the boot of the tool list, the fade ============ */
