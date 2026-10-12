@@ -1,0 +1,129 @@
+{
+  "generatedAt": "2026-10-11",
+  "mcpTools": {
+    "real": 32,
+    "simulationOnly": 7,
+    "names": [
+      "portfolio_overview",
+      "portfolio_account",
+      "portfolio_live_move",
+      "portfolio_live_markets",
+      "portfolio_live_compare",
+      "portfolio_live_order",
+      "portfolio_live_amend",
+      "portfolio_live_positions",
+      "portfolio_live_close",
+      "portfolio_live_leverage",
+      "portfolio_live_cancel",
+      "portfolio_pay",
+      "portfolio_approval",
+      "portfolio_wait",
+      "portfolio_statement",
+      "portfolio_explore",
+      "portfolio_holdings",
+      "portfolio_history",
+      "portfolio_asset",
+      "portfolio_candles",
+      "portfolio_receive",
+      "portfolio_venues",
+      "portfolio_earn",
+      "portfolio_live_earn",
+      "portfolio_watchlist",
+      "portfolio_report",
+      "portfolio_ask",
+      "portfolio_memory",
+      "portfolio_remember",
+      "portfolio_forget",
+      "portfolio_live_preview",
+      "portfolio_live_batch"
+    ]
+  },
+  "marketKinds": {
+    "count": 6,
+    "labels": [
+      "Crypto",
+      "Stocks",
+      "RWAs",
+      "Perps",
+      "Pre-IPO",
+      "Predictions"
+    ]
+  },
+  "connectionKinds": {
+    "count": 13,
+    "ids": [
+      "exchange",
+      "alpaca",
+      "robinhood",
+      "robinhood-crypto",
+      "kalshi",
+      "polymarket-us",
+      "metamask",
+      "wallet",
+      "hyperliquid",
+      "hyperliquid-trade",
+      "polymarket",
+      "polymarket-trade",
+      "ondo"
+    ]
+  },
+  "exchanges": {
+    "byApiKey": 93,
+    "named": 6,
+    "more": 87
+  },
+  "capUsd": 100,
+  "cardMinutes": 30,
+  "tests": {
+    "files": 131,
+    "attackFiles": 30
+  },
+  "strip": [
+    {
+      "name": "OKX"
+    },
+    {
+      "name": "Kraken"
+    },
+    {
+      "name": "Coinbase"
+    },
+    {
+      "name": "Binance"
+    },
+    {
+      "name": "Bybit"
+    },
+    {
+      "name": "KuCoin"
+    },
+    {
+      "name": "Alpaca"
+    },
+    {
+      "name": "Robinhood"
+    },
+    {
+      "name": "Kalshi"
+    },
+    {
+      "name": "Polymarket US"
+    },
+    {
+      "name": "Polymarket"
+    },
+    {
+      "name": "MetaMask"
+    },
+    {
+      "name": "OKX Wallet"
+    },
+    {
+      "name": "Hyperliquid"
+    },
+    {
+      "name": "Ondo",
+      "watch": true
+    }
+  ]
+}

@@ -97,6 +97,10 @@ agent 记得的你放在账户里，不放在某一个 agent 程序里：换一�
 | `npm run wallet` | 智能 agent 钱包骨架（:4810） |
 | `npm run account -- --classic` | 原来的模拟对账单：拆单、跨链报价、预测市场；`npm run portfolio:demo` 无头跑它的十个 beat |
 
+## 网站
+
+公开介绍页：[linqizhe07.github.io/buyer-agent-demo](https://linqizhe07.github.io/buyer-agent-demo/)（源码在 `site/`，GitHub Pages，推到 main 自动发布）。页上的数字由 `npm run site:numbers` 从仓库算出来写进 `site/data/numbers.json`，过期时 `test/unit/site-numbers.test.ts` 失败、发布停下；行情由访客自己的浏览器直接从 Hyperliquid、Kraken、Coinbase、OKX、Polymarket 的公开接口读，读不到的不画；截图来自替身账户，图下写明。本地预览 `npm run site`（http://127.0.0.1:4870/buyer-agent-demo/）。
+
 ## 文档
 
 - [COOKBOOK.md](COOKBOOK.md)：每件事怎么做、会看到什么、什么会被拒；能直接跑的示例在 `examples/account/`。
@@ -111,4 +115,5 @@ src/wallet/       智能 agent 钱包骨架（:4810）
 src/agent/ src/contract/ src/venues/ src/plugins/ src/runner/ src/control-room/   十一个场景的演示
 test/             unit · attack（攻击复现，必须失败）· standin（替身账户）· e2e
 docs/             细节
+site/             公开介绍页（GitHub Pages）；scripts/ 它的数字和本地预览
 ```
