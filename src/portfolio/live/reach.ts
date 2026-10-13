@@ -89,6 +89,8 @@ const PROBE_MS = 6000;
 const PLACE_BUDGET_MS = 4 * PROBE_MS + 500;
 /** Hyperliquid's public info endpoint, and the keyless read that asks whether it answers this network: its market list */
 const HL_INFO = "https://api.hyperliquid.xyz/info";
+/** its testnet's, for the paper account (live:hyperliquid-paper) */
+const HL_TESTNET_INFO = "https://api.hyperliquid-testnet.xyz/info";
 
 /** the venue's own sentence in what it answered: the message of its JSON, else the sentence that names the place; HTML taken out, cut to
  * a sentence a person reads */
@@ -203,12 +205,14 @@ export async function reachOf(connector: string, deps: ReachDeps): Promise<Reach
     const blocked = here.code === "E_VENUE_GEOBLOCKED" && (here.native as { edge?: boolean } | undefined)?.edge !== true;
     return { connector, state: here.code === "E_VENUE_GEOBLOCKED" ? "location" : "unreachable", said: blocked ? `${here.message}. Its location check answered blocked` : here.message, at };
   }
-  if (kind === "hyperliquid-trade") {
+  if (kind === "hyperliquid-trade" || kind === "hyperliquid-paper") {
     // Hyperliquid's own answer to this network, and its terms held to where this user is now (the verdict only, never the place), at once.
-    // Its own words or its edge's refusal come first; then its terms; connectable only when it answered AND the terms serve the place
+    // Its own words or its edge's refusal come first; then its terms; connectable only when it answered AND the terms serve the place. The
+    // paper account asks its testnet the same question, and is held to the same terms (the testnet is Hyperliquid's Interface too)
+    const paper = kind === "hyperliquid-paper";
     const where = deps.where ?? locator({ http: deps.http, clock: deps.clock, timeoutMs: PROBE_MS });
     const [api, v] = await Promise.all([
-      answersHere(connector, "Hyperliquid", HL_INFO, deps, at, { type: "meta" }),
+      answersHere(connector, paper ? "Hyperliquid's testnet" : "Hyperliquid", paper ? HL_TESTNET_INFO : HL_INFO, deps, at, { type: "meta" }),
       inTime(where.verdict(HYPERLIQUID_RULE), "late" as const, PLACE_BUDGET_MS),
     ]);
     if (api.state === "location") return api;

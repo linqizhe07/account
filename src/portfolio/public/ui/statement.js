@@ -21,15 +21,19 @@ function stmtKinds(lines, now = "") {
 /** what the lines in view add up to: how many, bought, sold, moved, put into earn and taken out of it, and the fees where money moved. A
  * trade counts what filled; a transfer counts unless it failed or never left; money into or out of earn unless the venue refused it */
 function stmtTotals(lines) {
+  // a paper account's lines are rehearsals: counted, never summed as money
+  const all = lines;
+  const papers = lines.filter((l) => l.paper).length;
+  lines = lines.filter((l) => !l.paper);
   const sum = (f) => lines.filter(f).reduce((s, l) => s + Math.abs(l.amountUsd), 0);
   const moved = (l) => l.type === "transfer" && !["failed", "returned", "waiting for wallet", "not followed since a restart"].includes(l.status);
   const earned = (kind) => (l) => l.type === "earn" && l.kind === kind && l.status !== "rejected";
   const fees = lines.reduce((s, l) => s + (l.type === "transfer" && !moved(l) ? 0 : l.feeUsd || 0), 0);
   const [bought, sold, sent, into, out] = [sum((l) => l.type === "trade" && l.kind === "buy"), sum((l) => l.type === "trade" && l.kind === "sell"), sum(moved), sum(earned("supply")), sum(earned("withdraw"))];
-  return [plural(lines.length, "transaction"), bought ? `bought ${money(bought)}` : "", sold ? `sold ${money(sold)}` : "", sent ? `moved ${money(sent)}` : "", into ? `into earn ${money(into)}` : "", out ? `out of earn ${money(out)}` : "", fees ? `fees ${fine(fees)}` : ""].filter(Boolean).join(" · ");
+  return [plural(all.length, "transaction"), papers ? `${papers} paper` : "", bought ? `bought ${money(bought)}` : "", sold ? `sold ${money(sold)}` : "", sent ? `moved ${money(sent)}` : "", into ? `into earn ${money(into)}` : "", out ? `out of earn ${money(out)}` : "", fees ? `fees ${fine(fees)}` : ""].filter(Boolean).join(" · ");
 }
 /** the lines as a CSV's rows, under its header: every kind, earn included, each amount as the account recorded it */
-const stmtCsv = (lines) => [["date", "id", "type", "kind", "account", "to", "description", "amount_usd", "fee_usd", "status", "by", "agent", "ref"], ...lines.map((l) => [l.at, l.id, l.type, l.kind, l.accountName, l.toName || "", l.description, l.amountUsd, l.feeUsd ?? "", l.status, l.by, l.agent || "", l.ref || ""])];
+const stmtCsv = (lines) => [["date", "id", "type", "kind", "account", "to", "description", "amount_usd", "fee_usd", "status", "by", "agent", "ref", "paper"], ...lines.map((l) => [l.at, l.id, l.type, l.kind, l.accountName, l.toName || "", l.description, l.amountUsd, l.feeUsd ?? "", l.status, l.by, l.agent || "", l.ref || "", l.paper ? "yes" : ""])];
 /* who a line is by, for the agent filter: "you" for the owner's own, or the agent's key */
 const lineBy = (l) => (l.agent ? String(l.agent).toLowerCase() : "you");
 
@@ -53,7 +57,9 @@ function renderStatement(owner) {
   // who did what: you, and each agent a line names (by its key; its name as the account knows it, or as the line recorded it)
   const agents = [...new Map(S.filter((l) => l.agent).map((l) => [lineBy(l), l.agentName || keyName(l.agent)])).entries()];
   if (view.agent && view.agent !== "you" && !agents.some(([a]) => a === view.agent)) view.agent = "";
-  const lines = S.filter((l) => (month === "all" || monthOf(l.at) === month) && (!view.account || l.account === view.account || l.to === view.account) && (!view.type || l.type === view.type) && (!view.agent || lineBy(l) === view.agent));
+  // under Real money the paper lines are left out, under Paper only they are shown
+  const lk = lensNow().kind;
+  const lines = S.filter((l) => (month === "all" || monthOf(l.at) === month) && (!view.account || l.account === view.account || l.to === view.account) && (!view.type || l.type === view.type) && (!view.agent || lineBy(l) === view.agent) && (lk !== "real" || !l.paper) && (lk !== "paper" || !!l.paper));
   $("statement-tools").innerHTML = S.length ? `<button type="button" class="btn btn-sm" id="csv-statement">${icon("download", "sm")}Download CSV</button><button type="button" class="btn btn-sm" id="print-statement">${icon("print", "sm")}Print</button>` : "";
   const accounts = [...new Map(S.flatMap((l) => [[l.account, l.accountName], ...(l.to ? [[l.to, l.toName || l.to]] : [])])).entries()];
   /* the filters: each select's options and value, by its name. The selects are made once and then kept — their options and values follow
@@ -76,7 +82,7 @@ function renderStatement(owner) {
     ? `<table class="stmt"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th class="r">Amount</th><th>Status</th></tr></thead><tbody>${shown.map((l) => {
       const [label, cls] = ST[l.status] || [l.status, ""];
       const sub = [l.by, l.type === "trade" && !l.amountUsd && l.worthUsd ? `worth ${fine(l.worthUsd)}` : "", l.feeUsd ? `fee ${fine(l.feeUsd)}` : "", l.ref ? `ref ${short(l.ref)}` : "", l.id].filter(Boolean).join(" · ");
-      return `<tr><td class="num2 dim">${esc(nyDay(l.at))}<span class="why">${esc(nyTime(l.at))}</span></td><td>${esc(l.description)}<span class="why">${esc(sub)}</span></td><td>${esc(l.accountName)}${l.toName ? ` → ${esc(l.toName)}` : ""}</td><td class="r num2">${esc(amountOf(l))}</td><td><span class="st ${cls}">${esc(label)}</span></td></tr>`;
+      return `<tr><td class="num2 dim">${esc(nyDay(l.at))}<span class="why">${esc(nyTime(l.at))}</span></td><td>${l.paper ? '<span class="st paper" title="A paper account: no real money">Paper</span> ' : ""}${esc(l.description)}<span class="why">${esc(sub)}</span></td><td>${esc(l.accountName)}${l.toName ? ` → ${esc(l.toName)}` : ""}</td><td class="r num2">${esc(amountOf(l))}</td><td><span class="st ${cls}">${esc(label)}</span></td></tr>`;
     }).join("")}</tbody></table><div class="totals dim small">${esc(total)}</div>${lines.length > shown.length ? `<button type="button" class="link dim more-btn" id="all-statement">Show all ${lines.length}</button>` : ""}`
     : '<p class="empty">Nothing in this view.</p>';
   if ($("all-statement")) $("all-statement").addEventListener("click", () => { allStatement = true; renderStatement(owner); });

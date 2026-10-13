@@ -124,6 +124,17 @@
  *   Stock Tokens        GET api.robinhood.com/rhj/assets and /rhj/prices/{symbol}, the reads robinhood.ts makes: each token, and its own bid
  *                       and ask in dollars per token (tokenBid, tokenAsk). The listing itself is only read: the tokens trade from a
  *                       connected wallet on Robinhood Chain, against USDG through LI.FI (dex.ts), where the wallet's own rows offer them
+ *   US stocks           Cboe's own delayed quotes (public-stocks.ts): GET cdn-api.cboe.com/api/global/delayed_quotes/quotes/{symbol}.json,
+ *                       fifteen minutes behind the market, its symbol book for a search, its intraday minutes and daily closes for a
+ *                       history. Read-only: a US stock trades at a connected broker (Alpaca, Robinhood) or in a paper account
+ *   xStocks, Ondo       tokenised shares priced where they trade without a key (public-rwa.ts): an xStock at Gate's spot ticker
+ *                       (api.gateio.ws /api/v4/spot/tickers), with xStocks' own trading state (api.xstocks.fi); an Ondo Stock as LI.FI
+ *                       prices it (li.quest /v1/token). Each carries its issuer's own words, as the wallet's rows do (dex.ts)
+ *   SETTLEMENT          an event contract's venue, asked keyless whether a market has settled and what a contract paid (`settlement`): Kalshi's
+ *                       GET /markets/{ticker} (result yes | no), Gamma's GET /markets/slug/{slug} (closed, umaResolutionStatus "resolved",
+ *                       outcomePrices 1 | 0), Polymarket US's GET /v1/markets/{slug}/settlement (1 | 0, HTTP 404 until it settles). A paper
+ *                       account pays its contracts out by it (paper.ts). A SEARCH at Polymarket reaches its whole list through Gamma's
+ *                       GET /public-search?q= (events_status=active), beside the twenty busiest events kept
  *
  * PRICE HISTORY (`candles`), keyless too, the same reads the connected traders make (live-checked 2026-10-06 without a key):
  *   the exchanges       the library's fetchOHLCV: the latest bars since the start asked, at most 300, for a pair the exchange lists
@@ -156,6 +167,8 @@ import { exchangeSaidNo, openExchange, type ExchangeClient, type OpenExchange } 
 import { PMUS_CATEGORIES, PMUS_GATEWAY, PMUS_PER_CATEGORY, pmusBusiest, pmusCandles, pmusLegs, pmusSearch, type PmusGet } from "./polymarket-us.ts";
 import { impliedUsd, PRE_IPO_NAMES, preIpoOf, type PreIpoMark } from "./preipo.ts";
 import { keylessExchange, PUBLIC_EXCHANGES } from "./prices.ts";
+import { ondoStocksPublic, xstocksPublic } from "./public-rwa.ts";
+import { usStocksPublic } from "./public-stocks.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS, stockTokens } from "./robinhood.ts";
 import { CANDLE_INTERVALS, inDollars, type Candle, type CandleInterval, type Market, type MarketStats } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeWords, isStable, notTheApi, notTheApiWords, rateLimitedNo, realHttp, redirectedNo, REGION, unreachable, type Http, type HttpReply } from "./types.ts";
@@ -194,11 +207,15 @@ export interface EventsQuery {
   limit: number;
 }
 
+/** whether an event market has settled, as its venue says: `payout` is what one contract of THIS outcome paid (1 to the side that won, 0 to
+ * the other; a market called off may pay a price between), `closed` that it trades no more and has not settled yet */
+export type Settlement = { settled: false; closed?: boolean | undefined } | { settled: true; payout: number; at?: string | undefined };
+
 export interface PublicSource {
   id: string;
   name: string;
-  /** an exchange's coins, event contracts, or tokens that stand for shares */
-  kind: "exchange" | "events" | "tokens";
+  /** an exchange's coins, event contracts, tokens that stand for shares, or US stocks (Cboe's delayed quotes) */
+  kind: "exchange" | "events" | "tokens" | "stocks";
   /** the venue on the account this is the public side of, as the owner would connect it to trade (`okx`), and the connection that does
    * (`live:exchange:okx`) */
   connectTo: string;
@@ -215,6 +232,8 @@ export interface PublicSource {
   /** its price history comes from another host than its listings (Polymarket's CLOB, beside Gamma): a refusal of the history holds back
    * the history alone, and the listings are still asked. A source without it answers both from one host, and one refusal holds back both */
   historyApart?: true | undefined;
+  /** an event market's settlement, asked of the venue keyless (see the top of this file): `symbol` as its listing names it */
+  settlement?(symbol: string): Promise<Settlement | Refusal>;
   /** let go of the refusals it holds (its place rule, its edge's page, a wait), so the next ask asks the venue: called when a forced re-check
    * found the venue answering this network (service.ts) */
   reset?(): void;
@@ -235,10 +254,11 @@ export interface PublicDeps {
   timeoutMs?: number | undefined;
 }
 
-/** the only hosts a public source's own GETs go to (Hyperliquid's info endpoint, a POST, has its own guard: hyperliquidInfo); the last eight
- * are the pre-IPO perpetuals' venues (Binance's USDⓈ-M futures host and Bybit's v5 host the last two). Polymarket US's public gateway is
- * its keyless market data only: its signed API (api.polymarket.us) is never asked from here */
-export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
+/** the only hosts a public source's own GETs go to (Hyperliquid's info endpoint, a POST, has its own guard: hyperliquidInfo): the event
+ * venues, Robinhood's, Cboe's delayed-quote CDN, xStocks' and LI.FI's (public-stocks.ts, public-rwa.ts), then the eight pre-IPO perpetuals'
+ * venues (Binance's USDⓈ-M futures host and Bybit's v5 host the last two; Gate's host serves the xStocks tickers too). Polymarket US's
+ * public gateway is its keyless market data only: its signed API (api.polymarket.us) is never asked from here */
+export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "cdn-api.cboe.com", "api.xstocks.fi", "li.quest", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
 const KALSHI = "https://external-api.kalshi.com/trade-api/v2";
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
@@ -257,10 +277,10 @@ const TIMEOUT_MS = 8_000;
 export const NOTE_MAX = 160;
 
 type Rec = Record<string, unknown>;
-const isRec = (v: unknown): v is Rec => !!v && typeof v === "object" && !Array.isArray(v);
-const rec = (v: unknown): Rec => (isRec(v) ? v : {});
+export const isRec = (v: unknown): v is Rec => !!v && typeof v === "object" && !Array.isArray(v);
+export const rec = (v: unknown): Rec => (isRec(v) ? v : {});
 /** a list, or a list written as a JSON string (Gamma's outcomes and prices) */
-function list(v: unknown): unknown[] {
+export function list(v: unknown): unknown[] {
   if (Array.isArray(v)) return v;
   if (typeof v === "string" && v.trim().startsWith("[")) {
     try {
@@ -272,30 +292,30 @@ function list(v: unknown): unknown[] {
   }
   return [];
 }
-const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
+export const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
 /** a finite number, from a number or a numeric string; never 0 for a field that is not there */
-const fin = (v: unknown): number | undefined => {
+export const fin = (v: unknown): number | undefined => {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : undefined;
 };
-const pos = (v: unknown): number | undefined => {
+export const pos = (v: unknown): number | undefined => {
   const n = fin(v);
   return n !== undefined && n > 0 ? n : undefined;
 };
-const nonNeg = (v: unknown): number | undefined => {
+export const nonNeg = (v: unknown): number | undefined => {
   const n = fin(v);
   return n !== undefined && n >= 0 ? n : undefined;
 };
 /** an event contract's price: more than 0 and less than 1 (an empty side of Kalshi's book shows as 0 or 1, and neither is a price) */
-const px = (v: unknown): number | undefined => {
+export const px = (v: unknown): number | undefined => {
   const n = fin(v);
   return n !== undefined && n > 0 && n < 1 ? n : undefined;
 };
-const round = (x: number, places = 6): number => Number(x.toFixed(places));
-const mid = (bid: number | undefined, ask: number | undefined): number | undefined => (bid !== undefined && ask !== undefined && ask >= bid ? round((bid + ask) / 2, 10) : undefined);
-const has = (q: string, ...fields: unknown[]): boolean => fields.some((f) => typeof f === "string" && f.toUpperCase().includes(q));
+export const round = (x: number, places = 6): number => Number(x.toFixed(places));
+export const mid = (bid: number | undefined, ask: number | undefined): number | undefined => (bid !== undefined && ask !== undefined && ask >= bid ? round((bid + ask) / 2, 10) : undefined);
+export const has = (q: string, ...fields: unknown[]): boolean => fields.some((f) => typeof f === "string" && f.toUpperCase().includes(q));
 /** a time the venue wrote, in milliseconds; a time it did not write sorts last */
-const whenMs = (v: unknown): number => {
+export const whenMs = (v: unknown): number => {
   const t = typeof v === "string" ? Date.parse(v) : NaN;
   return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
 };
@@ -348,7 +368,7 @@ const BANNED = /\bip ha(?:s|d) been banned\b|\bretCode"?\s*:\s*"?10009\b|\bacces
 /** A public answer that is not a yes, as a refusal with the venue's own words. There is no key, so nothing here blames one: a 401 or a 403
  * is the venue refusing the request, never "the key may not". Read as types.ts reads every answer: the wait the venue asked for (its
  * Retry-After) is the hold, a redirect is answered and not followed, and a page where the API answers JSON is no answer at all */
-function publicNo(venue: string, name: string, r: HttpReply): Refusal {
+export function publicNo(venue: string, name: string, r: HttpReply): Refusal {
   const native = { status: r.status, said: saidOf(r.text) };
   const yes = r.status >= 200 && r.status < 300;
   // a page that is not JSON keeps the sentence that names the place, not its markup
@@ -390,8 +410,8 @@ export function holdBackMs(r: Refusal, now: number = Date.now()): number {
  * and one asked only once while it is on its way; a refusal is kept for holdBackMs (which is nothing for most), a throw is not kept */
 /** a keeper's answers, and `clear()`: the refusals it holds let go of, so the next ask asks the venue (a forced re-check that found the
  * venue answering this network: the place rule or edge it held was the network the user left) */
-type Kept<T> = ((key: string, run: () => Promise<T | Refusal>) => Promise<T | Refusal>) & { clear(): void };
-function keeper<T>(clock: () => number, ms: number | ((answer: T) => number)): Kept<T> {
+export type Kept<T> = ((key: string, run: () => Promise<T | Refusal>) => Promise<T | Refusal>) & { clear(): void };
+export function keeper<T>(clock: () => number, ms: number | ((answer: T) => number)): Kept<T> {
   const kept = new Map<string, { until: number; p: Promise<T | Refusal>; held?: boolean }>();
   const keep = ((key: string, run: () => Promise<T | Refusal>) => {
     const now = clock();
@@ -426,7 +446,7 @@ function keeper<T>(clock: () => number, ms: number | ((answer: T) => number)): K
 }
 
 /** one JSON answer from a fixed host, kept for a while: the body, or the venue's refusal */
-function getter(get: Http, venue: string, name: string, clock: () => number, ms = KEEP_MS): ((url: string) => Promise<unknown>) & { clear(): void } {
+export function getter(get: Http, venue: string, name: string, clock: () => number, ms = KEEP_MS): ((url: string) => Promise<unknown>) & { clear(): void } {
   const keep = keeper<unknown>(clock, ms);
   const got = (url: string) =>
     keep(url, async () => {
@@ -829,6 +849,21 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
     connector: "live:kalshi",
     listings: (o) => read(o),
     events: (o) => read(o),
+    /** whether a market has settled, keyless (see the top of this file): GET /markets/{ticker} — a market with a result (yes | no) pays
+     * $1 a contract to that side and nothing to the other, whatever its status word; one closed without a result is closed */
+    async settlement(symbol) {
+      const k = /^([A-Za-z0-9][A-Za-z0-9._-]{0,80}):(YES|NO)$/i.exec(symbol.trim());
+      if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Kalshi market here is <ticker>:YES or <ticker>:NO, not "${symbol.slice(0, 40)}"` });
+      const ticker = k[1]!.toUpperCase();
+      const body = await get(`${KALSHI}/markets/${encodeURIComponent(ticker)}`);
+      if (isRefusal(body)) return body;
+      const m = rec(rec(body).market);
+      if (!str(m.ticker)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no market ${ticker}` });
+      const result = str(m.result)?.toLowerCase();
+      if (result === "yes" || result === "no") return { settled: true, payout: result === k[2]!.toLowerCase() ? 1 : 0, ...(str(m.settlement_ts) ? { at: str(m.settlement_ts) } : {}) };
+      const status = str(m.status)?.toLowerCase();
+      return { settled: false, ...(status && status !== "active" && status !== "open" && status !== "initialized" ? { closed: true } : {}) };
+    },
     // the finance series in one sentence (as before), the series Kalshi files under its own tags — the IPO ones — in a second, each under 160
     notes: () => {
       const plain = KALSHI_SERIES.filter((s) => !s.tags?.length);
@@ -883,6 +918,9 @@ const KALSHI_PERIOD: Record<CandleInterval, number> = { "5m": 1, "1h": 60, "1d":
  * to leave those events out of its answer, so that the twenty events read are twenty that may be shown. The table in categories.ts is
  * still what decides what is left out */
 const GAMMA_SPORTS_TAG = 1;
+/** how many events Gamma's own search answers for a few words (limit_per_type; 126 matched "anthropic" on 2026-10-13, ten answered in
+ * 306 KB with every market of each) */
+const GAMMA_SEARCH = 10;
 /** how many of Gamma's busiest events are read, and how many of them are shown */
 const GAMMA_EVENTS = 20;
 const POLYMARKET_SHOWN = 10;
@@ -994,17 +1032,30 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
       return !seen.has(key) && seen.add(key) !== undefined;
     });
   };
+  /** Gamma's own search, keyless (see the top of this file): the events it finds for the words, with their markets — every market Polymarket
+   * lists is within reach of it, not only the twenty busiest events kept. Read as the busiest are (parse); kept KEEP_MS by the words */
+  const search = async (q: string): Promise<GammaEvent[] | Refusal> => {
+    const body = await get(`${GAMMA}/public-search?q=${encodeURIComponent(q.slice(0, 80))}&events_status=active&limit_per_type=${GAMMA_SEARCH}`);
+    if (isRefusal(body)) return body;
+    return parse(list(rec(body).events));
+  };
   const read = async (o: { q?: string | undefined; category?: string | undefined; closingWithinMs?: number | undefined; limit: number }): Promise<Listing[] | Refusal> => {
     const events = await load();
-    if (isRefusal(events)) return events;
     const Q = (o.q ?? "").trim().toUpperCase();
+    // a search: Gamma's own, beside the events kept — the kept ones answer alone when the search refuses, and the search alone when the
+    // busiest refuse; both refusing is the refusal
+    const found = Q ? await search(o.q!.trim()) : [];
+    if (isRefusal(events) && (!Q || isRefusal(found))) return events;
+    const kept = isRefusal(events) ? [] : events;
+    const seen = new Set(kept.map((ev) => str(ev.e.id) ?? (typeof ev.e.id === "number" ? String(ev.e.id) : str(ev.e.slug) ?? "")));
+    const all = [...kept, ...(isRefusal(found) ? [] : found).filter((ev) => !seen.has(str(ev.e.id) ?? (typeof ev.e.id === "number" ? String(ev.e.id) : str(ev.e.slug) ?? "")))];
     const want = o.category?.trim().toLowerCase();
     const window = pos(o.closingWithinMs);
     const now = clock();
     const busiest = (evs: GammaEvent[], n: number) => [...evs].sort((a, b) => b.volume - a.volume).slice(0, n);
     const pool: Array<{ m: Rec; ev: GammaEvent }> = Q
-      ? events.flatMap((ev) => ev.markets.filter((m) => has(Q, m.question, m.slug, ev.e.title, ev.e.slug)).map((m) => ({ m, ev })))
-      : [...busiest(events.filter((ev) => !ev.ipo), POLYMARKET_SHOWN), ...busiest(events.filter((ev) => ev.ipo), POLYMARKET_IPO_SHOWN)].map((ev) => ({ m: [...ev.markets].sort(polymarketBusier)[0]!, ev }));
+      ? all.flatMap((ev) => ev.markets.filter((m) => has(Q, m.question, m.slug, ev.e.title, ev.e.slug) || !kept.includes(ev)).map((m) => ({ m, ev })))
+      : [...busiest(all.filter((ev) => !ev.ipo), POLYMARKET_SHOWN), ...busiest(all.filter((ev) => ev.ipo), POLYMARKET_IPO_SHOWN)].map((ev) => ({ m: [...ev.markets].sort(polymarketBusier)[0]!, ev }));
     return pool
       .filter(({ ev }) => !want || ev.tags.some((t) => t.toLowerCase() === want) || str(ev.e.category)?.toLowerCase() === want)
       .filter(({ m, ev }) => {
@@ -1030,7 +1081,27 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
     historyApart: true,
     listings: (o) => read(o),
     events: (o) => read(o),
-    notes: () => [`Polymarket: its ${POLYMARKET_SHOWN} busiest events by 24-hour volume, without sports, esports, weather, entertainment, awards and mentions.`, `Polymarket: and its ${POLYMARKET_IPO_SHOWN} busiest IPO questions (its tag IPO).`],
+    notes: (o) => (o.q?.trim() ? ["Polymarket: its own search, which reaches every market it lists."] : [`Polymarket: its ${POLYMARKET_SHOWN} busiest events by 24-hour volume, without sports, esports, weather, entertainment, awards and mentions.`, `Polymarket: and its ${POLYMARKET_IPO_SHOWN} busiest IPO questions (its tag IPO).`]),
+    /** whether a market has settled, keyless (see the top of this file): Gamma's market by slug — closed, and resolved by its oracle
+     * (umaResolutionStatus "resolved"), pays each outcome its outcomePrices figure (1 to the side that won, 0 to the other) */
+    async settlement(symbol) {
+      const i = symbol.indexOf(":");
+      const slug = i > 0 ? symbol.slice(0, i).trim() : "";
+      const outcome = i > 0 ? symbol.slice(i + 1).trim() : "";
+      if (!/^[a-z0-9][a-z0-9-]{0,200}$/.test(slug) || !outcome || outcome.length > 80) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Polymarket market here is <slug>:<outcome>, not "${symbol.slice(0, 40)}"` });
+      const m = await get(`${GAMMA}/markets/slug/${encodeURIComponent(slug)}`);
+      if (isRefusal(m)) return m;
+      const names = list(rec(m).outcomes).map((x) => String(x));
+      const at = names.findIndex((n) => n.toLowerCase() === outcome.toLowerCase());
+      if (at < 0) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no outcome "${outcome.slice(0, 40)}" in ${slug.slice(0, 60)}` });
+      const closed = rec(m).closed === true;
+      const resolved = closed && str(rec(m).umaResolutionStatus)?.toLowerCase() === "resolved";
+      const paid = fin(list(rec(m).outcomePrices)[at]);
+      if (!resolved || paid === undefined || paid < 0 || paid > 1) return { settled: false, ...(closed ? { closed: true } : {}) };
+      const when = str(rec(m).closedTime);
+      const whenMs = when ? Date.parse(when.replace(" ", "T").replace(/\+00$/, "Z")) : NaN;
+      return { settled: true, payout: round(paid, 6), ...(Number.isFinite(whenMs) ? { at: new Date(whenMs).toISOString() } : {}) };
+    },
     /** an outcome's price history, keyless (see the top of this file): `<slug>:<outcome>`, as the listing names it */
     async candles(symbol, interval, sinceMs) {
       const now = clock();
@@ -1109,6 +1180,17 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
     connector: "live:polymarket-us",
     listings: (o) => read(o),
     events: (o) => read(o),
+    /** whether a market has settled, keyless (polymarket-us.ts: GET /v1/markets/{slug}/settlement answers 1 when YES won and 0 when NO did,
+     * and HTTP 404 "Settlement not found" until the market settles) */
+    async settlement(symbol) {
+      const k = /^([a-z0-9][a-z0-9-]{0,200}):(YES|NO)$/i.exec(symbol.trim());
+      if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Polymarket US market here is <slug>:YES or <slug>:NO, not "${symbol.slice(0, 40)}"` });
+      const body = await gw(`/v1/markets/${encodeURIComponent(k[1]!)}/settlement`);
+      if (isRefusal(body)) return (body.native as { status?: unknown } | undefined)?.status === 404 ? { settled: false } : body;
+      const s = fin(rec(body).settlement);
+      if (s === undefined || s < 0 || s > 1) return { settled: false };
+      return { settled: true, payout: round(k[2]!.toUpperCase() === "YES" ? s : 1 - s, 6) };
+    },
     notes: (o) => [o.q?.trim() ? "Polymarket US: its own search, which reaches every market it lists." : `Polymarket US: the most traded open markets of ${PMUS_CATEGORIES.slice(0, -1).join(", ")} and ${PMUS_CATEGORIES.at(-1)}, in turn (its lists give no volume figure).`],
     /** a market's price history, keyless (see the top of this file): `<market slug>:YES` or `<market slug>:NO`, as the listing names it */
     candles: (symbol, interval, sinceMs) => pmusCandles((path) => history(`${PMUS_GATEWAY}${path}`), id, symbol, interval, sinceMs, clock()),
@@ -1927,8 +2009,10 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
 }
 
 /** every public source, in the order the Markets screen asks them: the exchanges (PUBLIC_EXCHANGES unless others are named), Kalshi,
- * Polymarket, Polymarket US, Hyperliquid's perpetuals, Robinhood's Stock Tokens, the eight exchanges' pre-IPO perpetuals and Hyperliquid's
- * HIP-3 ones. Made once and kept: what each keeps lives in it */
+ * Polymarket, Polymarket US, Hyperliquid's perpetuals, US stocks at Cboe's delayed quotes, Robinhood's Stock Tokens, xStocks at Gate, Ondo
+ * Stocks as LI.FI prices them, the eight exchanges' pre-IPO perpetuals and Hyperliquid's HIP-3 ones. The stocks come before the Stock
+ * Tokens: a paper account lists a symbol by the first source that names it (paper.ts), and "NVDA" there is the share, not Robinhood's
+ * token of it. Made once and kept: what each keeps lives in it */
 export function publicSources(deps: PublicDeps & { exchanges?: readonly string[] | undefined } = {}): PublicSource[] {
-  return [...(deps.exchanges ?? PUBLIC_EXCHANGES).map((x) => exchangeTickers(x, deps)), kalshiPublic(deps), polymarketPublic(deps), polymarketUsPublic(deps), hyperliquidPublic(deps), stockTokensPublic(deps), ...PRE_IPO_VENUES.map((v) => preIpoPublic(v, deps)), hyperliquidPreIpoPublic(deps)];
+  return [...(deps.exchanges ?? PUBLIC_EXCHANGES).map((x) => exchangeTickers(x, deps)), kalshiPublic(deps), polymarketPublic(deps), polymarketUsPublic(deps), hyperliquidPublic(deps), usStocksPublic(deps), stockTokensPublic(deps), xstocksPublic(deps), ondoStocksPublic(deps), ...PRE_IPO_VENUES.map((v) => preIpoPublic(v, deps)), hyperliquidPreIpoPublic(deps)];
 }

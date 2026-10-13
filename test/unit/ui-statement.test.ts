@@ -84,9 +84,11 @@ describe("money into and out of earn, on the Statement", () => {
   it("downloads earn lines in the CSV with the rest: their kind, product, amount, who and the venue's reference", () => {
     const p = page();
     const rows = p.out<string[][]>(`stmtCsv(${JSON.stringify(LINES)})`);
-    expect(rows[0]).toEqual(["date", "id", "type", "kind", "account", "to", "description", "amount_usd", "fee_usd", "status", "by", "agent", "ref"]);
+    expect(rows[0]).toEqual(["date", "id", "type", "kind", "account", "to", "description", "amount_usd", "fee_usd", "status", "by", "agent", "ref", "paper"]);
     expect(rows).toHaveLength(LINES.length + 1);
-    expect(rows[4]).toEqual(["2026-10-05T17:00:00.000Z", "earn-0001", "earn", "supply", "Exchange", "", "Supply 100 USDT · USDT Flexible · 5.2% APY", 100, "", "done", "Claude Code, inside its limit", AGENT, "purchase:USDT:abc"]);
+    // the last column says whether the line is a paper account's: empty for every real one
+    expect(rows[4]).toEqual(["2026-10-05T17:00:00.000Z", "earn-0001", "earn", "supply", "Exchange", "", "Supply 100 USDT · USDT Flexible · 5.2% APY", 100, "", "done", "Claude Code, inside its limit", AGENT, "purchase:USDT:abc", ""]);
+    expect(p.out<string[][]>(`stmtCsv([${JSON.stringify({ ...LINES[0], paper: true })}])`)[1]!.at(-1)).toBe("yes");
     // the filter and the CSV are one: the Statement downloads what it shows
     const src = source("ui/statement.js");
     expect(src).toContain("type: [stmtKinds(S, view.type), view.type]");

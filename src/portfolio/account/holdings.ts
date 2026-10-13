@@ -34,7 +34,7 @@ import type { AccountPage } from "./exchange.ts";
 
 type PageVenue = AccountPage["venues"][number];
 /** what byAsset reads of a venue on the account page: its balances, and what decides where its dollars can go */
-export type HoldingsVenue = Pick<PageVenue, "id" | "name" | "holdings"> & Partial<Pick<PageVenue, "trade" | "liveCan" | "readOnlyBecause" | "address" | "proven" | "stale">>;
+export type HoldingsVenue = Pick<PageVenue, "id" | "name" | "holdings"> & Partial<Pick<PageVenue, "trade" | "liveCan" | "readOnlyBecause" | "address" | "proven" | "stale" | "paper">>;
 
 /** one venue's part of a row */
 export interface AssetLine {
@@ -115,6 +115,9 @@ export interface ByAssetOptions {
   /** this server moves real money (AccountPage.connectLive.writes.on). Off, or absent: nothing trades or moves from here, every ready dollar
    * stays where it is */
   writes?: boolean | undefined;
+  /** the PAPER accounts' holdings instead of the real ones (the page's Paper lens): their paper money as the rows and the ready cash,
+   * summed as paper money, never as the account's */
+  paper?: boolean | undefined;
 }
 
 const r2 = (n: number): number => Number(n.toFixed(2)) || 0;
@@ -180,7 +183,8 @@ export function byAsset(venues: readonly HoldingsVenue[], opts: ByAssetOptions =
   let cashUsd = 0;
   let stableUsd = 0;
   let inTransitUsd = 0;
-  for (const v of venues) {
+  // a paper account's balance is not money: it is not a row, not ready, not in the total — unless the paper accounts alone are asked for
+  for (const v of venues.filter((x) => (opts.paper ? x.paper === true : !x.paper))) {
     const watched = isWatched(v);
     for (const h of v.holdings ?? []) {
       if (!(h.amount > 0) && !(h.usd > 0)) continue;

@@ -52,6 +52,7 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
 | 预测市场 | Kalshi（钥匙文件）、Polymarket US（钥匙文件：Key ID 和 Secret Key）、Polymarket（钥匙文件，或只填地址看） | 读、事件合约下单 |
 | 钱包 | 浏览器钱包（OKX Wallet、MetaMask 等，签一句话证明地址）、MetaMask Agent Wallet（本机 `mm`） | 换币、跨链、代币化股票（RWA）；`mm` 还有永续、预测、earn，写操作要 `PORTFOLIO_MM_WRITES=1` |
 | 永续 DEX | Hyperliquid：API 钱包（钥匙文件；只能交易，不能提币） | 永续、现货、HIP-3（含 pre-IPO）；每单之前按它条款 §1.6 查你此刻所在的地方 |
+| 纸上账户 | **Paper account**：什么都不用接——起个名、写一笔纸上美元（默认 $10,000），账户自己记账，可以开好几个。市场是 Markets 不带钥匙读到的那些公开行情，四类都有：美股（Cboe 的延迟报价，晚 15 分钟，只在 09:45–16:15 纽约时间成交）、crypto（交易所的币、Hyperliquid 永续——逐仓杠杆、每小时资金费、按声明的规则强平）、RWA（Robinhood Stock Tokens、Gate 上的 xStocks、Ondo 股票代币）、预测市场（Kalshi / Polymarket / Polymarket US 的事件合约，场所结算后按场所付的钱付掉）；按公开报价成交，规则是账户自己定的、处处写明。没有账户可接的人第一步就能开一个。真仓和模拟仓怎么分：票里一条横幅写 PAPER 或 REAL MONEY，旁边 Real money | Paper 一键翻转，签名按钮在纸上写 "Sign and place · PAPER"；顶部 All accounts 里有 Real money / Paper 两档整页切换；MCP 里 `venue: "paper"` 直指纸上账户。另有 **Hyperliquid · paper**：Hyperliquid 自己的测试网（钥匙文件：在 app.hyperliquid-testnet.xyz 批的 API 钱包；mock USDC 从它的水龙头领），真接口、假钱 | 两种都走同一扇门：同样的签名或 agent 额度、同样的 Guard / Beast；余额不算钱（不进净值、持仓、可用现金），订单是演练、不受 `--live-cap`；页面和 agent 处处标 Paper；测试网那条同样按 §1.6 查地方 |
 | 只看 | Hyperliquid、Ondo、Robinhood Wallet（按地址） | 读 |
 
 **地区：按每个用户自己所在的地方，不按开发者。** 账户启动后、之后每 30 分钟，自动替每个场所问一遍它对**这台机器的网络**怎么答（不带钥匙），再把它公布的居住地规矩对上这台机器此刻所在的地方：能接、不服务这里、只能平仓（Polymarket 对美国就是这样：照样接得上，能卖、能撤单，不能开新仓；美国人开新仓的地方是另一家交易所 Polymarket US，自己的账户、自己的钥匙，单独一张卡）、它的条款排除你所在的地方（只提示，不拦）、本机先要准备。连不了的，如果它有给你那里的另一个版本（Binance → Binance.US、OKX → OKX US、Polymarket → Polymarket US），而且那个版本从你的网络能接、它自己的话说它是为你那里做的，就标在旁边。同一个答案用在 Connect an account 的卡片、Markets 和下单票（只对会收你的场所给 "Connect to trade"），以及 agent（`portfolio_venues`；agent 请主人接一个不服务你这个网络的场所会直接被拒）。地方只在内存里用于这个判断，不保存、不返回、不写进拒绝；开发者那里被拒的场所（Binance、Bybit、Polymarket 开新仓、Hyperliquid 下单）照样接好了，在服务它们的地方就全有；每个用户都按他自己的网络算，开发者机器上的答案不进代码。**网络的回答也拦不住接**：场所不服务这个网络、或这会儿没答，Connect 照样能签，连接留在账户上等（Venues 里 "Waiting for the venue"，场所的原话），场所答之前什么都不往它发，换了网络 "Check again" 发现它答了就自动接上；拒的是钥匙或账户本身才是拒绝。IP 引起的另几种问题分开说，各用场所自己的话：钥匙绑了别的 IP（去场所把这台机器的地址加上）、场所前面的服务器拒绝这个网络、请求太多被封（等到它说的时间）。场所话里带着的 IP 不进日志和账本。账户从不提供绕过地区规矩的办法。
@@ -73,6 +74,7 @@ agent 记得的你放在账户里，不放在某一个 agent 程序里：换一�
 - **MCP**：`npm run portfolio:mcp`（stdio；席位持自己的钥匙，每次写都签名）。接 Claude Code：页面 Agents 弹层的 "Copy agent setup command"。真实账户上的工具：
   - 读：`portfolio_account` · `portfolio_venues`（从用户所在的网络自动判断哪些场所能接，各用场所自己的话）· `portfolio_overview` · `portfolio_holdings` · `portfolio_history` · `portfolio_asset` · `portfolio_candles` · `portfolio_explore` · `portfolio_receive` · `portfolio_earn` · `portfolio_watchlist` · `portfolio_statement`
   - 下单和动钱：`portfolio_live_markets` · `portfolio_live_compare` · `portfolio_live_positions` · `portfolio_live_preview` · `portfolio_live_order` · `portfolio_live_batch` · `portfolio_live_amend` · `portfolio_live_cancel` · `portfolio_live_close` · `portfolio_live_leverage` · `portfolio_live_move` · `portfolio_live_earn` · `portfolio_pay`
+  - 纸上交易：开一个 Paper account（什么都不用接；`live:paper`，可以开多个；美股、crypto、RWA、预测市场都能练，永续能设杠杆）或接上 "Hyperliquid · paper"（它的测试网）后，`portfolio_account` 里那家标 `paper: true`，同一套下单工具（`portfolio_live_markets`、`portfolio_live_order`、`portfolio_live_leverage`、`portfolio_live_positions`……）在它上面演练——纸上账户按账户自己声明的规则成交，测试网真的发到测试网，都不是真钱；门一样（额度、Guard / Beast），只是不受 `--live-cap`；比价不比它；答复里的订单和持仓带 `paper: true`
   - 和 owner 说话、等结果：`portfolio_report` · `portfolio_ask` · `portfolio_approval` · `portfolio_wait`
   - 记忆（账户替 agent 记着，换会话、重启都在）：`portfolio_memory`（读：它记得的你、等你答的、来自额度的、别的 agent 分享的、你的开关）· `portfolio_remember` · `portfolio_forget`（它学到的，用它的钥匙签）
   - 只在模拟对账单（`--classic`）和测试里：`portfolio_read` · `portfolio_markets` · `portfolio_quote` · `portfolio_openness` · `portfolio_execute` · `portfolio_order` · `portfolio_transfer`
@@ -97,6 +99,10 @@ agent 记得的你放在账户里，不放在某一个 agent 程序里：换一�
 | `npm run wallet` | 智能 agent 钱包骨架（:4810） |
 | `npm run account -- --classic` | 原来的模拟对账单：拆单、跨链报价、预测市场；`npm run portfolio:demo` 无头跑它的十个 beat |
 
+## 网站
+
+公开介绍页：[linqizhe07.github.io/buyer-agent-demo](https://linqizhe07.github.io/buyer-agent-demo/)（源码在 `site/`，GitHub Pages，推到 main 自动发布）。页上的数字由 `npm run site:numbers` 从仓库算出来写进 `site/data/numbers.json`，过期时 `test/unit/site-numbers.test.ts` 失败、发布停下；行情由访客自己的浏览器直接从 Hyperliquid、Kraken、Coinbase、OKX、Polymarket 的公开接口读，读不到的不画；截图来自替身账户，图下写明。本地预览 `npm run site`（http://127.0.0.1:4870/buyer-agent-demo/）。
+
 ## 文档
 
 - [COOKBOOK.md](COOKBOOK.md)：每件事怎么做、会看到什么、什么会被拒；能直接跑的示例在 `examples/account/`。
@@ -111,4 +117,5 @@ src/wallet/       智能 agent 钱包骨架（:4810）
 src/agent/ src/contract/ src/venues/ src/plugins/ src/runner/ src/control-room/   十一个场景的演示
 test/             unit · attack（攻击复现，必须失败）· standin（替身账户）· e2e
 docs/             细节
+site/             公开介绍页（GitHub Pages）；scripts/ 它的数字和本地预览
 ```

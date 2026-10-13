@@ -40,6 +40,8 @@ export interface StatementLine {
   agentName?: string | undefined;
   /** the venue's id for it, or the transaction's hash */
   ref?: string | undefined;
+  /** at a PAPER account (the venue's own test environment): a rehearsal, no real money in it */
+  paper?: true | undefined;
 }
 
 const qty = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 8 });
@@ -69,6 +71,7 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     by: o.authority === "agent" ? `${agentName(o.agent ?? "")}, ${o.card ? "approved by you" : "inside its limit"}` : "You",
     ...(o.authority === "agent" && o.agent ? { agent: o.agent, agentName: agentName(o.agent) } : {}),
     ...(o.ref ? { ref: o.ref } : {}),
+    ...(o.paper ? { paper: true as const } : {}),
   };
 }
 

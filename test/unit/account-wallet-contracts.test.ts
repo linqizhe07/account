@@ -103,7 +103,9 @@ describe("money in an earn product, in holdings and the totals", () => {
     const ex = a.venues.find((v: { id: string }) => v.id === "ex");
     expect(ex.holdings.filter((x: { class: string }) => x.class === "earn")).toEqual([expect.objectContaining({ asset: "USDT", amount: 150, usd: 150, earn: expect.objectContaining({ product: "flex:USDT" }) })]);
     expect(ex.usd).toBeCloseTo(ex.holdings.reduce((t: number, x: { usd: number }) => t + x.usd, 0), 2);
-    expect(a.liveUsd).toBeCloseTo(a.venues.filter((v: { live?: boolean }) => v.live).reduce((t: number, v: { usd: number }) => t + v.usd, 0), 2);
+    // a paper account's number is not money: not in the live total
+    expect(a.liveUsd).toBeCloseTo(a.venues.filter((v: { live?: boolean; paper?: boolean }) => v.live && !v.paper).reduce((t: number, v: { usd: number }) => t + v.usd, 0), 2);
+    expect(a.venues.find((v: { id: string }) => v.id === "paper")).toMatchObject({ paper: true });
   });
 
   it("money put in or taken out is counted once all along: the page's USDT at the exchange is what its books hold, spot, futures and earn", async () => {

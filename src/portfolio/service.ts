@@ -589,6 +589,11 @@ export class PortfolioService {
   }
 
   /** what is held at a venue connected live, fifteen seconds old at most (the page asks often; the venue is asked once) */
+  /** a venue on the account is a paper account (LiveSource.paper): its positions, orders and balances are no money */
+  paperVenue(venue: string): boolean {
+    return this.liveVenues.get(venue)?.paper === true;
+  }
+
   async livePositions(venue: string): Promise<Position[] | Refusal> {
     if (!this.account) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
     const engine = this.account;
@@ -611,8 +616,9 @@ export class PortfolioService {
     if (side !== "buy" && side !== "sell") return no("E_ACCOUNT_BAD_ACTION", { message: "compare a buy or a sell" });
     // each venue's reads go through the same short-lived cache as the order ticket's: a new amount or the other side asks no venue again.
     // A venue whose own place rule bars an order from this network says so on its row (placeRuleOf)
-    // a venue that does not serve the network the account runs on now (its place rule, its edge) is not compared: it is not asked
-    const venues = this.tradingVenues().filter((v) => notServedBy(this.shutNow(v.id)) === undefined).map((v) => ({ id: v.id, name: v.name, trader: this.kept(v), connector: this.adapters.get(v.id)?.account.connector }));
+    // a venue that does not serve the network the account runs on now (its place rule, its edge) is not compared: it is not asked — nor is a
+    // paper account, whose prices are its test environment's
+    const venues = this.tradingVenues().filter((v) => !v.paper && notServedBy(this.shutNow(v.id)) === undefined).map((v) => ({ id: v.id, name: v.name, trader: this.kept(v), connector: this.adapters.get(v.id)?.account.connector }));
     return this.marketReads.get(`compare|${b.toUpperCase()}|${side}|${usd ?? ""}|${asset ?? ""}`, 15_000, async () => {
       // nor is one whose trading line closes this place (Hyperliquid's): the comparison is of where an order could go from here
       const placed = (await Promise.all(venues.map(async ({ connector, ...v }) => ({ ...v, ...(await this.placed(connector)) })))).filter((v) => v.place?.rule !== "closed");
@@ -626,7 +632,7 @@ export class PortfolioService {
    * the rule's own words, never the place or an address. A rule the venue's terms state (terms-exclude) is shown, not applied, and an
    * unknown place or no answer is no rule */
   private async placed(connector: string | undefined): Promise<{ place?: PlaceRule }> {
-    if (connector !== "live:hyperliquid-trade" && connector !== "live:polymarket-trade") return {};
+    if (connector !== "live:hyperliquid-trade" && connector !== "live:hyperliquid-paper" && connector !== "live:polymarket-trade") return {};
     const kept = this.venuesKept?.v.find((x) => x.connector === connector);
     let rule: { verdict: string; said?: string | undefined } | undefined = kept?.asked !== undefined && this.liveDeps().clock() - Date.parse(kept.asked) < 600_000 ? kept : undefined;
     if (!rule) {
@@ -793,7 +799,7 @@ export class PortfolioService {
     // and its own place rule for this network, where it has one that bars an order from here (placed)
     const connected: ExploreVenue[] = this.tradingVenues().map((v) => {
       const connector = this.adapters.get(v.id)?.account.connector;
-      return { id: v.id, name: v.name, trader: this.kept(v), ...(connector ? { connector } : {}) };
+      return { id: v.id, name: v.name, trader: this.kept(v), ...(connector ? { connector } : {}), ...(v.paper ? { paper: true as const } : {}) };
     });
     return this.marketReads.get(`explore|${tab ?? ""}|${q.toUpperCase()}|${sort ?? ""}|${limit}`, 30_000, async () => {
       const placed = await Promise.all(connected.map(async (v) => ({ ...v, ...(await this.placed(v.connector)) })));
@@ -812,22 +818,24 @@ export class PortfolioService {
    * and what the holdings did in the last 24 hours — each coin's and share's own 24-hour change as a venue reports it (the connected
    * venues' first, then the exchanges' public tickers), never estimated: what no venue reports is `missing`. `cost`: also what was paid for
    * what is held (account/costbasis.ts), from the account's own orders and each venue's positions */
-  async holdings(opts: { cost?: boolean | undefined } = {}): Promise<HoldingsView | Refusal> {
+  /** `paper`: the PAPER accounts' holdings instead of the real ones — the page's Paper lens — summed as paper money, never as the account's */
+  async holdings(opts: { cost?: boolean | undefined; paper?: boolean | undefined } = {}): Promise<HoldingsView | Refusal> {
     const h = await this.held(opts);
     return isRefusal(h) ? h : h.view;
   }
 
-  private async held(opts: { cost?: boolean | undefined }): Promise<{ view: HoldingsView; page: AccountPage } | Refusal> {
+  private async held(opts: { cost?: boolean | undefined; paper?: boolean | undefined }): Promise<{ view: HoldingsView; page: AccountPage } | Refusal> {
     const page = await this.accountView();
     if (!page) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
-    const { rows, money } = byAsset(page.venues, { writes: page.connectLive?.writes?.on === true });
+    const { rows, money } = byAsset(page.venues, { writes: page.connectLive?.writes?.on === true, ...(opts.paper ? { paper: true } : {}) });
     const [day, pos] = await Promise.all([this.dayStats(rows), opts.cost ? this.allPositions() : undefined]);
     const held: HeldRow[] = rows.map((r) => {
       const s = day.stats.get(r.key);
       const pct = s ? pctOf(s) : undefined;
       return pct === undefined || !s ? r : { ...r, changePct24h: Number(pct.toFixed(4)), changeFrom: { venue: s.venue, venueName: s.venueName } };
     });
-    const view: HoldingsView = { asOf: page.now, totalUsd: page.totalUsd, rows: held, money, change24h: change24h(rows, day.stats), missing: day.missing };
+    // the paper accounts' total is paper money: said as that, apart from the account's own figure
+    const view: HoldingsView = { asOf: page.now, totalUsd: opts.paper ? r2(page.venues.filter((v) => v.paper).reduce((s, v) => s + v.usd, 0)) : page.totalUsd, rows: held, money, change24h: change24h(rows, day.stats), missing: day.missing, ...(opts.paper ? { paper: true } : {}) };
     if (pos && !isRefusal(pos)) {
       view.positions = pos.positions;
       // money in an earn product was not bought: what was paid is its asset's own row's
@@ -899,7 +907,7 @@ export class PortfolioService {
     const missing: ReadMissing[] = [];
     for (const { v, r } of got) {
       if (isRefusal(r)) missing.push({ venue: v.id, venueName: v.name, why: r.message, code: r.code, part: "positions" });
-      else positions.push(...r.map((p) => ({ ...p, venue: v.id, venueName: v.name })));
+      else positions.push(...r.map((p) => ({ ...p, venue: v.id, venueName: v.name, ...(v.paper ? { paper: true as const } : {}) })));
     }
     return { positions, missing };
   }
@@ -989,6 +997,8 @@ export class PortfolioService {
     const byClass: Record<string, number> = {};
     const byVenue: Record<string, number> = {};
     for (const v of page.venues) {
+      // a paper account's numbers are not money: not on the curve
+      if (v.paper) continue;
       byVenue[v.id] = v.usd;
       for (const h of v.holdings) if (h.usd > 0) byClass[h.class] = r2((byClass[h.class] ?? 0) + h.usd);
     }
@@ -1317,7 +1327,8 @@ export class PortfolioService {
   /** what a live connection reaches: the real network, unless a test handed in stand-ins */
   private liveDeps(): LiveDeps {
     // made once: the chain clients and the price cache are kept between connections
-    return (this.liveMade ??= { home: this.opts.home, http: realHttp, clock: Date.now, mm: realMm(this.opts.mm?.bin, this.opts.mm?.timeoutMs), chain: this.opts.liveDeps?.chain ?? publicChain(), price: this.opts.liveDeps?.price ?? publicPrices({ open: this.opts.liveDeps?.openExchange, clock: this.opts.liveDeps?.clock }), signIn: (kind) => this.signIn(kind), ...this.opts.liveDeps, proofs: this.proofs });
+    // a paper account prices itself at the same public sources Markets reads (live/paper.ts), through the service's own keeping of them
+    return (this.liveMade ??= { home: this.opts.home, http: realHttp, clock: Date.now, mm: realMm(this.opts.mm?.bin, this.opts.mm?.timeoutMs), chain: this.opts.liveDeps?.chain ?? publicChain(), price: this.opts.liveDeps?.price ?? publicPrices({ open: this.opts.liveDeps?.openExchange, clock: this.opts.liveDeps?.clock }), signIn: (kind) => this.signIn(kind), publicSources: () => this.publicMarkets(), ...this.opts.liveDeps, proofs: this.proofs });
   }
   private liveMade: LiveDeps | undefined;
 
@@ -1536,13 +1547,16 @@ export class PortfolioService {
     if (src.noTradeBecause) src.noTradeBecause = unaddressed(src.noTradeBecause);
     // who showed the address is the user's: the wallet that signed the account's sentence, or the mm session on this machine
     const proven = src.address === undefined ? undefined : connector === "live:metamask" ? "the mm session on this machine" : deps.proofs.proven(src.address)?.wallet;
-    Object.assign(adapter.account, { ...(proven ? { proven } : {}), ...(src.writer ? { liveCan: src.writer.can } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}) });
+    // the account's own paper account says what it started with (paper.ts probe): the page shows what it made or lost since
+    const native = (src.probe as { native?: { startCashUsd?: unknown } } | undefined)?.native;
+    const paperStart = src.paper && typeof native?.startCashUsd === "number" && native.startCashUsd > 0 ? native.startCashUsd : undefined;
+    Object.assign(adapter.account, { ...(proven ? { proven } : {}), ...(src.writer ? { liveCan: src.writer.can } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}), ...(src.paper ? { paper: true as const, ...(paperStart ? { paperStartUsd: paperStart } : {}) } : {}) });
     // what the key may do is read from the trader each time: a venue can say it only after connecting (Kalshi's key scopes)
     const trader = src.trader;
     // the kinds of market its trader offers, where it says them itself (the mm trader: tokens, event contracts, perpetuals); the page falls
     // back to the connector's own (accounts.ts tradeKinds) where it does not
     if (trader) Object.defineProperty(adapter.account, "liveTrade", { get: () => ({ can: trader.can, what: trader.what, ...(trader.kinds ? { kinds: [...trader.kinds] } : {}), positions: !!trader.positions, amend: !!trader.amend, leverage: !!trader.setLeverage, close: !!trader.close }), enumerable: true, configurable: true });
-    this.liveVenues.set(venue, { id: venue, name: adapter.account.name, kind: adapter.account.kind, ...(src.address ? { address: src.address } : {}), ...(proven ? { proven } : {}), ...(src.writer ? { writer: src.writer } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}), ...(src.trader ? { trader: src.trader } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), via: src.via });
+    this.liveVenues.set(venue, { id: venue, name: adapter.account.name, kind: adapter.account.kind, ...(src.address ? { address: src.address } : {}), ...(proven ? { proven } : {}), ...(src.writer ? { writer: src.writer } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}), ...(src.trader ? { trader: src.trader } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), ...(src.paper ? { paper: true as const } : {}), via: src.via });
     // its earn: the source's own (the mm wallet's vaults), or — at OKX and Kraken — the exchange's, through the trader's own client and key
     const hook = exchangeEarnHook(src.trader);
     const earner = src.earner ?? (hook ? exchangeEarner({ ...hook, price: deps.price, now: deps.clock }) : undefined);
@@ -1561,11 +1575,11 @@ export class PortfolioService {
     const writes = this.opts.liveWrites;
     const can = src.writer?.can;
     const leaves = !!can && (can.withdraw !== false || (can.ledgers.length > 1 && can.transfer !== false) || can.swap !== false || !!can.send);
-    const mode = !src.writer ? `read only: ${src.readOnlyBecause ?? "nothing is sent to it from here"}` : !writes ? "read only: this server was started without real-money writes" : src.address !== undefined && !proven && src.writer.can.send === "wallet" ? "watched: no wallet signed for this address, so nothing is sent to or from it" : !leaves ? "this key only reads: money can be sent to it, nothing leaves it from here" : `real money moves only when you sign it, at most ${cents(writes.capUsd)} a movement`;
+    const mode = src.paper ? "a paper account: its orders are rehearsals and its balance is not money, so nothing of it is counted in your net worth or moved from here" : !src.writer ? `read only: ${src.readOnlyBecause ?? "nothing is sent to it from here"}` : !writes ? "read only: this server was started without real-money writes" : src.address !== undefined && !proven && src.writer.can.send === "wallet" ? "watched: no wallet signed for this address, so nothing is sent to or from it" : !leaves ? "this key only reads: money can be sent to it, nothing leaves it from here" : `real money moves only when you sign it, at most ${cents(writes.capUsd)} a movement`;
     // the wallet's proof rides on the connection's row: a restarted account checks the signature again rather than forgetting it was given
     const proof = src.address !== undefined && connector !== "live:metamask" ? deps.proofs.proven(src.address) : undefined;
     const kept = proof?.message && proof.signature ? { address: proof.address, wallet: proof.wallet, at: proof.at, message: proof.message, signature: proof.signature } : undefined;
-    return { ok: true, summary: unaddressed(`${adapter.account.name} connected live · ${cents(usd)} there now · ${opened.summary} · ${mode}${sim && !this.opts.real ? " · it stands in for the simulated one until it is unplugged" : ""}`), native: { connector, probe: opened.source.probe.native ?? null, ...(kept ? { proof: kept } : {}) } };
+    return { ok: true, summary: unaddressed(`${adapter.account.name} connected ${src.paper ? "· PAPER, no real money" : "live"} · ${cents(usd)} there now · ${opened.summary} · ${mode}${sim && !this.opts.real ? " · it stands in for the simulated one until it is unplugged" : ""}`), native: { connector, probe: opened.source.probe.native ?? null, ...(kept ? { proof: kept } : {}) } };
   }
 
   private unplug(venue: string): Refusal | { ok: true; summary: string } {
@@ -2714,6 +2728,8 @@ export interface HoldingsView {
   /** asked with `cost`: what was paid (account/costbasis.ts), and the positions it was read with */
   cost?: CostBasis[] | undefined;
   positions?: VenuePosition[] | undefined;
+  /** asked with `paper`: these are the paper accounts' rows and total, paper money and not the account's */
+  paper?: true | undefined;
 }
 
 export interface ReceiveAddress {
@@ -2999,6 +3015,8 @@ const KIND_HERE: Record<string, { name: string; group: VenueHere["group"] }> = {
   "polymarket-trade": { name: "Polymarket", group: "Markets and tokens" },
   polymarket: { name: "Polymarket · by address", group: "Markets and tokens" },
   "hyperliquid-trade": { name: "Hyperliquid", group: "Markets and tokens" },
+  "hyperliquid-paper": { name: "Hyperliquid · paper (testnet)", group: "Markets and tokens" },
+  paper: { name: "Paper account (nothing to connect)", group: "Paper" },
   hyperliquid: { name: "Hyperliquid · by address", group: "Markets and tokens" },
   ondo: { name: "Ondo · OUSG", group: "Markets and tokens" },
 };

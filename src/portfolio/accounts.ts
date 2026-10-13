@@ -69,6 +69,11 @@ export interface Account {
   noTradeBecause?: string | undefined;
   /** why a live venue is only ever read */
   readOnlyBecause?: string | undefined;
+  /** a live venue that is a PAPER account (live/types.ts LiveSource.paper): the venue's own test environment, no real money — its balance
+   * is not counted as money, its orders are rehearsals */
+  paper?: true | undefined;
+  /** a paper account the account keeps itself (live/paper.ts): the paper money it started with, for what it has made or lost since */
+  paperStartUsd?: number | undefined;
 }
 
 /** `event`: shares of a prediction-market outcome, worth $1 or $0 at settlement · `earn`: money in a venue's earn product (a vault, OKX's
@@ -215,6 +220,7 @@ const TRADE_KINDS: Record<string, MarketKind[]> = {
   "polymarket-trade": ["event"],
   metamask: ["token", "event", "perp"],
   wallet: ["token"],
+  paper: ["spot", "perp", "event", "token", "stock"],
 };
 
 /** What a venue's trader offers, from the connector the owner signed (`live:exchange:okx`): an exchange trades spot, and perpetuals or dated

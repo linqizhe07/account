@@ -63,6 +63,16 @@
  *
  * Every order and every leverage change is held to Hyperliquid's own line first (location.ts), and nothing is signed or sent when the place
  * is closed or not known. Taking an order off the book moves nothing, and is not held to it (as the mm perps path does it, metamask.ts).
+ *
+ * PAPER TRADING (`net: "testnet"`, the connector live:hyperliquid-paper): the same connection, to Hyperliquid's own TESTNET — the same info
+ * and exchange API at api.hyperliquid-testnet.xyz, an API wallet approved at app.hyperliquid-testnet.xyz, mock USDC from its faucet
+ * (app.hyperliquid-testnet.xyz/drip: "1,000 mock USDC for testnet use", to an address that "deposited on mainnet with the same address";
+ * hyperliquid.gitbook.io …/onboarding/testnet-faucet, read 2026-10-12). The library's sandbox mode moves every call to the testnet's hosts
+ * (urls.test) and signs each L1 action as the testnet takes it — the phantom agent's source is "b" there, "a" on mainnet (ccxt
+ * hyperliquid.js constructPhantomAgent). The source says `paper: true`: its balance is not money, its orders are rehearsals (the account's
+ * door holds them to the owner's signature, an agent's limit and the mode, and not to the server's real-money cap), and nothing of it is in
+ * the totals. The testnet app is Hyperliquid's Interface under the same Terms of Use, so the same line (§1.6) is held to where the user is,
+ * before connecting and before every order: a paper account is not a way around it.
  */
 import { createHash } from "node:crypto";
 import { getAddress, isAddress, type Hex } from "viem";
@@ -82,10 +92,21 @@ export const HYPERLIQUID_TRADE_KEY: KeyShape = {
   required: ["walletAddress", "privateKey"],
   example: '{"walletAddress": "0x… (the Hyperliquid account\'s own address)", "privateKey": "0x… (the private key of an API wallet that account approved: More → API → Generate → Authorize API Wallet)"}',
 };
+/** the paper account's key file: the same two fields, for an API wallet approved on Hyperliquid's TESTNET */
+export const HYPERLIQUID_PAPER_KEY: KeyShape = {
+  required: ["walletAddress", "privateKey"],
+  example: '{"walletAddress": "0x… (the account\'s own address, the one that trades on app.hyperliquid-testnet.xyz)", "privateKey": "0x… (the private key of an API wallet that account approved THERE: app.hyperliquid-testnet.xyz → More → API → Generate → Authorize API Wallet)"}',
+};
 
-/** the page where an API wallet is made and approved */
+/** the page where an API wallet is made and approved, on mainnet and on the testnet; the testnet's faucet; the testnet's API, where the
+ * library's sandbox mode sends everything (ccxt hyperliquid.js urls.test) */
 export const HL_API_PAGE = "https://app.hyperliquid.xyz/API";
-const HOW = `Make one at ${HL_API_PAGE} (More → API): name an API wallet, Generate, then Authorize API Wallet with the account's own wallet (an approval lasts at most 180 days), and put that API wallet's private key in the key file`;
+export const HL_TESTNET_API_PAGE = "https://app.hyperliquid-testnet.xyz/API";
+export const HL_FAUCET = "https://app.hyperliquid-testnet.xyz/drip";
+export const HL_TESTNET_API = "https://api.hyperliquid-testnet.xyz";
+/** the way to an API wallet when which net is not known (a refusal read off the wire, the key file's own check): both pages named */
+const HOW = `Make one on Hyperliquid's API page (More → API: ${HL_API_PAGE}, or ${HL_TESTNET_API_PAGE} for a paper account on its testnet): name an API wallet, Generate, then Authorize API Wallet with the account's own wallet (an approval lasts at most 180 days), and put that API wallet's private key in the key file`;
+const howTo = (testnet: boolean): string => `Make one at ${testnet ? HL_TESTNET_API_PAGE : HL_API_PAGE} (More → API): name an API wallet, Generate, then Authorize API Wallet with the account's own wallet (an approval lasts at most 180 days), and put that API wallet's private key in the key file${testnet ? ` — on the TESTNET: an approval made on mainnet does not count there, and its mock USDC comes from the faucet, ${HL_FAUCET}` : ""}`;
 
 // ---- the library's client ----------------------------------------------------------------------------
 
@@ -103,6 +124,9 @@ export interface HyperliquidClient {
   setLeverage(leverage: number, symbol?: string, params?: Dict): Promise<unknown>;
   amountToPrecision(symbol: string, amount: number): string;
   priceToPrecision(symbol: string, price: number): string;
+  /** the library's switch to the testnet: its hosts (urls.test) and its testnet signing (options.sandboxMode) */
+  setSandboxMode?(enabled: boolean): void;
+  urls?: Dict | undefined;
   /** what the library does unasked the first time it signs; replaced by disarm() */
   initializeClient?: (() => Promise<boolean>) | undefined;
   /** the library's reading of each answer (base/Exchange.js handleRestResponse: the body, and its parse when it is a JSON object or list);
@@ -110,8 +134,8 @@ export interface HyperliquidClient {
   handleErrors?(code: number, reason: string, url: string, method: string, headers: unknown, body: string, response: unknown, requestHeaders: unknown, requestBody: unknown): unknown;
 }
 
-/** the library's client for one key file; a stand-in's network in tests */
-export type OpenHyperliquid = (key: { walletAddress: string; privateKey: string }) => Promise<HyperliquidClient>;
+/** the library's client for one key file, on mainnet or (`testnet`) on Hyperliquid's testnet; a stand-in's network in tests */
+export type OpenHyperliquid = (key: { walletAddress: string; privateKey: string; testnet?: boolean | undefined }) => Promise<HyperliquidClient>;
 
 type Ccxt = { hyperliquid: new (config: Dict) => HyperliquidClient };
 let library: Promise<Ccxt> | undefined;
@@ -148,7 +172,13 @@ export function disarm(client: HyperliquidClient): HyperliquidClient {
 
 export const openHyperliquid: OpenHyperliquid = async (key) => {
   const lib = await ccxt();
-  return disarm(new lib.hyperliquid({ walletAddress: key.walletAddress, privateKey: key.privateKey, enableRateLimit: true, timeout: 12_000 }));
+  const client = new lib.hyperliquid({ walletAddress: key.walletAddress, privateKey: key.privateKey, enableRateLimit: true, timeout: 12_000 });
+  // the testnet: the library's sandbox mode moves every call to api.hyperliquid-testnet.xyz and signs as the testnet takes it (source "b")
+  if (key.testnet) {
+    if (!client.setSandboxMode) throw new Error("the exchange library's Hyperliquid client has no sandbox mode: the testnet cannot be reached through it");
+    client.setSandboxMode(true);
+  }
+  return disarm(client);
 };
 
 // ---- small readers -------------------------------------------------------------------------------------
@@ -249,7 +279,7 @@ const UNSURE = new Set(["RequestTimeout", "NetworkError", "ExchangeNotAvailable"
 
 /** Hyperliquid's no as the account's refusal: its own sentence, with " asset=N" (its internal index) left to `native`. What the server in
  * front of it answered is read from the whole answer, not the sentence cut from it: an edge's page says where it is from further in */
-export function hyperliquidNo(venue: string, name: string, err: unknown, secrets: string[] = [], ref?: string): Refusal {
+export function hyperliquidNo(venue: string, name: string, err: unknown, secrets: string[] = [], ref?: string, how: string = HOW): Refusal {
   if (isRefusal(err)) return err;
   const { kind, said } = hlSaid(err, secrets);
   const words = said.replace(/\s*asset=\d+\s*$/, "").trim();
@@ -276,7 +306,7 @@ export function hyperliquidNo(venue: string, name: string, err: unknown, secrets
   // banned for too many requests: until when it says, or ten minutes
   const until = bannedUntil(whole);
   if (until !== undefined || http?.status === 418) return bannedNo(venue, name, until, native);
-  if (NO_AGENT.test(said)) return no("E_VENUE_UNAUTHORIZED", { venue, message: `${theirs} — the API wallet is not, or is no longer, approved for this account. ${HOW}`, native });
+  if (NO_AGENT.test(said)) return no("E_VENUE_UNAUTHORIZED", { venue, message: `${theirs} — the API wallet is not, or is no longer, approved for this account. ${how}`, native });
   if (INSUFFICIENT.test(said) || kind === "InsufficientFunds") return no("E_VENUE_INSUFFICIENT", { venue, message: theirs, native });
   if (UNKNOWN_ORDER.test(said) || kind === "OrderNotFound") return no("E_ACCOUNT_ORDER_UNKNOWN", { venue, message: ref ? `${name} has no open order ${ref} for this account (${words})` : theirs, ...(ref ? { detail: { order: ref } } : {}), native });
   if (NO_MATCH.test(said)) return no("E_VENUE_REJECTED", { venue, message: `${theirs.replace(/\.$/, "")}. Nothing was filled`, native });
@@ -295,7 +325,7 @@ export function hyperliquidNo(venue: string, name: string, err: unknown, secrets
 
 /** The key file's two fields: an address, and a private key that is an API wallet's — never the account's own. Field names are said, never
  * a value */
-export function hyperliquidKey(venue: string, key: KeyFile): { user: Hex; agent: Hex; privateKey: Hex } | Refusal {
+export function hyperliquidKey(venue: string, key: KeyFile, how: string = HOW): { user: Hex; agent: Hex; privateKey: Hex } | Refusal {
   const user = (key.walletAddress ?? "").trim();
   const pk = (key.privateKey ?? "").trim();
   if (!isAddress(user, { strict: false })) return no("E_ACCOUNT_CREDENTIAL", { venue, message: '"walletAddress" in the key file is not an address: it is the Hyperliquid account\'s own address, 0x and forty hex digits', detail: { field: "walletAddress" } });
@@ -307,7 +337,7 @@ export function hyperliquidKey(venue: string, key: KeyFile): { user: Hex; agent:
     agent = undefined;
   }
   if (!hex || !agent) return no("E_ACCOUNT_CREDENTIAL", { venue, message: '"privateKey" in the key file is not a private key: it is the API wallet\'s, 0x and sixty-four hex digits', detail: { field: "privateKey" } });
-  if (agent.toLowerCase() === user.toLowerCase()) return no("E_ACCOUNT_CREDENTIAL", { venue, message: `the key file holds the account's own private key, which could withdraw: this connection takes only an API wallet's key, which cannot. ${HOW}`, detail: { field: "privateKey" } });
+  if (agent.toLowerCase() === user.toLowerCase()) return no("E_ACCOUNT_CREDENTIAL", { venue, message: `the key file holds the account's own private key, which could withdraw: this connection takes only an API wallet's key, which cannot. ${how}`, detail: { field: "privateKey" } });
   return { user: getAddress(user), agent, privateKey: hex };
 }
 
@@ -367,10 +397,12 @@ export interface HyperliquidTradeRequest {
   where: Locator;
   clock: () => number;
   open?: OpenHyperliquid | undefined;
+  /** `testnet`: Hyperliquid's testnet, a PAPER account (the connector live:hyperliquid-paper); absent or `mainnet`: the real one */
+  net?: "mainnet" | "testnet" | undefined;
 }
 
 /** What the connection and its trader share: the client, the market list, and Hyperliquid's answers kept a moment */
-function book(c: { venue: string; name: string; user: Hex; client: HyperliquidClient; clock: () => number; secrets: string[] }) {
+function book(c: { venue: string; name: string; user: Hex; client: HyperliquidClient; clock: () => number; secrets: string[]; how?: string | undefined }) {
   const user = c.user.toLowerCase();
   let loadedAt = 0;
   let loadFailed = false;
@@ -382,7 +414,7 @@ function book(c: { venue: string; name: string; user: Hex; client: HyperliquidCl
   const categories = new Map<string, string>();
   const kept = new Map<string, { at: number; value: unknown }>();
 
-  const fail = (err: unknown, ref?: string): Refusal => hyperliquidNo(c.venue, c.name, err, c.secrets, ref);
+  const fail = (err: unknown, ref?: string): Refusal => hyperliquidNo(c.venue, c.name, err, c.secrets, ref, c.how);
   /** an answer that is not Hyperliquid's (nothing, or text that is not a bare JSON value): no answer */
   const page = (call: string): Refusal => no("E_VENUE_UNREACHABLE", { venue: c.venue, message: notTheApiWords(c.name), native: { call, page: true } });
   /** one info read; a refusal is thrown as the account's */
@@ -551,7 +583,7 @@ type Book = ReturnType<typeof book>;
 
 /** Is this API wallet approved for this account, and not past its end? Named API wallets by extraAgents (with their end); one not named there
  * answers for itself (userRole). A no says how to approve one at Hyperliquid */
-async function approval(b: Book, c: { venue: string; name: string; user: Hex; agent: Hex; clock: () => number }): Promise<{ name?: string | undefined; validUntil?: number | undefined } | Refusal> {
+async function approval(b: Book, c: { venue: string; name: string; user: Hex; agent: Hex; clock: () => number; how: string }): Promise<{ name?: string | undefined; validUntil?: number | undefined } | Refusal> {
   let named: unknown;
   try {
     named = await b.info({ type: "extraAgents", user: b.user });
@@ -566,7 +598,7 @@ async function approval(b: Book, c: { venue: string; name: string; user: Hex; ag
   if (mine) {
     const until = fin(mine.validUntil);
     const nm = str(mine.name);
-    if (until !== undefined && until <= c.clock()) return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `${c.name}'s approval of this API wallet${nm ? ` (“${nm}”)` : ""} ended on ${iso(until)}: an API wallet is approved for at most 180 days. ${HOW}`, native: { call: "POST /info extraAgents", agent: c.agent, validUntil: until } });
+    if (until !== undefined && until <= c.clock()) return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `${c.name}'s approval of this API wallet${nm ? ` (“${nm}”)` : ""} ended on ${iso(until)}: an API wallet is approved for at most 180 days. ${c.how}`, native: { call: "POST /info extraAgents", agent: c.agent, validUntil: until } });
     return { ...(nm ? { name: nm } : {}), ...(until !== undefined ? { validUntil: until } : {}) };
   }
   let role: Dict;
@@ -577,7 +609,7 @@ async function approval(b: Book, c: { venue: string; name: string; user: Hex; ag
   }
   const master = str(obj(role.data).user)?.toLowerCase();
   if (role.role === "agent" && master === b.user) return {};
-  if (role.role === "agent" && master) return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `this API wallet (${short(c.agent)}) is approved for another Hyperliquid account (${short(master)}), not for ${short(c.user)}: put that account's address in "walletAddress", or approve an API wallet for ${short(c.user)}. ${HOW}`, native: { call: "POST /info userRole", role: "agent" } });
+  if (role.role === "agent" && master) return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `this API wallet (${short(c.agent)}) is approved for another Hyperliquid account (${short(master)}), not for ${short(c.user)}: put that account's address in "walletAddress", or approve an API wallet for ${short(c.user)}. ${c.how}`, native: { call: "POST /info userRole", role: "agent" } });
   // the address in the key file may be an API wallet's, a sub-account's or a vault's, rather than an account that signs for itself
   let owner: Dict = {};
   try {
@@ -587,7 +619,7 @@ async function approval(b: Book, c: { venue: string; name: string; user: Hex; ag
   }
   if (owner.role === "agent") return no("E_ACCOUNT_CREDENTIAL", { venue: c.venue, message: `"walletAddress" (${short(c.user)}) is an API wallet's address, not an account's: put there the Hyperliquid account's own address, the one it deposits to and trades from`, detail: { field: "walletAddress" } });
   if (owner.role === "subAccount" || owner.role === "vault") return no("E_VENUE_REJECTED", { venue: c.venue, message: `${short(c.user)} is a Hyperliquid ${owner.role === "vault" ? "vault" : "sub-account"}: this connection trades an account that signs for itself, and a ${owner.role === "vault" ? "vault" : "sub-account"} is traded by its master's API wallet on its behalf, which is not offered here` });
-  return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `${c.name} has not approved this API wallet (${short(c.agent)}) for ${short(c.user)}${list.length ? ` — its API wallets are ${list.map((a) => `“${str(a.name) ?? short(String(a.address ?? ""))}”`).join(", ")}` : ""}. ${HOW}`, native: { call: "POST /info extraAgents", named: list.length } });
+  return no("E_VENUE_UNAUTHORIZED", { venue: c.venue, message: `${c.name} has not approved this API wallet (${short(c.agent)}) for ${short(c.user)}${list.length ? ` — its API wallets are ${list.map((a) => `“${str(a.name) ?? short(String(a.address ?? ""))}”`).join(", ")}` : ""}. ${c.how}`, native: { call: "POST /info extraAgents", named: list.length } });
 }
 
 /** What the account holds at Hyperliquid, as Hyperliquid reports it, for the account's own address: the perps account value (open positions
@@ -655,53 +687,59 @@ async function balances(b: Book, name: string): Promise<LiveBalance[]> {
 /** Hyperliquid, connected to trade: Hyperliquid's own line for this user first, then the API wallet's approval for the account, then the
  * account's balances — each no in Hyperliquid's words, and nothing signed on the way */
 export async function hyperliquidTradeSource(req: HyperliquidTradeRequest): Promise<{ source: LiveSource; first: LiveBalance[] } | Refusal> {
-  const k = hyperliquidKey(req.venue, req.key);
+  const testnet = req.net === "testnet";
+  const how = howTo(testnet);
+  const k = hyperliquidKey(req.venue, req.key, how);
   if (isRefusal(k)) return k;
-  const name = req.label || "Hyperliquid";
+  // a paper account says so in its name, whatever the owner called it
+  const name = `${req.label || "Hyperliquid"}${testnet && !/paper|testnet/i.test(req.label) ? " · paper" : ""}`;
   const secrets = [k.privateKey, k.privateKey.slice(2)];
-  // 1. Hyperliquid's own line, for this user where they are now: before anything about the account is asked
+  // 1. Hyperliquid's own line, for this user where they are now: before anything about the account is asked. The testnet is Hyperliquid's
+  // Interface under the same terms: a paper account is held to the same line
   const line = await heldTo(HYPERLIQUID_RULE, req.where, req.venue, "");
   if (line) return line;
   let client: HyperliquidClient;
   try {
-    client = await (req.open ?? openHyperliquid)({ walletAddress: k.user, privateKey: k.privateKey });
+    client = await (req.open ?? openHyperliquid)({ walletAddress: k.user, privateKey: k.privateKey, ...(testnet ? { testnet: true } : {}) });
   } catch (err) {
     return no("E_VENUE_REJECTED", { venue: req.venue, message: `the exchange library could not open ${name}`, native: { error: redact(String((err as Error)?.message ?? err), secrets).slice(0, 200) } });
   }
-  const b = book({ venue: req.venue, name, user: k.user, client, clock: req.clock, secrets });
+  const b = book({ venue: req.venue, name, user: k.user, client, clock: req.clock, secrets, how });
   // 2. the API wallet, approved for this account and not past its end
-  const ok = await approval(b, { venue: req.venue, name, user: k.user, agent: k.agent, clock: req.clock });
+  const ok = await approval(b, { venue: req.venue, name, user: k.user, agent: k.agent, clock: req.clock, how });
   if (isRefusal(ok)) return ok;
   // 3. what the account holds
   let first: LiveBalance[];
   try {
     first = await balances(b, name);
   } catch (err) {
-    return hyperliquidNo(req.venue, name, err, secrets);
+    return hyperliquidNo(req.venue, name, err, secrets, undefined, how);
   }
   const until = ok.validUntil;
-  const trader = hyperliquidTrader({ venue: req.venue, name, b, client, where: req.where, clock: req.clock, secrets, validUntil: until });
+  const trader = hyperliquidTrader({ venue: req.venue, name, b, client, where: req.where, clock: req.clock, secrets, validUntil: until, testnet, how });
   const who = `an API wallet${ok.name ? ` (“${ok.name}”)` : ""} approved for ${k.user}${until !== undefined ? `, until ${iso(until)}` : " (unnamed: Hyperliquid reports no end for it)"}`;
+  const host = testnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
   const source: LiveSource = {
     name,
     kind: "perp",
     reference: req.reference,
-    via: `Hyperliquid · orders signed by an API wallet (unified exchange library)`,
+    via: testnet ? "Hyperliquid TESTNET · paper trading: orders signed by an API wallet (unified exchange library, sandbox mode)" : "Hyperliquid · orders signed by an API wallet (unified exchange library)",
     probe: {
       can: ["trade"],
-      note: `${who}: it signs orders, cancels and leverage changes for the account, and Hyperliquid takes no withdrawal or transfer signed by it · every order is held first to Hyperliquid's own line for where you are (its Terms of Use §1.6)`,
-      native: { calls: ["GET polymarket.com/api/geoblock (country and region only, kept in memory)", "POST /info extraAgents", "POST /info userAbstraction", "POST /info clearinghouseState", "POST /info spotClearinghouseState"], account: k.user, agent: k.agent, ...(ok.name ? { agentName: ok.name } : {}), ...(until !== undefined ? { validUntil: until } : {}) },
+      note: `${who}: it signs orders, cancels and leverage changes for the account, and Hyperliquid takes no withdrawal or transfer signed by it · every order is held first to Hyperliquid's own line for where you are (its Terms of Use §1.6)${testnet ? ` · PAPER: Hyperliquid's testnet, mock USDC from its faucet (${HL_FAUCET}); nothing here is real money, and none of it is counted in your net worth` : ""}`,
+      native: { calls: ["GET polymarket.com/api/geoblock (country and region only, kept in memory)", `POST ${host}/info extraAgents`, `POST ${host}/info userAbstraction`, `POST ${host}/info clearinghouseState`, `POST ${host}/info spotClearinghouseState`], net: testnet ? "testnet" : "mainnet", account: k.user, agent: k.agent, ...(ok.name ? { agentName: ok.name } : {}), ...(until !== undefined ? { validUntil: until } : {}) },
     },
-    read: () => balances(b, name).catch((err) => Promise.reject(hyperliquidNo(req.venue, name, err, secrets))),
-    readOnlyBecause: `an API wallet signs orders for the account and nothing else: Hyperliquid takes a withdrawal, a transfer or a move between spot and perps only on the account's own signature, so no money moves from here — it moves at app.hyperliquid.xyz`,
+    read: () => balances(b, name).catch((err) => Promise.reject(hyperliquidNo(req.venue, name, err, secrets, undefined, how))),
+    readOnlyBecause: testnet ? `a paper account on Hyperliquid's testnet: its mock USDC comes from the faucet (${HL_FAUCET}) and is not money, so nothing of it moves from here` : `an API wallet signs orders for the account and nothing else: Hyperliquid takes a withdrawal, a transfer or a move between spot and perps only on the account's own signature, so no money moves from here — it moves at app.hyperliquid.xyz`,
     trader,
+    ...(testnet ? { paper: true as const } : {}),
   };
   return { source, first };
 }
 
 // ---- the trader ----------------------------------------------------------------------------------------------------
 
-function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: HyperliquidClient; where: Locator; clock: () => number; secrets: string[]; validUntil?: number | undefined }): LiveTrader {
+function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: HyperliquidClient; where: Locator; clock: () => number; secrets: string[]; validUntil?: number | undefined; testnet: boolean; how: string }): LiveTrader {
   const { venue, name, b, client } = c;
   const live = () => c.validUntil === undefined || c.clock() < c.validUntil;
   /** what Hyperliquid last said had filled of each order (fills only grow): a cancel whose order could not be read back says that, never
@@ -719,6 +757,7 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
     const dexName = e.dex ? b.dexName(e.dex) : "";
     const label = perp ? (e.dex ? `${e.base} perpetual on ${dexName} (HIP-3, ${e.coin})` : `${e.base}/${e.quote} perpetual`) : `${e.base}/${e.quote} spot${e.token ? ` (${e.token})` : ""}`;
     const notes = [
+      c.testnet ? "a PAPER market on Hyperliquid's testnet: mock USDC, no real money" : "",
       perp ? (e.dex ? `a HIP-3 perpetual that ${dexName} deployed on Hyperliquid, margined in ${e.quote} in that DEX's own perps balance` : `margined in ${e.quote} in the account's perps balance`) : `a sell sells only what the account holds${e.token ? `; ${e.token} is the token Hyperliquid trades as ${e.base}` : ""}`,
       "a market order is Hyperliquid's IOC limit at its worst price",
       perp ? `funding is paid or received every hour${e.isolatedOnly ? "; isolated margin only" : ""}` : "",
@@ -852,7 +891,7 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
       return live();
     },
     get whyNot() {
-      return live() ? undefined : `${name}'s approval of this API wallet ended on ${iso(c.validUntil!)}: approve a new one at ${HL_API_PAGE} and connect again`;
+      return live() ? undefined : `${name}'s approval of this API wallet ended on ${iso(c.validUntil!)}: approve a new one at ${c.testnet ? HL_TESTNET_API_PAGE : HL_API_PAGE} and connect again`;
     },
     what: "spot and perpetuals",
     kinds: ["spot", "perp"],

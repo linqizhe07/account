@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.hyperliquid.xyz https://api.kraken.com https://api.coinbase.com https://api.exchange.coinbase.com https://www.okx.com https://gamma-api.polymarket.com https://api.github.com; font-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>Gravit — The airport for agents and money</title>
+  <meta name="description" content="The Account: runways for money, a tower that approves, a gate per agent key, a log of every flight. Agents trade, move money and pay inside the limits you sign.">
+  <meta name="theme-color" content="#f8f9f9">
+  <link rel="canonical" href="https://linqizhe07.github.io/buyer-agent-demo/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Gravit — The airport for agents and money">
+  <meta property="og:description" content="Runways for money, a tower that approves, a gate per agent key, a log of every flight. Agents fly inside the limits you sign.">
+  <meta property="og:url" content="https://linqizhe07.github.io/buyer-agent-demo/">
+  <meta property="og:image" content="https://linqizhe07.github.io/buyer-agent-demo/img/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="./img/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./img/apple-touch-icon.png">
+  <link rel="preload" href="./fonts/instrument-serif-v5-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/manrope-v20-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/plex-mono-500-v20-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="nav-in wrap">
+      <a class="brand" href="#top" aria-label="Gravit"><img src="./img/favicon.svg" width="22" height="22" alt=""><span>gravit<span class="period">.</span></span></a>
+      <nav class="pills" aria-label="Sections">
+        <a class="pill" href="#board">Markets</a>
+        <a class="pill" href="#airport">Venues</a>
+        <a class="pill" href="#agents">Agents</a>
+        <a class="pill" href="#progress">Progress</a>
+      </nav>
+      <div class="nav-right">
+        <a class="pill pill-git" href="https://github.com/linqizhe07/buyer-agent-demo">GitHub <span class="arr">↗</span></a>
+        <a class="pill pill-accent" href="https://github.com/linqizhe07/buyer-agent-demo#跑起来">Run it locally <span class="arr">↗</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="h1">
+      <div class="wrap hero-in">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="dot"></span>Gravit · An account for agents</p>
+          <h1 id="h1">The airport for agents and money.</h1>
+          <p class="lede">Runways for money, a tower that approves, a gate per agent key, a log of every flight. Your exchange, broker, wallet and prediction-market accounts on one page; agents fly inside the limits you sign.</p>
+          <div class="ctas">
+            <a class="pill pill-accent pill-lg" href="https://github.com/linqizhe07/buyer-agent-demo#跑起来">Run it locally <span class="arr">↗</span></a>
+            <a class="pill pill-lg" href="#agents">Plug an agent in <span class="arr">↓</span></a>
+          </div>
+          <dl class="hud" aria-label="Live readouts">
+            <div><dt>UTC</dt><dd data-hud="clock">--:--:--</dd></div>
+            <div><dt>Quotes</dt><dd data-hud="quotes">—</dd></div>
+            <div><dt>Frame</dt><dd data-hud="frame">—</dd></div>
+            <div><dt>Exchanges</dt><dd data-stat="exchanges.byApiKey">93</dd></div>
+          </dl>
+        </div>
+        <div class="globe-wrap instrument" aria-hidden="true">
+          <canvas class="globe" data-scene="globe"></canvas>
+          <div class="sats" data-sats></div>
+          <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+          <div class="spot" aria-hidden="true"></div>
+          <p class="tag"><span class="live"></span>Live quotes in orbit</p>
+          <p class="globe-note">Read without a key</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band band-board" id="board" aria-labelledby="h-board">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow on-deep">Departures · Read without a key · Connect to trade</p>
+          <h2 id="h-board" class="decode on-deep">Crypto, stocks, RWAs, perps, pre-IPO and predictions. One ticket.</h2>
+        </div>
+        <div class="board instrument" data-board hidden>
+          <div class="spot" aria-hidden="true"></div>
+          <p class="tag"><span class="live"></span>Departures</p>
+          <table>
+            <thead><tr><th>Venue</th><th>Market</th><th>Last</th><th>24h</th><th class="when">Seen</th></tr></thead>
+            <tbody data-board-rows></tbody>
+          </table>
+          <p class="fine on-deep board-note">Fetched by your browser from each venue's public API. A venue that does not answer is not shown.</p>
+          <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats wrap" aria-label="In numbers">
+      <div class="stat"><b><span class="count" data-stat="exchanges.byApiKey">93</span></b><span>Exchanges</span></div>
+      <div class="stat"><b><span class="count" data-stat="connectionKinds.count">15</span></b><span>Ways to connect</span></div>
+      <div class="stat"><b><span class="count" data-stat="mcpTools.real">32</span></b><span>Agent tools</span></div>
+      <div class="stat"><b><span class="unit">$</span><span class="count" data-stat="capUsd">100</span></b><span>Cap per move</span></div>
+    </section>
+
+    <section class="section" id="airport" aria-labelledby="h-airport">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">The airport</p>
+          <h2 id="h-airport" class="decode">Every venue is a gate.</h2>
+          <p class="lede">The account is the hub. Exchanges, brokers, prediction markets and wallets are its gates; agents fly between them inside their limits, and every flight is logged.</p>
+        </div>
+      </div>
+      <div class="radar-wrap instrument wrap">
+        <canvas class="radar" data-scene="radar" aria-hidden="true"></canvas>
+        <div class="gates" data-gates aria-hidden="true"></div>
+        <div class="spot" aria-hidden="true"></div>
+        <p class="tag"><span class="live"></span>Airport · drawn</p>
+        <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      </div>
+      <p class="fine wrap radar-note">An illustration: the account is the hub, every venue a gate, agents fly inside their limits. The names are the venues the account connects; the flights are drawn.</p>
+    </section>
+
+    <section class="section wrap" id="door" aria-labelledby="h-door">
+      <div class="section-head">
+        <p class="eyebrow">One door</p>
+        <h2 id="h-door" class="decode">Every order goes through one door.</h2>
+        <p class="lede">An agent signs with its own key. The account checks the limit you signed. In Guard it waits for you on a card; in Beast it goes at once. The venue answers in its own words.</p>
+      </div>
+      <div class="door-wrap instrument">
+        <div class="spot" aria-hidden="true"></div>
+        <p class="tag"><span class="live"></span>One door · drawn, venue live</p>
+        <canvas class="door" data-scene="door" aria-hidden="true"></canvas>
+        <ol class="stations" aria-hidden="true">
+          <li><b>Agent</b><span>its own key</span></li>
+          <li><b>Limit</b><span>signed by you</span></li>
+          <li><b>Guard · Beast</b><span>a card, or at once</span></li>
+          <li><b>Venue</b><span class="mono" data-door-venue>live quote</span></li>
+        </ol>
+        <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      </div>
+      <p class="fine">Drawn: each light is an instruction; one turned back at the limit is a refusal; one held in a card is Guard. The venue's quote is live.</p>
+    </section>
+
+    <section class="section wrap builder" id="agents" aria-labelledby="h-agents">
+      <div class="copy">
+        <p class="eyebrow">MCP</p>
+        <h2 id="h-agents" class="decode">Plug an agent in.</h2>
+        <p class="lede">An agent gets a seat: its own key, made on your machine, and the limits you sign. <span data-stat="mcpTools.real">32</span> tools over MCP to read, trade, move, pay, earn, ask and remember. Over a limit, it is refused.</p>
+        <a class="pill pill-accent" href="https://github.com/linqizhe07/buyer-agent-demo#给-agent-的接口">Start building <span class="arr">↗</span></a>
+      </div>
+      <div class="term instrument" data-term aria-label="The agent's tools">
+        <div class="spot" aria-hidden="true"></div>
+        <div class="term-bar"><span></span><span></span><span></span><em>portfolio · mcp · stdio</em></div>
+        <ol class="boot" data-boot aria-hidden="true"><li>seat · a key made on this machine</li><li>limits · signed by the owner, per order, in total, until a date</li><li data-boot-last>tools · registering</li></ol>
+        <ol class="tools" data-tools></ol>
+        <p class="term-foot"><span class="cursor"></span><span data-tools-note>tools registered on a real account</span></p>
+        <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      </div>
+    </section>
+
+    <section class="band band-vision" aria-label="What this is for">
+      <div class="wrap">
+        <svg class="glyph" data-art="glyph" viewBox="0 0 64 64" aria-hidden="true"></svg>
+        <div class="aurora" aria-hidden="true"></div>
+        <p class="vision fade decode">Markets never close, and every one of them already has a seller. The buyer agent did not exist. This is its account.</p>
+        <p class="vision fade decode">An account is an airport: runways for money, a tower that approves, a gate per agent key, a log of every flight.</p>
+        <p class="vision fade decode">Agents trade. You sign the limits. Over a limit, it is refused before a card is raised.</p>
+        <p class="vision fade decode">One account, every venue, every hour: exchanges, brokers, chains and prediction markets, money moved only between places shown to be yours.</p>
+      </div>
+    </section>
+
+    <section class="section wrap" id="venues" aria-labelledby="h-money">
+      <div class="section-head">
+        <p class="eyebrow">Security</p>
+        <h2 id="h-money" class="decode">Who can move money.</h2>
+      </div>
+      <div class="three">
+        <div class="col"><h3>Owner</h3><p>A device key the browser cannot export. Every real-money action is one signature.</p></div>
+        <div class="col"><h3>Agent</h3><p>Its own key, plus the limits you signed: per order, in total, until a date.</p></div>
+        <div class="col"><h3>Venue</h3><p>Its own rules, asked from your own network, in its own words. Never worked around.</p></div>
+      </div>
+      <p class="lead">Guard: every request waits for you on a card. Beast: inside the limits you signed, it runs at once.</p>
+      <p class="fine">Tested against stand-ins only, so far. What this does and does not prove is in the README.</p>
+      <p><a class="pill" href="https://github.com/linqizhe07/buyer-agent-demo#诚实边界">Read the limits <span class="arr">↗</span></a></p>
+    </section>
+
+    <section class="section wrap" aria-labelledby="h-rest">
+      <div class="section-head"><p class="eyebrow" id="h-rest">The rest of Gravit</p></div>
+      <ul class="rows">
+        <li><a class="row" href="https://github.com/linqizhe07/buyer-agent-demo"><span class="ava mint">A</span><span><span class="name">The Account</span><br><span class="what">Your venues, one signature, agents inside limits.</span></span><span class="path">demo/ <span class="arr">↗</span></span></a></li>
+        <li><a class="row" href="https://evolving-alpha.vercel.app/"><span class="ava">g</span><span><span class="name">Gravit workbench</span><br><span class="what">Research, markets and the account on one machine.</span></span><span class="path">face/ <span class="arr">↗</span></span></a></li>
+        <li><a class="row" href="https://github.com/KairosPan/Evolving-Alpha-US/tree/main/alpaca_kit"><span class="ava">α</span><span><span class="name">alpaca_kit</span><br><span class="what">Market data and the paper account, as a Python package.</span></span><span class="path">alpaca_kit/ <span class="arr">↗</span></span></a></li>
+        <li><a class="row" href="https://github.com/linqizhe07/agentpay"><span class="ava">$</span><span><span class="name">agentpay</span><br><span class="what">A budgeted x402 wallet for AI agents.</span></span><span class="path">payment <span class="arr">↗</span></span></a></li>
+        <li><a class="row" href="https://github.com/KairosPan/Evolving-Alpha-US"><span class="ava">…</span><span><span class="name">All modules</span><br><span class="what">Everything else, on GitHub.</span></span><span class="path">Evolving-Alpha-US <span class="arr">↗</span></span></a></li>
+      </ul>
+    </section>
+
+    <section class="section wrap" id="progress" aria-labelledby="h-progress">
+      <div class="section-head"><p class="eyebrow" id="h-progress">Progress</p></div>
+      <ol class="timeline" data-progress aria-live="polite"></ol>
+      <p class="fine" data-progress-note></p>
+      <p><a class="pill" href="https://github.com/linqizhe07/buyer-agent-demo/pulls?q=is%3Apr+is%3Amerged">Read all <span class="arr">↗</span></a></p>
+    </section>
+
+    <section class="section wrap" aria-labelledby="h-faq">
+      <div class="section-head"><p class="eyebrow" id="h-faq">FAQ</p></div>
+      <div class="faq">
+        <details><summary>What is Gravit?</summary><p>An AI workbench for investment research, with an account its agents can act from.</p></details>
+        <details><summary>What is the Account?</summary><p>Your real exchange, broker, wallet and prediction-market accounts on one page. Agents trade, move money and pay inside limits you sign; you watch, steer and approve.</p></details>
+        <details><summary>Is this real money?</summary><p>When you run it, yes: real orders at the accounts you connect, each under a cap you set, with a read-only switch. The code has only ever been exercised against stand-ins.</p></details>
+        <details><summary>Where does it run?</summary><p>On your own machine, for one operator. Keys stay in your files, the owner is a key in your browser, and nothing is hosted.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wordmark" aria-hidden="true">Grav<i>it.</i></div>
+    <div class="foot">
+      <div class="wrap">
+        <div class="top">
+          <div><svg class="g" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#97fce3"/><path d="M43 20v23c0 8-5 12-13 12M43 25a12 12 0 1 0 0 12" fill="none" stroke="#03211c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div><h4>Learn</h4><ul>
+            <li><a href="https://github.com/linqizhe07/buyer-agent-demo#readme">Account README</a></li>
+            <li><a href="https://github.com/linqizhe07/buyer-agent-demo/blob/main/COOKBOOK.md">Cookbook</a></li>
+            <li><a href="https://github.com/KairosPan/Evolving-Alpha-US/blob/main/Kairos-Design.md">Kairos charter</a></li>
+          </ul></div>
+          <div><h4>Code</h4><ul>
+            <li><a href="https://github.com/linqizhe07/buyer-agent-demo">buyer-agent-demo</a></li>
+            <li><a href="https://github.com/KairosPan/Evolving-Alpha-US">Evolving-Alpha-US</a></li>
+            <li><a href="https://github.com/linqizhe07/agentpay">agentpay</a></li>
+          </ul></div>
+          <div><h4>Contact</h4><ul>
+            <li>hello@gravit.example</li>
+            <li><a href="https://github.com/linqizhe07">github.com/linqizhe07</a></li>
+            <li><a href="https://github.com/KairosPan">github.com/KairosPan</a></li>
+          </ul></div>
+        </div>
+        <div class="bottom">
+          <p>© 2026 Gravit · Think independently. Keep questioning.</p>
+          <p>Quotes come straight from the venues' public APIs to your browser. No analytics, no cookies.</p>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

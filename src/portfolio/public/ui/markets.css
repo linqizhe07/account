@@ -71,6 +71,7 @@
 .mk-d .mk-t td { white-space: normal; }
 /* a venue's name never breaks inside itself where a cell wraps (the drawer's): between names only */
 .mk-where .mk-v, .mk-where .mk-more { white-space: nowrap; }
+.mk-where .mk-v.paper { border-bottom: 1px dashed var(--dim); }
 /* a window between a phone and about 1220 wide (the rail beside the pane): the table would need more than its card, so Where is left to
    the hover card, and Trade · Connect to trade stay whole inside the card */
 @media (min-width: 641px) and (max-width: 1219px) {
