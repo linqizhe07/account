@@ -1320,7 +1320,8 @@ export class PortfolioService {
   /** what a live connection reaches: the real network, unless a test handed in stand-ins */
   private liveDeps(): LiveDeps {
     // made once: the chain clients and the price cache are kept between connections
-    return (this.liveMade ??= { home: this.opts.home, http: realHttp, clock: Date.now, mm: realMm(this.opts.mm?.bin, this.opts.mm?.timeoutMs), chain: this.opts.liveDeps?.chain ?? publicChain(), price: this.opts.liveDeps?.price ?? publicPrices({ open: this.opts.liveDeps?.openExchange, clock: this.opts.liveDeps?.clock }), signIn: (kind) => this.signIn(kind), ...this.opts.liveDeps, proofs: this.proofs });
+    // a paper account prices itself at the same public sources Markets reads (live/paper.ts), through the service's own keeping of them
+    return (this.liveMade ??= { home: this.opts.home, http: realHttp, clock: Date.now, mm: realMm(this.opts.mm?.bin, this.opts.mm?.timeoutMs), chain: this.opts.liveDeps?.chain ?? publicChain(), price: this.opts.liveDeps?.price ?? publicPrices({ open: this.opts.liveDeps?.openExchange, clock: this.opts.liveDeps?.clock }), signIn: (kind) => this.signIn(kind), publicSources: () => this.publicMarkets(), ...this.opts.liveDeps, proofs: this.proofs });
   }
   private liveMade: LiveDeps | undefined;
 
@@ -3003,6 +3004,7 @@ const KIND_HERE: Record<string, { name: string; group: VenueHere["group"] }> = {
   polymarket: { name: "Polymarket · by address", group: "Markets and tokens" },
   "hyperliquid-trade": { name: "Hyperliquid", group: "Markets and tokens" },
   "hyperliquid-paper": { name: "Hyperliquid · paper (testnet)", group: "Markets and tokens" },
+  paper: { name: "Paper account (nothing to connect)", group: "Paper" },
   hyperliquid: { name: "Hyperliquid · by address", group: "Markets and tokens" },
   ondo: { name: "Ondo · OUSG", group: "Markets and tokens" },
 };

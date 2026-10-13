@@ -13,6 +13,8 @@
  *                        Hyperliquid's own line (its Terms of Use §1.6) is held to where the user is first
  *   live:hyperliquid-paper  PAPER TRADING: the same connection to Hyperliquid's own testnet — mock USDC,  a key file
  *                        no real money (LiveSource.paper), held to the same line
+ *   live:paper           a PAPER ACCOUNT the account keeps itself: paper dollars, the public markets,  nothing (a name and a sum)
+ *                        fills by the account's own rule, a book in the home (paper.ts); several at once
  *   live:polymarket      a prediction-market wallet                                                   an address
  *   live:polymarket-trade  the same wallet, traded on Polymarket's CLOB                              a key file
  *   live:wallet          any EVM wallet: an exchange's own wallet, a browser wallet, a hardware one,  an address
@@ -33,6 +35,8 @@ import { HYPERLIQUID_PAPER_KEY, HYPERLIQUID_TRADE_KEY, hyperliquidTradeSource, t
 import { KALSHI_KEY, kalshiSource } from "./kalshi.ts";
 import { locator } from "./location.ts";
 import { metamaskSource, type RunMm } from "./metamask.ts";
+import { PAPER_DEFAULT_CASH, paperSource, parsePaperCash } from "./paper.ts";
+import type { PublicSource } from "./public-markets.ts";
 import { POLYMARKET_TRADE_KEY, polymarketTradeSource } from "./polymarket-clob.ts";
 import { POLYMARKET_US_KEY, polymarketUsSource } from "./polymarket-us.ts";
 import { ROBINHOOD_CRYPTO_KEY, realMcp, robinhoodCryptoSource, robinhoodStocksSource, type OpenMcp } from "./robinhood.ts";
@@ -64,6 +68,8 @@ export interface LiveDeps {
   openMcp?: OpenMcp | undefined;
   /** what sends a transfer from an agent wallet the account holds the key of (chain.ts publicSender); a stand-in in tests */
   sender?: ChainSender | undefined;
+  /** the public market data Markets reads without a key, as the service keeps it: what a paper account prices itself at (paper.ts) */
+  publicSources?: (() => PublicSource[]) | undefined;
 }
 
 export interface LiveRequest {
@@ -235,6 +241,21 @@ const hyperliquidPaper: Connector = {
     return isRefusal(opened) ? opened : { ...opened, summary: said(opened.source), price: deps.price };
   },
 };
+/** A paper account the account keeps itself: nothing to connect. The reference is the paper money it starts with, in dollars (empty: the
+ * default); the venue id names its book under <home>/paper/<venue>/, continued when it exists; several can be open at once */
+const paper: Connector = {
+  kind: "paper",
+  label: "Paper account · paper money, the public markets, the account's own book",
+  needs: "none",
+  example: `Nothing to connect: the account opens a paper account of its own — ${PAPER_DEFAULT_CASH.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} of paper money unless another sum in dollars is given — trading every market the public sources list, filled at the public quote by the account's own rule. No real money anywhere. Several can be open at once, each with its own name.`,
+  venues: [],
+  async open(req, deps) {
+    const cash = parsePaperCash(req.reference, req.venue);
+    if (isRefusal(cash)) return cash;
+    const opened = await paperSource({ home: deps.home, venue: req.venue, label: req.label, cashUsd: cash, sources: () => deps.publicSources?.() ?? [], clock: deps.clock });
+    return isRefusal(opened) ? opened : { ...opened, summary: `${opened.source.name}: ${opened.source.probe.note}` };
+  },
+};
 const polymarket = byAddress("polymarket", "Polymarket · by the account wallet's address", "The account wallet Polymarket shows in the profile menu (the deposit or proxy wallet), not the key that signs for it.", ["polymarket"], polymarketSource, false);
 /** Polymarket to trade: the key that signs for the account wallet, in a key file. Polymarket's location check comes before anything else */
 const polymarketTrade: Connector = {
@@ -266,7 +287,7 @@ const metamask: Connector = {
   },
 };
 
-export const CONNECTORS: Connector[] = [exchange, alpaca, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, hyperliquidPaper, polymarket, polymarketTrade, ondo];
+export const CONNECTORS: Connector[] = [paper, exchange, alpaca, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, hyperliquidPaper, polymarket, polymarketTrade, ondo];
 
 /** register a connector kind (the other sources add themselves here) */
 export function register(c: Connector): void {

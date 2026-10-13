@@ -8,6 +8,8 @@ import { byAsset } from "../../src/portfolio/account/holdings.ts";
 import { networthPath } from "../../src/portfolio/account/networth.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
+import { paperBookPath, type PaperBook } from "../../src/portfolio/live/paper.ts";
+import type { Listing, PublicSource } from "../../src/portfolio/live/public-markets.ts";
 import type { LiveTrader, Market, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
@@ -74,19 +76,21 @@ afterAll(() => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
 });
 
-async function boot(o: { writes?: boolean } = {}) {
-  const home = mkdtempSync(join(tmpdir(), "account-paper-"));
-  homes.push(home);
-  let n = 0;
+async function boot(o: { writes?: boolean; home?: string; sources?: PublicSource[]; connect?: boolean; nonceFrom?: number; at?: number } = {}) {
+  const home = o.home ?? mkdtempSync(join(tmpdir(), "account-paper-"));
+  if (!o.home) homes.push(home);
+  let n = o.nonceFrom ?? 0;
   const liveDeps: Partial<LiveDeps> = { clock: () => REAL, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
-  const svc = await PortfolioService.create({ home, now: () => new Date(START).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [], ...(o.writes === false ? {} : { liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" } }), account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
+  // a later run on the same home comes later by the clock, as a restart does
+  const svc = await PortfolioService.create({ home, now: () => new Date(START + (o.at ?? 0)).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: o.sources ?? [], ...(o.writes === false ? {} : { liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" } }), account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
   const engine = svc.account!;
   const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: START + ++n } as OwnerAction));
   const ag = async (a: NoNonce<AgentAction>) => svc.exchange(await signAgent(cc, { ...a, nonce: START + ++n } as AgentAction));
-  for (const [venue, connector, label] of [["real", "live:standin-paper-real", "Real Ex"], ["paper", "live:standin-paper-paper", "Paper Ex"]] as const) {
-    const r = await own({ type: "connectVenue", venue, connector, label, credentialRef: "" });
-    if (isRefusal(r)) throw new Error(r.message);
-  }
+  if (o.connect !== false)
+    for (const [venue, connector, label] of [["real", "live:standin-paper-real", "Real Ex"], ["paper", "live:standin-paper-paper", "Paper Ex"]] as const) {
+      const r = await own({ type: "connectVenue", venue, connector, label, credentialRef: "" });
+      if (isRefusal(r)) throw new Error(r.message);
+    }
   /** what the page does: prepare, then sign exactly what came back */
   const order = async (venue: string, draft: Record<string, unknown>) => {
     const p = await engine.prepare({ type: "liveOrder", venue, ...draft });
@@ -180,6 +184,47 @@ describe("a paper account beside a real one", () => {
     if (isRefusal(cmp)) throw new Error(cmp.message);
     expect(cmp.rows.map((r) => r.venue)).toEqual(["real"]);
     expect(cmp.missing.map((m) => m.venue)).not.toContain("paper");
+  });
+
+  it("the account's own paper accounts (live:paper): nothing to connect, several at once, priced at the public sources, through the same door, back after a restart with their books", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const first = await boot({ sources: [kraken], connect: false });
+    const { svc, own, order } = first;
+    expect(code(await own({ type: "connectVenue", venue: "paper-alpha", connector: "live:paper", label: "Alpha", credentialRef: "25000" }))).toBe("account");
+    expect(code(await own({ type: "connectVenue", venue: "paper-2", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    expect(code(await own({ type: "connectVenue", venue: "paper-3", connector: "live:paper", label: "", credentialRef: "a lot" }))).toBe("E_ACCOUNT_CREDENTIAL");
+    const page = (await svc.accountView())!;
+    const alpha = page.venues.find((v) => v.id === "paper-alpha")!;
+    const second = page.venues.find((v) => v.id === "paper-2")!;
+    expect([alpha.name, alpha.paper, alpha.usd, second.name, second.paper, second.usd]).toEqual(["Alpha · paper", true, 25000, "Paper account · paper", true, 10000]);
+    expect([page.totalUsd, page.liveUsd]).toEqual([0, 0]);
+    // the connection the agents and the page are offered: nothing to connect, always connectable
+    const here = await svc.venuesHere();
+    expect(here.find((v) => v.connector === "live:paper")).toMatchObject({ verdict: "connectable", needs: "none", group: "Paper" });
+    // an order worth $3,000 against a cap of $100: placed, at the public ask, with the book's fee; the statement says paper
+    const placed = await order("paper-alpha", { symbol: "BTC/USD", side: "buy", orderType: "market", usd: "3000" });
+    if (isRefusal(placed) || placed.kind !== "order") throw new Error(`expected an order, got ${code(placed)}`);
+    // $3,000 sized by the door at the worst price it allows (2% past the ask), to the paper account's step
+    expect(placed.order).toMatchObject({ paper: true, status: "filled", avgPrice: 60010, qty: 0.049011 });
+    expect(svc.statement().find((l) => l.id === placed.order.id)).toMatchObject({ paper: true, account: "paper-alpha" });
+    const book = JSON.parse(readFileSync(paperBookPath(first.home, "paper-alpha"), "utf8")) as PaperBook;
+    expect(book.cashUsd).toBeCloseTo(25000 - 0.049011 * 60010 * 1.001, 3);
+    // Markets: the public line prices the row, each paper account is a line after it
+    const x = await svc.explore({ q: "BTC" });
+    if (isRefusal(x)) throw new Error(x.message);
+    const row = x.items.find((i) => i.key === "coin:BTC")!;
+    expect(row.price).toBe(60000);
+    expect(row.at.map((a) => [a.venue, a.connected, a.paper ?? false])).toEqual([["kraken", false, false], ["paper-alpha", true, true], ["paper-2", true, true]]);
+    // a restart: the books are continued, the sum in the connection's reference does not start them again
+    const again = await boot({ home: first.home, sources: [kraken], connect: false, nonceFrom: 50, at: 3_600_000 });
+    // the venues come back after the report is written: waited for, as a page would wait for the restore to say done
+    await again.svc.restoring;
+    expect(again.svc.restored).toMatchObject({ state: "done", venues: [{ venue: "paper-alpha", ok: true }, { venue: "paper-2", ok: true }] });
+    const back = (await again.svc.accountView())!;
+    expect(back.venues.find((v) => v.id === "paper-alpha")!.usd).toBeCloseTo(book.cashUsd + 0.049011 * 60000, 1);
+    expect(back.venues.find((v) => v.id === "paper-2")).toMatchObject({ paper: true, usd: 10000 });
+    expect(back.venues.find((v) => v.id === "paper-alpha")!.holdings.find((h) => h.asset === "BTC")).toMatchObject({ amount: 0.049011 });
   });
 
   it("positions say paper; the net worth curve counts the real venue alone", async () => {

@@ -77,9 +77,10 @@ describe("the stand-in account", () => {
     expect(a.connectLive.writes).toMatchObject({ on: true, capUsd: 250 });
     expect([a.mode, a.dial.maxLeverage]).toEqual(["guard", 5]);
     expect(a.signers.owners.map((o: { label: string }) => o.label)).toEqual(["Stand-in seed key"]);
-    // six venues: the exchange, the event market, the wallet, the broker, a paper account and the agent's wallet
-    expect(s.seeded.venues).toEqual(["ex", "predict", "wallet", "broker", "paper", s.seeded.agent.wallet]);
+    // seven venues: the exchange, the event market, the wallet, the broker, a paper stand-in, the account's own paper account and the agent's wallet
+    expect(s.seeded.venues).toEqual(["ex", "predict", "wallet", "broker", "paper", "paper-momentum", s.seeded.agent.wallet]);
     expect(a.venues.find((v: { id: string }) => v.id === "paper")).toMatchObject({ paper: true, live: true, name: "Stand-in Paper" });
+    expect(a.venues.find((v: { id: string }) => v.id === "paper-momentum")).toMatchObject({ paper: true, live: true, name: "Momentum · paper", usd: 25000 });
     expect(a.venues.map((v: { id: string }) => v.id).sort()).toEqual([...s.seeded.venues].sort());
     // the broker: a stock broker's one kind, said by its own trader; a cash account — no positions call, no order changed in place, no
     // leverage — where no money moves from here, in its own words
@@ -97,7 +98,9 @@ describe("the stand-in account", () => {
     const { status, body: e } = await get("/api/account/explore");
     expect(status).toBe(200);
     const row = (key: string) => e.items.find((i: { key: string }) => i.key === key);
-    expect(row("coin:DOGE").at).toEqual([expect.objectContaining({ venue: "standin-pubex-public", connected: false, public: true, canTrade: false, connectTo: "standin-pubex", connector: "live:standin-pubex" })]);
+    // the public line prices the row; the account's own paper account lists it too, after it, to rehearse on
+    expect(row("coin:DOGE").at).toEqual([expect.objectContaining({ venue: "standin-pubex-public", connected: false, public: true, canTrade: false, connectTo: "standin-pubex", connector: "live:standin-pubex" }), expect.objectContaining({ venue: "paper-momentum", connected: true, paper: true, canTrade: true })]);
+    expect(row("coin:DOGE").price).toBe(row("coin:DOGE").at[0].price);
     expect(row("coin:BTC").at.map((x: { venue: string }) => x.venue)).toEqual(expect.arrayContaining(["ex", "wallet", "standin-pubex-public"]));
     expect(row("perp:ETH").fundingRate).toBe(0.00008);
     expect(row("event:predict:SI-FEDCUT-DEC")).toMatchObject({ kind: "event", category: "Economics", outcomes: [expect.objectContaining({ label: "Yes" }), expect.objectContaining({ label: "No" })] });
@@ -122,6 +125,7 @@ describe("the stand-in account", () => {
     expect(anthropic.at.map((a: { venue: string; connected: boolean; canTrade: unknown; connectTo?: string }) => [a.venue, a.connected, a.canTrade, a.connectTo]).sort()).toEqual([
       ["ex", true, true, undefined],
       ["paper", true, true, undefined],
+      ["paper-momentum", true, true, undefined],
       ["standin-pubperps-public", false, false, "standin-pubperps"],
     ]);
     expect(anthropic.at.find((a: { venue: string }) => a.venue === "paper").paper).toBe(true);
@@ -212,7 +216,7 @@ describe("the stand-in account", () => {
     expect(v.trade.kinds).toEqual(["spot"]);
     // a question not asked before: Markets is asked again rather than answered from what it kept
     const doge = (await get("/api/account/explore?q=DOGE")).body.items.find((i: { key: string }) => i.key === "coin:DOGE");
-    expect(doge.at).toEqual([expect.objectContaining({ venue: "standin-pubex", connected: true, canTrade: true })]);
+    expect(doge.at).toEqual([expect.objectContaining({ venue: "standin-pubex", connected: true, canTrade: true }), expect.objectContaining({ venue: "paper-momentum", connected: true, paper: true })]);
   });
 
   it("the Stand-in Broker by New York's clock: market orders only in the session; closed, Alpaca's words and the next open; both kinds of size", async () => {

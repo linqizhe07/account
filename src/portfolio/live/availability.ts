@@ -47,9 +47,9 @@ export interface VenueHere {
   connector: string;
   name: string;
   /** what kind of account it is, as the page groups them */
-  group: "Exchanges" | "Brokers" | "Wallets" | "Markets and tokens";
-  /** how it is connected: a key file, the venue's own sign-in, an address, the mm command line */
-  needs: "key-file" | "sign-in" | "address" | "cli";
+  group: "Exchanges" | "Brokers" | "Wallets" | "Markets and tokens" | "Paper";
+  /** how it is connected: a key file, the venue's own sign-in, an address, the mm command line — or nothing (a paper account) */
+  needs: "key-file" | "sign-in" | "address" | "cli" | "none";
   verdict: Verdict;
   /** the venue's own words when it is not connectable: its answer to this network, or its terms */
   said?: string | undefined;
@@ -121,7 +121,8 @@ export function verdictOf(r: Reach | undefined, terms: (TermsLine & { excludesHe
   if (r && r.state === "closed") return { verdict: "closed", said: r.said };
   if (r && r.state === "unreachable") return { verdict: "no-answer", said: r.said };
   // read by address: public data, never judged by terms (the venue's answer to this network, above, still decides)
-  if (needs === "address") return { verdict: "connectable" };
+  // read by address, or a paper account the account keeps itself: no venue to refuse it
+  if (needs === "address" || needs === "none") return { verdict: "connectable" };
   if (terms && terms.excludesHere === true) return { verdict: "terms-exclude", said: `its terms exclude where you are (${terms.url}, read ${terms.read}): “${terms.says}” — the venue checks residency when an account is opened; the account does not${terms.note ? `. ${terms.note}` : ""}` };
   return { verdict: "connectable" };
 }

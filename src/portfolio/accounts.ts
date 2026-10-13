@@ -218,6 +218,7 @@ const TRADE_KINDS: Record<string, MarketKind[]> = {
   "polymarket-trade": ["event"],
   metamask: ["token", "event", "perp"],
   wallet: ["token"],
+  paper: ["spot", "perp", "event", "token"],
 };
 
 /** What a venue's trader offers, from the connector the owner signed (`live:exchange:okx`): an exchange trades spot, and perpetuals or dated

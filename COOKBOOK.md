@@ -296,37 +296,43 @@ agent 设杠杆有一条你签的上限：Settings 弹层里 "Their leverage"，
 
 agent 只能撤自己下的单；你能撤任何单（撤单从不出卡；你撤 agent 的单时页面先问一次）。重启后场所没接回来的单，账户不再跟（Statement 里 "not followed since a restart"）：agent 或你撤它只是把它那份额度放回来，单要在场所那边撤，账户既撤不了也看不到成交。在模拟账户里才有的指令（`agentOrder`、`agentExecute`、`agentSendAsset`、`agentSwap`）在这里回 `E_ACCOUNT_BAD_ACTION · this account holds real accounts only`；`agentPay` 只在服务能从 agent 钱包付真钱时收（第 7b 条）。
 
-## 6b · 纸上交易：先在 Hyperliquid 测试网演练
+## 6b · 纸上账户：先用假钱飞一趟
 
-真钱之前先排练一遍。**"Hyperliquid · paper"** 是同一个 Hyperliquid 连接接到它自己的测试网——真接口、假钱：门、额度、模式、卡片、对账单都和真的一样，只是余额不算钱、订单不受 `--live-cap`，页面和 agent 处处标 **Paper**。
+真钱之前先排练。两种纸上账户，账户里都标 `paper: true`：**Paper account**——账户自己记账，什么都不用接，大多数人从这里开始；**Hyperliquid · paper**——Hyperliquid 自己的测试网，给已经有 Hyperliquid 的人排练。两种都走同一扇门：额度、模式、卡片、对账单和真的一样，只是余额不算钱、订单不受 `--live-cap`，页面和 agent 处处标 **Paper**。
 
-**准备（一次）**
+**Paper account（什么都不用接）**
+
+- 开：Connect an account → "Paper account"（Portfolio 空着的时候那句 "start a paper account" 也是它）→ 起个名（Momentum）、写一笔起始资金（空着是 $10,000）→ Connect（一次签名，不问任何场所）。可以开好几个，各有各的名字和账本：`~/.buyer-agent-demo/paper/<id>/book.json`，id 是 `paper-<名字>`（没起名就是 `paper-1`、`paper-2`）；同一个 id 再接是接着记，不是重开；重启照旧。
+- 它交易什么：Markets 不带钥匙读到的全部公开行情——交易所的币（Kraken、Coinbase、OKX、Binance、Bybit）、Hyperliquid 的永续、Kalshi 和 Polymarket 的事件合约、Robinhood 的代币化股票、pre-IPO 永续。市场的写法是那家公开源自己的（Kraken 的 `BTC/USD`、Hyperliquid 的 `BTC-PERP`、Kalshi 的 ticker、Polymarket 的 `pm:…`）；两家都列的同一个符号，排在前面的那家说了算。美股还没有不带钥匙的行情源，所以先没有美股。
+- 成交规则是账户自己定的，票上、Details 里、MCP 答复里都写着：市价单按公开报价的卖一（买）/ 买一（卖）整单成交，受门给的最差价约束；限价单挂着，报价穿过限价时按限价成交——"穿过"是在账户看它的时候判的（读余额、查单、看持仓、页面每次刷新），没人看就不判；IOC 没穿过就撤；手续费 0.10%；不模拟深度、部分成交和滑点；挂单不冻结资金，穿过时钱不够就拒。现货、代币、事件合约只能卖持有的；永续 1 倍：名义额作保证金、按报价标记未实现盈亏、只减仓或反向单平仓（超过仓位的反向单拒掉，不翻仓）、不收资金费、不强平；事件合约按价格标记、不结算。
+- 页面：Venues 一行标 Paper，余额不进净值（标题写 "paper account not counted"）；Trade 的 Where 里它排在真场所后面，公开行照样给 "Connect to trade"；只有它一家有的市场整行标 Paper、按钮写 "Paper trade"；Statement 标 Paper。
+- agent：第 3 条给额度时场所填它的 id（`paper-momentum`）；`portfolio_venues` 里 `live:paper` 永远 connectable、`needs: none`，agent 可以用 `portfolio_ask {kind: "venue", venue: "paper"}` 请你开一个。
+
+**Hyperliquid · paper（它的测试网）**
 
 1. 打开 app.hyperliquid-testnet.xyz，用你的钱包连上。邮箱（Privy）登录在测试网是另一个地址：它的文档说把主网的邮箱钱包导出、装进 MetaMask 或 Rabby，再用那个钱包连测试网。
 2. 水龙头 app.hyperliquid-testnet.xyz/drip 领 1,000 个 mock USDC。它的要求是**同一个地址在主网存过款**（多少都行）。
 3. More → API：起个名、Generate、复制 API 钱包的私钥，再 Authorize API Wallet。主网批过的在测试网不算，要在测试网再批一次；最长 180 天。
 4. 钥匙文件 `~/.buyer-agent-demo/credentials/hyperliquid-paper/api-key.json`：`{"walletAddress": "你账户自己的地址", "privateKey": "API 钱包的私钥"}`，`chmod 600`。Connect an account 的卡片上有一条现成的命令（建目录、空模板、权限、打开编辑器）。账户自己的私钥会被拒收——它能提币。
+5. 接入：Connect an account → "Hyperliquid · paper" → 钥匙文件路径 → Connect。接的顺序和真的一样：先按它条款 §1.6 查你此刻所在的地方（测试网也是它的 Interface、同一份条款，美国、安大略、受制裁地区不服务，和真的一个答案），再问测试网这把 API 钱包批给的是不是这个账户、有没有过期，最后读余额。
 
-**接入**：Connect an account → "Hyperliquid · paper" → 钥匙文件路径 → Connect（一次签名）。接的顺序和真的一样：先按它条款 §1.6 查你此刻所在的地方（测试网也是它的 Interface、同一份条款，美国、安大略、受制裁地区不服务，和真的一个答案），再问测试网这把 API 钱包批给的是不是这个账户、有没有过期，最后读余额。Venues 里多一行 "Hyperliquid · paper"，标 Paper；净值、持仓表、Cash ready 和净值曲线都不算它（Venues 的标题写 "1 paper account not counted"）。
+**自己下单**：Trade → Perps（现货在 Crypto，事件在 Predictions）→ 搜 BTC → Where 里选纸上账户那一行（标 Paper）→ 金额 → Sign and place。签名的那句话以 "PAPER · " 开头，上限那一句不出现（`--live-cap` 管的是真钱）；`--read-only` 起的服务照样不下。Statement 里那几行标 Paper，合计不算它们，CSV 多一列 `paper`。比价（Where 的 Best、`portfolio_live_compare`）不比纸上账户。
 
-**自己下单**：Trade → Perps（现货在 Crypto）→ 搜 BTC → Where 里 "Hyperliquid · paper [Paper]"（排在真场所后面；没接真的那家时，公开行照样给 "Connect to trade"）→ 金额 → Sign and place。签名的那句话以 "PAPER · " 开头，上限那一句不出现（`--live-cap` 管的是真钱）；`--read-only` 起的服务照样不下。Statement 里那几行标 Paper，合计不算它们，CSV 多一列 `paper`。Markets 里它的那一条排在真场所后面、不定行价；只有它一家有的市场整行标 Paper，按钮写 "Paper trade"；比价（Where 的 Best、`portfolio_live_compare`）不比它。
-
-**让 agent 演练**：第 3 条给额度时场所填 `hyperliquid-paper`（和真的 `hyperliquid-trade` 是两家，各自一条额度）。Guard 下每单一张卡，卡上写 "paper order (no real money)"；Beast 下额度内直接下。MCP 里：
+**让 agent 演练**：第 3 条给额度时场所填纸上账户的 id（`paper-momentum`，或测试网的 `hyperliquid-paper`；和真的 `hyperliquid-trade` 是各自一条额度）。Guard 下每单一张卡，卡上写 "paper order (no real money)"；Beast 下额度内直接下。MCP 里：
 
 ```
-portfolio_account                                        venues 里 "hyperliquid-paper" 带 paper: true，trading 一栏以 "PAPER TRADING, no real money" 开头
-portfolio_live_markets   {venue: "hyperliquid-paper", query: "BTC"}
-portfolio_live_preview   {order: {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}}
-portfolio_live_order     {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}
-                                                         答复里的订单带 paper: true；Guard 是 {pending: true, card}，portfolio_wait {card} 等你
-portfolio_live_positions {venue: "hyperliquid-paper"}    每条带 paper: true
-portfolio_live_close     {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC"}
-portfolio_live_leverage  {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", leverage: 3}
+portfolio_account                                      venues 里那家带 paper: true，trading 一栏以 "PAPER TRADING, no real money" 开头
+portfolio_live_markets   {venue: "paper-momentum", query: "BTC"}
+portfolio_live_preview   {order: {venue: "paper-momentum", symbol: "BTC/USD", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}}
+portfolio_live_order     {venue: "paper-momentum", symbol: "BTC/USD", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}
+                                                       答复里的订单带 paper: true；Guard 是 {pending: true, card}，portfolio_wait {card} 等你
+portfolio_live_positions {venue: "paper-momentum"}     永续仓位，每条带 paper: true
+portfolio_live_close     {venue: "paper-momentum", symbol: "BTC-PERP"}
 ```
 
-市场的写法和真的一样：`BTC/USDC:USDC` 永续、`HYPE/USDC` 现货、`XYZ-NVDA/USDC:USDC` HIP-3；测试网上有些市场主网没有，反过来也是。
+测试网的市场写法和主网一样：`BTC/USDC:USDC` 永续、`HYPE/USDC` 现货、`XYZ-NVDA/USDC:USDC` HIP-3；测试网上有些市场主网没有，反过来也是。
 
-**换成真的**：接 "Hyperliquid"（主网的 API 钱包，`credentials/hyperliquid-trade/api-key.json`），给 agent 一条写着 `hyperliquid-trade` 的额度，工具和写法一字不改。不同的只有三件：钱是真的、`--live-cap` 管着每一单、Markets 和比价拿它当价格。
+**换成真的**：接真的场所（Hyperliquid 的主网 API 钱包、一家交易所的钥匙……），给 agent 一条写着那家 id 的额度，工具和写法一字不改。不同的只有三件：钱是真的、`--live-cap` 管着每一单、Markets 和比价拿它当价格。
 
 ## 7 · 动钱
 

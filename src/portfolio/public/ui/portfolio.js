@@ -318,7 +318,7 @@ function pfWorthHtml(l, venueIn, rows) {
     // nothing read yet; a connection may be on the account all the same, waiting for its venue to answer this network (one the venue
     // refused is under Venues, with Connect again)
     const w = pfWaiting().filter((x) => !x.stopped).length;
-    return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : "Nothing is connected yet. Connect an account and what it holds shows here."}</p></section>`;
+    return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : `Nothing is connected yet. Connect an account and what it holds shows here — or ${pfBtn("paper", "start a paper account", { cls: "link" })}: paper money in the public markets, nothing to connect.`}</p></section>`;
   }
   // the figure and today's change come from one read where they can (the holdings read says both), so they never disagree by a tick
   const usd = l.kind === "all" ? (PF.hold && Number.isFinite(Number(PF.hold.totalUsd)) ? Number(PF.hold.totalUsd) : A.liveUsd) : L.reduce((s, v) => s + v.usd, 0);
@@ -709,6 +709,8 @@ async function pfAct(act, d) {
   const l = lensNow();
   switch (act) {
     case "connect": return void (typeof openPicker === "function" && openPicker());
+    // a paper account: the connect form for one, straight from the empty account
+    case "paper": return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account", back: true }));
     case "setup": return void copySetup();
     case "letin": return void pfLetIn(A.requests.find((r) => r.address === d.agent) || (A.asks || []).find((a) => a.agent === d.agent && a.kind === "letIn") || { address: d.agent });
     case "limit": return void pfLimitForm({});
