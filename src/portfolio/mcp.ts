@@ -13,7 +13,12 @@
  * portfolio_approval · portfolio_wait. Writes, signed with this seat's key and inside the limits the owner signed for it (Guard asks
  * the owner on a card, Beast places at once): portfolio_live_order · portfolio_live_batch · portfolio_live_amend · portfolio_live_cancel ·
  * portfolio_live_close · portfolio_live_leverage · portfolio_live_move · portfolio_live_earn · portfolio_pay. Words to the owner, granting
- * nothing: portfolio_report · portfolio_ask. What the seat remembers about the owner, kept by the account across sessions
+ * nothing: portfolio_report · portfolio_ask. A venue portfolio_account marks `paper: true` is a PAPER account — the account's own paper
+ * account (live:paper: nothing to connect, paper money, the public markets — US stocks at Cboe's delayed quotes, coins, perpetuals with
+ * leverage, tokenised shares, Kalshi and Polymarket event contracts — fills by the account's own rule, contracts paid out when their venue
+ * settles; several can be open at once) or
+ * Hyperliquid's testnet (live:hyperliquid-paper): the same tools and the same door, no real money — its orders are rehearsals, held to the
+ * seat's limit and the owner's mode and not to the server's cap, and nothing of it is in the totals. What the seat remembers about the owner, kept by the account across sessions
  * (account/memory.ts): portfolio_memory reads it, portfolio_remember · portfolio_forget keep and forget what it learned, with its key. A layered simulation (tests: the account layer over simulated venues) also has
  * portfolio_transfer, which signs a move between the simulated venues at the door.
  * On the simulated statement (--classic), and on a layered simulation: portfolio_read · portfolio_markets · portfolio_quote ·
@@ -123,7 +128,7 @@ interface DoorAnswer {
 
 /** an order as an agent reads it: what was asked, where it stands, what filled and at what */
 function orderView(o: Record<string, unknown>): Record<string, unknown> {
-  const pick = ["id", "venue", "symbol", "name", "side", "type", "qty", "limitPrice", "status", "filledQty", "avgPrice", "feeUsd", "usd", "note", "at", "card"];
+  const pick = ["id", "venue", "symbol", "name", "side", "type", "qty", "limitPrice", "status", "filledQty", "avgPrice", "feeUsd", "usd", "note", "at", "card", "paper"];
   return Object.fromEntries(pick.filter((k) => o[k] !== undefined && o[k] !== null && o[k] !== "").map((k) => [k === "usd" ? "worthUpToUsd" : k, o[k]]));
 }
 
@@ -351,6 +356,7 @@ if (!REAL) {
 /** what this seat may ask of a venue connected live, in the words the page uses */
 function liveMoney(v: AccountLite["venues"][number], writes: boolean): string {
   if (v.notServed) return `nothing now: ${v.name} does not serve the network the account runs on (its own rule); asked again when a check of this network finds it answering`;
+  if (v.paper) return "none: a paper account's balance is not money, and none of it moves from here";
   if (v.readOnlyBecause) return `read only: ${v.readOnlyBecause}`;
   if (!writes) return "read only: this server moves no real money";
   const c = v.liveCan;
@@ -368,6 +374,7 @@ function liveTrading(v: AccountLite["venues"][number], writes: boolean): string 
   if (v.notServed) return `no orders now: ${v.name} does not serve the network the account runs on (its own rule)${v.notServed.edition ? `; ${v.notServed.edition.name} serves where the user is (a separate company: ask the owner to connect venue "${v.notServed.edition.connector.replace(/^live:(exchange:)?/, "")}")` : ""}`;
   if (!v.trade) return `no orders: ${v.noTradeBecause ?? `${v.via ?? "this connection"} gives no interface for orders here`}`;
   if (v.trade.can === false) return "no orders: this key may not trade (that is set on the key at the venue)";
+  if (v.paper) return `PAPER TRADING, no real money: ${v.name} is the venue's own test environment. It trades ${v.trade.what}: portfolio_live_markets to find a market, portfolio_live_order to place one — inside your trading limit and the owner's mode as anywhere, and not held to the server's cap`;
   if (v.address && !v.proven) return "no orders: a watched address, not proven the user's";
   if (v.closeOnly) return `sells and closes only: ${v.name} lets the network the account runs on close what is held and open nothing (its own rule) — a buy there is refused`;
   return `trades ${v.trade.what}: portfolio_live_markets to find a market, portfolio_live_order to place one (inside your trading limit)`;
@@ -385,7 +392,7 @@ interface AccountLite {
   totalUsd: number;
   inFlightUsd: number;
   /** a venue: on the real account the simulation's runway rows, doors, swap table and ledgers do not travel with it (server.ts realPage) */
-  venues: Array<{ id: string; name: string; frontLine: string; usd: number; cashUsd: number; restricted?: string; via?: string; in?: { text: string; access: string; why?: string }; out?: { text: string; access: string; why?: string }; ledgers?: string[]; live?: true; liveCan?: { withdraw: boolean | "unknown"; ledgers: string[]; transfer: boolean | "unknown"; swap: boolean | "unknown"; receive: boolean; send: "wallet" | "mm" | "account" | false; why?: Partial<Record<"withdraw" | "transfer" | "swap" | "send", string>> }; trade?: { can: boolean | "unknown"; what: string; kinds?: string[] }; noTradeBecause?: string; readOnlyBecause?: string; proven?: string; address?: string; stale?: string; asOf?: string; notServed?: { said: string; edition?: { connector: string; name: string; said: string } }; closeOnly?: { said: string }; holdings?: Array<{ asset: string; amount: number; usd: number; class: string; note?: string; inTransit?: boolean }> }>;
+  venues: Array<{ id: string; name: string; frontLine: string; usd: number; cashUsd: number; restricted?: string; via?: string; in?: { text: string; access: string; why?: string }; out?: { text: string; access: string; why?: string }; ledgers?: string[]; live?: true; /** a PAPER account: no real money (its holdings are not money, its orders are rehearsals) */ paper?: true; liveCan?: { withdraw: boolean | "unknown"; ledgers: string[]; transfer: boolean | "unknown"; swap: boolean | "unknown"; receive: boolean; send: "wallet" | "mm" | "account" | false; why?: Partial<Record<"withdraw" | "transfer" | "swap" | "send", string>> }; trade?: { can: boolean | "unknown"; what: string; kinds?: string[] }; noTradeBecause?: string; readOnlyBecause?: string; proven?: string; address?: string; stale?: string; asOf?: string; notServed?: { said: string; edition?: { connector: string; name: string; said: string } }; closeOnly?: { said: string }; holdings?: Array<{ asset: string; amount: number; usd: number; class: string; note?: string; inTransit?: boolean }> }>;
   orders?: Array<Record<string, unknown>>;
   connectLive?: { options?: Array<{ connector: string; label: string; needs: string; example?: string; venues?: unknown }>; writes?: { on: boolean; capUsd: number } };
   payments: PaymentLite[];
@@ -406,7 +413,7 @@ server.registerTool(
   "portfolio_account",
   {
     description:
-      "The ACCOUNT as this seat sees it — read this before trading, moving or paying anything. It returns this seat's own key (its address, and whether the owner has authorised it: an unauthorised key can do nothing, and the owner authorises it on the Account page), the limits the owner signed for it (`approvals` — `trade`: placing orders, with a per-order maximum, a budget of orders and what is left of it; `venues`: moving money between the user's own venues; `payees`: paying someone else; `earn`: putting money into venues' earn products — portfolio_earn, portfolio_live_earn), every venue connected live (`venues`, `live: true`) with what it holds (as of its last good read, `asOf`; `stale`: the last read did not answer, in its words; `notServed`: it does not serve the network the account runs on now — its own rule, nothing is sent to it until a check of this network finds it answering, so do not try it), what this seat may trade there (`trading`) and what real money may be asked of it (`realMoney`: withdraw, send, transfer, swap, receive — or why nothing, in the venue's words), the orders on the account (yours marked `mine`) and where each stands, your agent wallets (`floats`: what the chains say they hold), recent payments with their status (a payment in flight is in no balance until it lands; a bridge carries its carrier's own estimate, `etaSec`), what is held by asset (`assets`) and the dollars ready to use (`readyCashUsd`), the cards waiting on the owner that are THIS seat's (`waitingForOwner`; other agents' only as a count, `othersWaiting`), the venues the owner could connect from where the user is (`connectable`: each with its `verdict` — `connectable`, or why not in the venue's own words: `not-served` this network, `close-only` (positions there may be closed, none opened), `terms-exclude` where the user is, `setup`, `closed`, `no-answer` — and `edition` where a separate company serves the user's place instead under its own terms (Binance.US for Binance); `waiting` on one the owner has connected already whose venue has not answered this network yet — it is read once it answers; portfolio_venues has every detail. The owner connects them, not you — portfolio_ask can ask; an ask for a venue that refuses this network, offers no way in, or is connected and waiting is refused at the door), the owner's mode (`mode`: `guard` — what you ask for waits for the owner on a card; `open` — inside your limits it goes at once) and `modeRules`: door by door, what Guard and Beast do with an agent's request (rows { door, guard, beast }) and how long a card waits for the owner (`cardMinutes`). A venue the owner connects later appears here; it is in none of your approvals until the owner names it. A seat whose key is not let in asks to be, once, under its client's name. `memory`: how much this seat remembers about the owner, kept by the account (portfolio_memory reads it; read it when a session starts), and the owner's switches for it (`mayLearn`, `ownerAsksFirst`). A read.",
+      "The ACCOUNT as this seat sees it — read this before trading, moving or paying anything. It returns this seat's own key (its address, and whether the owner has authorised it: an unauthorised key can do nothing, and the owner authorises it on the Account page), the limits the owner signed for it (`approvals` — `trade`: placing orders, with a per-order maximum, a budget of orders and what is left of it; `venues`: moving money between the user's own venues; `payees`: paying someone else; `earn`: putting money into venues' earn products — portfolio_earn, portfolio_live_earn), every venue connected live (`venues`, `live: true`; `paper: true` marks a PAPER account — the venue's own test environment, no real money: its holdings are in neither `assets`, `totalUsd` nor `readyCashUsd`, and its orders are rehearsals) with what it holds (as of its last good read, `asOf`; `stale`: the last read did not answer, in its words; `notServed`: it does not serve the network the account runs on now — its own rule, nothing is sent to it until a check of this network finds it answering, so do not try it), what this seat may trade there (`trading`) and what real money may be asked of it (`realMoney`: withdraw, send, transfer, swap, receive — or why nothing, in the venue's words), the orders on the account (yours marked `mine`) and where each stands, your agent wallets (`floats`: what the chains say they hold), recent payments with their status (a payment in flight is in no balance until it lands; a bridge carries its carrier's own estimate, `etaSec`), what is held by asset (`assets`) and the dollars ready to use (`readyCashUsd`), the cards waiting on the owner that are THIS seat's (`waitingForOwner`; other agents' only as a count, `othersWaiting`), the venues the owner could connect from where the user is (`connectable`: each with its `verdict` — `connectable`, or why not in the venue's own words: `not-served` this network, `close-only` (positions there may be closed, none opened), `terms-exclude` where the user is, `setup`, `closed`, `no-answer` — and `edition` where a separate company serves the user's place instead under its own terms (Binance.US for Binance); `waiting` on one the owner has connected already whose venue has not answered this network yet — it is read once it answers; portfolio_venues has every detail. The owner connects them, not you — portfolio_ask can ask; an ask for a venue that refuses this network, offers no way in, or is connected and waiting is refused at the door), the owner's mode (`mode`: `guard` — what you ask for waits for the owner on a card; `open` — inside your limits it goes at once) and `modeRules`: door by door, what Guard and Beast do with an agent's request (rows { door, guard, beast }) and how long a card waits for the owner (`cardMinutes`). A venue the owner connects later appears here; it is in none of your approvals until the owner names it. A seat whose key is not let in asks to be, once, under its client's name. `memory`: how much this seat remembers about the owner, kept by the account (portfolio_memory reads it; read it when a session starts), and the owner's switches for it (`mayLearn`, `ownerAsksFirst`). A read.",
     inputSchema: {},
     annotations: { readOnlyHint: true },
   },
@@ -428,6 +435,8 @@ server.registerTool(
       now: a.now,
       seat: { name: agentOf().name, key: me, authorised: key?.status === "ok", ...(key ? { status: key.status, validUntil: key.validUntil } : { status: "not authorised: the owner lets this key in on the account page (Agents)" }) },
       accountType: a.type,
+      // the owner's paper accounts (live:paper, Hyperliquid's testnet): `venue: "paper"` in any trading tool names the one paper account
+      paperVenues: a.venues.filter((v) => v.paper).map((v) => v.id),
       totalUsd: a.totalUsd,
       inFlightUsd: a.inFlightUsd,
       // the owner's mode as every read wires it (guard · open), and what each mode does with an agent's request, door by door
@@ -442,7 +451,7 @@ server.registerTool(
       }),
       // a venue's numbers are its last good read (`asOf`); `stale`: the last read did not answer, in its words; `notServed`: it does not serve
       // the network the account runs on now — its numbers stand from `asOf`, nothing is sent to it until a check finds it answering
-      venues: a.venues.map((v) => (v.live ? { id: v.id, name: v.name, frontLine: v.frontLine, usd: v.usd, live: true, ...(v.asOf ? { asOf: v.asOf } : {}), ...(v.notServed ? { notServed: true } : v.stale ? { stale: v.stale } : {}), trading: liveTrading(v, !!a.connectLive?.writes?.on), realMoney: liveMoney(v, !!a.connectLive?.writes?.on), holdings: (v.holdings ?? []).filter((h) => h.amount).slice(0, 30).map((h) => ({ asset: h.asset, amount: h.amount, usd: h.usd })), ...(v.address ? { address: v.address, proven: v.proven ?? "watched, not proven" } : {}) } : { id: v.id, name: v.name, frontLine: v.frontLine, usd: v.usd, movableUsd: v.cashUsd, ...(v.restricted ? { restricted: v.restricted } : v.in && v.out ? { moneyIn: `${v.in.text} (${v.in.access})`, moneyOut: `${v.out.text} (${v.out.access})${v.out.why ? ` — ${v.out.why}` : ""}` } : {}), ...(v.ledgers?.length ? { ledgers: v.ledgers } : {}) })),
+      venues: a.venues.map((v) => (v.live ? { id: v.id, name: v.name, frontLine: v.frontLine, usd: v.usd, live: true, ...(v.paper ? { paper: true } : {}), ...(v.asOf ? { asOf: v.asOf } : {}), ...(v.notServed ? { notServed: true } : v.stale ? { stale: v.stale } : {}), trading: liveTrading(v, !!a.connectLive?.writes?.on), realMoney: liveMoney(v, !!a.connectLive?.writes?.on), holdings: (v.holdings ?? []).filter((h) => h.amount).slice(0, 30).map((h) => ({ asset: h.asset, amount: h.amount, usd: h.usd })), ...(v.address ? { address: v.address, proven: v.proven ?? "watched, not proven" } : {}) } : { id: v.id, name: v.name, frontLine: v.frontLine, usd: v.usd, movableUsd: v.cashUsd, ...(v.restricted ? { restricted: v.restricted } : v.in && v.out ? { moneyIn: `${v.in.text} (${v.in.access})`, moneyOut: `${v.out.text} (${v.out.access})${v.out.why ? ` — ${v.out.why}` : ""}` } : {}), ...(v.ledgers?.length ? { ledgers: v.ledgers } : {}) })),
       ...(a.connectLive?.writes?.on ? { realMoney: { on: true, capUsd: a.connectLive.writes.capUsd } } : {}),
       // what is held, by asset across the venues connected live (portfolio_holdings adds the last 24 hours), and the dollars ready to use
       assets: held.rows.slice(0, 30).map((x) => ({ key: x.key, asset: x.asset, class: x.class, amount: x.amount, usd: x.usd, venues: x.venues.map((l) => l.venue), ...(x.venues.some((l) => (l as { stale?: unknown }).stale) ? { fromLastGoodRead: true } : {}) })),
@@ -529,10 +538,12 @@ server.registerTool(
   {
     description:
       "What a venue the owner connected live trades: markets matching `query` (a few letters: BTC, AAPL, FED), or a few to start from when it is empty — or ONE market by its exact `symbol`, with a fresh price (bid/ask/last), the smallest order, the steps of size and price, the order types it takes and whether it takes orders now (`open`). A stock also carries `session` { open, opensAt, closesAt }: the venue's trading session, from its own clock or the market calendar it sends orders by — in session now, and when it next opens or closes (ISO) — and outside it the venue holds a stock order for the open (its `types` and `note` say what it takes meanwhile). Every market is priced in dollars. Read this before portfolio_live_order: the symbol to send is the one this returns. A read.",
-    inputSchema: { venue: z.string().describe("the live venue's id, e.g. okx · alpaca · kalshi · polymarket-us (portfolio_account lists them)"), query: z.string().optional().describe("a few letters to search for"), symbol: z.string().optional().describe("one exact market symbol, for its fresh price and rules") },
+    inputSchema: { venue: z.string().describe("the live venue's id, e.g. okx · alpaca · kalshi · polymarket-us (portfolio_account lists them); `paper` names the owner's one paper account"), query: z.string().optional().describe("a few letters to search for"), symbol: z.string().optional().describe("one exact market symbol, for its fresh price and rules") },
     annotations: { readOnlyHint: true },
   },
-  async ({ venue, query, symbol }) => {
+  async ({ venue: venueAsked, query, symbol }) => {
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
     const r = symbol ? await call("GET", `/api/account/market?${new URLSearchParams({ venue, symbol })}`) : await call("GET", `/api/account/markets?${new URLSearchParams({ venue, q: query ?? "" })}`);
     const b = r.body as { ok?: boolean; refusal?: { code: string; message: string }; market?: unknown; markets?: unknown };
     if (b.refusal) return text({ ok: false, code: b.refusal.code, message: b.refusal.message }, true);
@@ -544,7 +555,7 @@ server.registerTool(
   "portfolio_live_compare",
   {
     description:
-      "Where is it cheapest to buy, or best to sell? The same coin or stock (`base`: BTC, ETH, SOL, AAPL …) at every venue the owner connected live that trades it, ranked by the price an order would take there: the ask for a buy, the bid for a sell. Each row has the venue, its own symbol for it (send that to portfolio_live_order), the price, bid/ask and spread, whether it is open and whether this account can trade there now, and how much worse than the best it is. `usd` checks the size fits each venue's smallest order. Fees are not guessed: a venue's own note says so when it knows. A venue that does not answer in four seconds is listed under `missing`; a venue that does not serve the network the Account runs on is not compared, and one that said so during this read is named in `notServedHere` (a state, not an error: do not retry it). A price far from the others is marked not ready: it may be another token under the same name. `asset` (stock | crypto) says which is meant where a name is both a coin and a stock. A read.",
+      "Where is it cheapest to buy, or best to sell? The same coin or stock (`base`: BTC, ETH, SOL, AAPL …) at every venue the owner connected live that trades it, ranked by the price an order would take there: the ask for a buy, the bid for a sell. Each row has the venue, its own symbol for it (send that to portfolio_live_order), the price, bid/ask and spread, whether it is open and whether this account can trade there now, and how much worse than the best it is. `usd` checks the size fits each venue's smallest order. Fees are not guessed: a venue's own note says so when it knows. A venue that does not answer in four seconds is listed under `missing`; a venue that does not serve the network the Account runs on is not compared, and one that said so during this read is named in `notServedHere` (a state, not an error: do not retry it). A price far from the others is marked not ready: it may be another token under the same name. A paper account is never compared: its prices are its test environment's. `asset` (stock | crypto) says which is meant where a name is both a coin and a stock. A read.",
     inputSchema: { base: z.string().describe("what to compare: BTC, ETH, AAPL"), side: z.enum(["buy", "sell"]), usd: z.number().positive().optional().describe("the size in dollars, to check it fits each venue's smallest order"), asset: z.enum(["stock", "crypto"]).optional().describe("which is meant where a name is both a coin and a stock") },
     annotations: { readOnlyHint: true },
   },
@@ -558,7 +569,7 @@ server.registerTool(
 
 /** a live order's fields, as portfolio_live_order, portfolio_live_batch and portfolio_live_preview take them */
 const liveOrderFields = {
-  venue: z.string().describe("the live venue's id"),
+  venue: z.string().describe("the live venue's id; `paper` names the owner's one paper account (portfolio_account's paperVenues), to rehearse the same order with no real money"),
   symbol: z.string().describe("the market, as portfolio_live_markets returns it"),
   side: z.enum(["buy", "sell"]),
   orderType: z.enum(["market", "limit", "stop", "stop_limit"]).optional().describe("default market"),
@@ -571,6 +582,20 @@ const liveOrderFields = {
   reduceOnly: z.boolean().optional().describe("an order that can only shrink a position, where the market takes it"),
 };
 type LiveOrderLeg = { venue: string; symbol: string; side: "buy" | "sell"; orderType?: "market" | "limit" | "stop" | "stop_limit" | undefined; qty?: number | undefined; usd?: number | undefined; limitPrice?: number | undefined; stopPrice?: number | undefined; tif?: "gtc" | "ioc" | "fok" | "day" | undefined; postOnly?: boolean | undefined; reduceOnly?: boolean | undefined };
+
+/** `paper` as a venue id, in any trading tool: the owner's one paper account (live:paper, the account's own book), so a seat can rehearse
+ * without knowing its id — the same order, at paper. Several open: name one; none: ask the owner for one (portfolio_ask kind venue, venue
+ * paper). Any other id is the venue's own */
+async function venueOf(venue: string): Promise<string | { error: string }> {
+  if (venue.trim().toLowerCase() !== "paper") return venue;
+  const r = await call("GET", "/api/account");
+  if (r.status >= 400) return { error: "the account could not be read, so `paper` names no venue just now" };
+  const papers = ((r.body as AccountLite).venues ?? []).filter((v) => v.paper);
+  if (papers.length === 1) return papers[0]!.id;
+  if (!papers.length) return { error: "no paper account is open on the account: ask the owner for one (portfolio_ask kind venue, venue paper), or name a venue" };
+  return { error: `several paper accounts are open — name one: ${papers.map((v) => v.id).join(", ")}` };
+}
+const noVenue = (e: { error: string }) => text({ ok: false, code: "E_WALLET_UNKNOWN_VENUE", error: e.error }, true);
 
 /** the agentLiveOrder this seat signs for an order, or what is wrong with it as asked */
 function liveOrderAction(o: LiveOrderLeg): Extract<Unsigned, { type: "agentLiveOrder" }> | string {
@@ -587,12 +612,14 @@ server.registerTool(
   "portfolio_live_order",
   {
     description:
-      "Place a REAL order at a venue the owner connected live, signed with this seat's key: buy or sell `symbol` (exactly as portfolio_live_markets returns it), a size in the market's own units (`qty`: coins, shares, contracts) OR in dollars (`usd`, rounded down to the market's step): a market order, a limit order at `limitPrice`, a stop order (a market order once the price reaches `stopPrice`) or a stop_limit (a limit at `limitPrice` once it does) — with a time in force (`tif`), `postOnly` or `reduceOnly` only where the market lists them (portfolio_live_markets says which). It must be inside the trading limit the owner signed for this seat (which venues, how much an order, how much in all, until when — portfolio_account shows it) and no bigger than the server's cap. What happens next is the owner's mode. Guard (the default): the order becomes a card the owner signs, showing the size, the price and what it is worth — the answer is {pending: true, card}; poll portfolio_approval, and once approved its `outcome` is the order. Beast: inside the limit it is placed at once and the answer is the order (status open, partial, filled …). Trading never moves money out of the venue. A refusal ({ok: false, code}) is not to be retried as is: E_MANDATE_* (your limit), E_ACCOUNT_LIMIT (the server's cap), E_VENUE_ORDER_INVALID (below the smallest order, off a step), E_VENUE_MARKET_CLOSED, E_ACCOUNT_UNPRICED, E_VENUE_* (the venue's own answer: funds, permissions, region), E_WALLET_LIVE_WRITES_OFF (the server is read-only). A refusal whose `detail` says `unsure: true` or `placed: unknown` is not a no: the venue did not answer whether it took the order, and it may have. Look it up (portfolio_account's orders, the venue's open orders) and never send it again until it is found or shown not to be there.",
+      "Place a REAL order at a venue the owner connected live, signed with this seat's key: buy or sell `symbol` (exactly as portfolio_live_markets returns it), a size in the market's own units (`qty`: coins, shares, contracts) OR in dollars (`usd`, rounded down to the market's step): a market order, a limit order at `limitPrice`, a stop order (a market order once the price reaches `stopPrice`) or a stop_limit (a limit at `limitPrice` once it does) — with a time in force (`tif`), `postOnly` or `reduceOnly` only where the market lists them (portfolio_live_markets says which). It must be inside the trading limit the owner signed for this seat (which venues, how much an order, how much in all, until when — portfolio_account shows it) and no bigger than the server's cap. What happens next is the owner's mode. Guard (the default): the order becomes a card the owner signs, showing the size, the price and what it is worth — the answer is {pending: true, card}; poll portfolio_approval, and once approved its `outcome` is the order. Beast: inside the limit it is placed at once and the answer is the order (status open, partial, filled …). Trading never moves money out of the venue. A refusal ({ok: false, code}) is not to be retried as is: E_MANDATE_* (your limit), E_ACCOUNT_LIMIT (the server's cap), E_VENUE_ORDER_INVALID (below the smallest order, off a step), E_VENUE_MARKET_CLOSED, E_ACCOUNT_UNPRICED, E_VENUE_* (the venue's own answer: funds, permissions, region), E_WALLET_LIVE_WRITES_OFF (the server is read-only). A refusal whose `detail` says `unsure: true` or `placed: unknown` is not a no: the venue did not answer whether it took the order, and it may have. Look it up (portfolio_account's orders, the venue's open orders) and never send it again until it is found or shown not to be there. At a venue portfolio_account marks `paper: true` (Hyperliquid's testnet) the order is a rehearsal: real at that venue and worth no real money, held to your trading limit and the owner's mode all the same, and not to the server's cap; the order it answers with says `paper: true`.",
     inputSchema: liveOrderFields,
   },
   async (leg) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic): use portfolio_order" }, true);
-    const action = liveOrderAction(leg);
+    const venue = await venueOf(leg.venue);
+    if (typeof venue !== "string") return noVenue(venue);
+    const action = liveOrderAction({ ...leg, venue });
     return typeof action === "string" ? text({ ok: false, error: action }, true) : answer(await sign(action));
   },
 );
@@ -604,8 +631,10 @@ server.registerTool(
       "Change an order THIS seat placed, in place, at a venue that changes orders (portfolio_account shows your open orders; a venue that cannot answers E_VENUE_RAIL_CLOSED — cancel and place again there): its new size (`qty`), limit (`limitPrice`) or stop (`stopPrice`); what you leave out stays. Made smaller or cheaper, it simply goes. Made worth MORE, the difference is judged like a new order: Beast inside your trading limit at once, Guard on a card the owner signs ({pending: true, card}). The answer is the order as it stands after.",
     inputSchema: { venue: z.string(), order: z.string().describe("its id on the account, e.g. ord-0007"), qty: z.number().positive().optional(), limitPrice: z.number().positive().optional(), stopPrice: z.number().positive().optional() },
   },
-  async ({ venue, order, qty, limitPrice, stopPrice }) => {
+  async ({ venue: venueAsked, order, qty, limitPrice, stopPrice }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
     return answer(await sign({ type: "agentLiveAmend", venue, order, qty: qty !== undefined ? String(qty) : "", limitPrice: limitPrice !== undefined ? String(limitPrice) : "", stopPrice: stopPrice !== undefined ? String(stopPrice) : "" }));
   },
 );
@@ -613,11 +642,13 @@ server.registerTool(
 server.registerTool(
   "portfolio_live_positions",
   {
-    description: "What is held at a venue connected live, as the venue lists it: perpetual positions (side, size, entry and mark price, unrealised profit, leverage, liquidation price), shares, event contracts. With no `venue`: at every venue that lists positions (each with its `venue`), and the venues that could not be read in `missing`, in their own words. Read this before portfolio_live_close. A read.",
+    description: "What is held at a venue connected live, as the venue lists it: perpetual positions (side, size, entry and mark price, unrealised profit, leverage, liquidation price), shares, event contracts. With no `venue`: at every venue that lists positions (each with its `venue`), and the venues that could not be read in `missing`, in their own words. A position at a paper account carries `paper: true` (no real money in it). Read this before portfolio_live_close. A read.",
     inputSchema: { venue: z.string().optional().describe("the live venue's id; absent: every venue that lists positions") },
     annotations: { readOnlyHint: true },
   },
-  async ({ venue }) => {
+  async ({ venue: venueAsked }) => {
+    const venue = venueAsked === undefined ? undefined : await venueOf(venueAsked);
+    if (venue !== undefined && typeof venue !== "string") return noVenue(venue);
     const r = await call("GET", `/api/account/positions${venue ? `?${new URLSearchParams({ venue })}` : ""}`);
     const b = r.body as { refusal?: { code: string; message: string }; positions?: unknown; missing?: unknown };
     if (b.refusal) return text({ ok: false, code: b.refusal.code, message: b.refusal.message }, true);
@@ -632,8 +663,10 @@ server.registerTool(
       "Close a position at a venue connected live — all of it, or `qty` of it — where your trading limit lets you trade. A close that only sells a holding (spot, shares, event contracts) is a sell order: it counts against your trading limit's per-order line, budget and window like one — Guard a card, Beast at once, refused over the limit. A derivative position closed reduce-only counts nothing against the budget (it only shrinks what is held), but the position may be the owner's own, so it is still answered like an order: Guard a card the owner answers (wait on it with portfolio_wait); Beast at once inside the per-order line, a card above it. The venue's own close where it has one; otherwise a reduce-only market order, and only in a market that takes reduce-only (so it can never open a position the other way). The answer is the closing order.",
     inputSchema: { venue: z.string(), symbol: z.string().describe("the position's market, as portfolio_live_positions lists it"), qty: z.number().positive().optional().describe("how much of it; all of it when left out") },
   },
-  async ({ venue, symbol, qty }) => {
+  async ({ venue: venueAsked, symbol, qty }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
     return answer(await sign({ type: "agentLiveClose", venue, symbol, qty: qty !== undefined ? String(qty) : "" }));
   },
 );
@@ -644,8 +677,10 @@ server.registerTool(
     description: "Set a perpetual's leverage (and its margin mode: cross or isolated) at a venue that lets it be set, where your trading limit lets you trade — up to the most the owner lets agents use (1x unless the owner signed more; E_ACCOUNT_LIMIT says the cap). Where a position is open in the market (anyone's), Guard answers with a card the owner approves; Beast sets it at once when the position is inside your per-order line and asks above it; with no position there it is set at once. A leverage change is good for ten minutes after it is signed.",
     inputSchema: { venue: z.string(), symbol: z.string().describe("a perpetual's market"), leverage: z.number().int().min(1).max(200), marginMode: z.enum(["cross", "isolated"]).optional() },
   },
-  async ({ venue, symbol, leverage, marginMode }) => {
+  async ({ venue: venueAsked, symbol, leverage, marginMode }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
     return answer(await sign({ type: "agentLiveLeverage", venue, symbol, leverage: String(leverage), marginMode: marginMode ?? "" }));
   },
 );
@@ -656,8 +691,10 @@ server.registerTool(
     description: "Cancel an order this seat placed (its id on the account, `ord-0001`, from portfolio_live_order or portfolio_account). Never a card, in either mode: taking an order off the book moves nothing. An order the owner or another agent placed is not this seat's to cancel (E_ACCOUNT_ORDER_UNKNOWN). The answer is the order as it stands: canceled, with whatever had filled.",
     inputSchema: { venue: z.string().describe("the live venue's id"), order: z.string().describe("the order's id on the account, e.g. ord-0001") },
   },
-  async ({ venue, order }) => {
+  async ({ venue: venueAsked, order }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
     return answer(await sign({ type: "agentLiveCancel", venue, order }));
   },
 );
@@ -841,7 +878,11 @@ server.registerTool(
     inputSchema: { venue: z.string().max(60).describe("the venue's id, as an `at` entry of portfolio_explore names it"), symbol: z.string().max(160).describe("the market there: BTC/USDT, KXFED-25DEC-T4.00:YES, <slug>:<outcome>"), interval: z.enum(["5m", "1h", "1d"]).optional().describe("the bars (default 1h)") },
     annotations: { readOnlyHint: true },
   },
-  async ({ venue, symbol, interval }) => read(`/api/account/candles?${new URLSearchParams({ venue, symbol, interval: interval ?? "1h" })}`),
+  async ({ venue: venueAsked, symbol, interval }) => {
+    const venue = await venueOf(venueAsked);
+    if (typeof venue !== "string") return noVenue(venue);
+    return read(`/api/account/candles?${new URLSearchParams({ venue, symbol, interval: interval ?? "1h" })}`);
+  },
 );
 
 server.registerTool(
@@ -858,7 +899,7 @@ server.registerTool(
   "portfolio_venues",
   {
     description:
-      "WHERE THIS USER CAN CONNECT, detected automatically from the network the Account runs on — read it before asking the owner to connect anything, and to know what is open to them. Every venue the account knows (exchanges by their own id, brokers, wallets, prediction markets, Hyperliquid, OUSG), each with a `verdict`: `connectable`; `not-served` (the venue refuses this network: its own rule, in its words in `said`); `close-only` (the venue lets this network close positions and open none — Polymarket's rule for the United States among other places: connected, what is held can be sold, and a buy is refused in its words); `terms-exclude` (the venue answers here, but its own published terms exclude where the user is — `terms` has the venue's words, link and date; shown, never enforced: the venue's own sign-up checks residency, and the owner decides); `setup` (something on this machine first, e.g. mm signed in); `closed`; `no-answer` (did not answer just now; connecting asks again). Also: `connected` (already on the account — read, or `waiting`: the owner has connected it and the venue has not answered this network yet; `waiting` says why and when it is asked again; it is read, and open to agents the owner lets in, once it answers — do not ask the owner for it), `needs` (how the owner connects it: key-file, sign-in, address, cli), `group`, `readOnly` for venues read by address, and `edition` beside a venue that cannot be used from here: its edition for the user's place — a separate company, with its own account and API keys, offered only when it answers this network and its own published terms serve the place (ask the owner for that one instead). The place itself is never returned or kept. Asked automatically every 30 minutes; `fresh: true` asks every venue again now. Nothing here grants anything: connecting is the owner's signed act.",
+      "WHERE THIS USER CAN CONNECT, detected automatically from the network the Account runs on — read it before asking the owner to connect anything, and to know what is open to them. Every venue the account knows (exchanges by their own id, brokers, wallets, prediction markets, Hyperliquid — and its testnet as `live:hyperliquid-paper`, a PAPER account with no real money — OUSG; and `live:paper`, a PAPER ACCOUNT the account keeps itself: nothing to connect (`needs: none`), paper money in every market the public sources list — US stocks (Cboe's delayed quotes, filled 09:45–16:15 New York), coins, perpetuals with leverage (isolated margin, hourly funding, liquidation by the stated rule), tokenised shares, Kalshi and Polymarket event contracts paid out when their venue settles — always connectable — the owner opens one on the Account page, or on your ask: portfolio_ask kind venue, venue `paper`), each with a `verdict`: `connectable`; `not-served` (the venue refuses this network: its own rule, in its words in `said`); `close-only` (the venue lets this network close positions and open none — Polymarket's rule for the United States among other places: connected, what is held can be sold, and a buy is refused in its words); `terms-exclude` (the venue answers here, but its own published terms exclude where the user is — `terms` has the venue's words, link and date; shown, never enforced: the venue's own sign-up checks residency, and the owner decides); `setup` (something on this machine first, e.g. mm signed in); `closed`; `no-answer` (did not answer just now; connecting asks again). Also: `connected` (already on the account — read, or `waiting`: the owner has connected it and the venue has not answered this network yet; `waiting` says why and when it is asked again; it is read, and open to agents the owner lets in, once it answers — do not ask the owner for it), `needs` (how the owner connects it: key-file, sign-in, address, cli), `group`, `readOnly` for venues read by address, and `edition` beside a venue that cannot be used from here: its edition for the user's place — a separate company, with its own account and API keys, offered only when it answers this network and its own published terms serve the place (ask the owner for that one instead). The place itself is never returned or kept. Asked automatically every 30 minutes; `fresh: true` asks every venue again now. Nothing here grants anything: connecting is the owner's signed act.",
     inputSchema: { fresh: z.boolean().optional().describe("ask every venue again now instead of the answer kept (up to 30 minutes old)") },
     annotations: { readOnlyHint: true },
   },
@@ -990,8 +1031,13 @@ server.registerTool(
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
     if ((order === undefined) === (move === undefined)) return text({ ok: false, error: "preview one thing: an order or a move" }, true);
     let draft: Record<string, unknown>;
+    // the venue the order is judged at: `paper` resolved to the paper account's own id
+    let orderVenue = "";
     if (order) {
-      const o = liveOrderAction(order);
+      const venue = await venueOf(order.venue);
+      if (typeof venue !== "string") return noVenue(venue);
+      orderVenue = venue;
+      const o = liveOrderAction({ ...order, venue });
       if (typeof o === "string") return text({ ok: false, error: o }, true);
       const { type: _t, ...fields } = o;
       draft = { type: "liveOrder", ...fields };
@@ -1000,7 +1046,7 @@ server.registerTool(
       draft = { type: "liveMove", ...fields };
     }
     const [p, acct] = await Promise.all([call("POST", "/api/account/prepare", { draft }), call("GET", "/api/account")]);
-    const pb = p.body as { refusal?: { code: string; message: string; detail?: unknown }; error?: string; quote?: { words: string; feeUsd: number; receiveUsd: number; order?: { name: string; price: number; notionalUsd: number; maxUsd: number; worstPrice?: number; note?: string; capUsd: number }; live?: { toAddress: string; network: string; capUsd: number } } };
+    const pb = p.body as { refusal?: { code: string; message: string; detail?: unknown }; error?: string; quote?: { words: string; feeUsd: number; receiveUsd: number; order?: { name: string; price: number; notionalUsd: number; maxUsd: number; worstPrice?: number; note?: string; capUsd: number; /** at a PAPER account: no real money, and the server's cap does not apply */ paper?: true }; live?: { toAddress: string; network: string; capUsd: number } } };
     if (pb.refusal) return text({ ok: false, code: pb.refusal.code, message: pb.refusal.message, ...(pb.refusal.detail !== undefined ? { detail: pb.refusal.detail } : {}), placed: "nothing" }, true);
     if (p.status >= 400 || !pb.quote) return text({ ok: false, error: pb.error ?? `HTTP ${p.status}`, placed: "nothing" }, true);
     const a = acct.body as AccountLite;
@@ -1010,16 +1056,16 @@ server.registerTool(
     const q = pb.quote;
     const worth = order ? (q.order?.maxUsd ?? 0) : move!.amount;
     const capUsd = order ? q.order?.capUsd : q.live?.capUsd;
-    const named = order ? [order.venue] : [move!.from, liveMoveAction(move!).to].filter((x, i, all) => x && all.indexOf(x) === i);
+    const named = order ? [orderVenue] : [move!.from, liveMoveAction(move!).to].filter((x, i, all) => x && all.indexOf(x) === i);
     const limit = a.spend.find((x) => x.agent === me && x.scope === scope && !x.expired);
     const leftUsd = limit ? Number(Math.max(0, limit.budgetUsd - limit.spentUsd - limit.reservedUsd).toFixed(6)) : 0;
-    const why = key?.status !== "ok" ? (key ? `this seat's key is ${key.status}` : "this seat's key is not let in: the owner lets it in on the account page (portfolio_ask kind letIn)") : !limit ? `the owner has given this seat no ${scope === "trade" ? "trading" : "money-moving"} limit (portfolio_ask kind limit)` : named.find((v) => !limit.allow.includes(v)) ? `your limit does not name ${named.find((v) => !limit.allow.includes(v))}` : worth > limit.perPaymentUsd ? `worth up to $${worth}, more than the $${limit.perPaymentUsd} one ${order ? "order" : "movement"} may be under your limit` : worth > leftUsd ? `worth up to $${worth}, more than the $${leftUsd} left of your limit` : capUsd !== undefined && capUsd > 0 && worth > capUsd ? `worth up to $${worth}, more than the server's cap of $${capUsd}` : undefined;
+    const why = key?.status !== "ok" ? (key ? `this seat's key is ${key.status}` : "this seat's key is not let in: the owner lets it in on the account page (portfolio_ask kind letIn)") : !limit ? `the owner has given this seat no ${scope === "trade" ? "trading" : "money-moving"} limit (portfolio_ask kind limit)` : named.find((v) => !limit.allow.includes(v)) ? `your limit does not name ${named.find((v) => !limit.allow.includes(v))}` : worth > limit.perPaymentUsd ? `worth up to $${worth}, more than the $${limit.perPaymentUsd} one ${order ? "order" : "movement"} may be under your limit` : worth > leftUsd ? `worth up to $${worth}, more than the $${leftUsd} left of your limit` : capUsd !== undefined && capUsd > 0 && !q.order?.paper && worth > capUsd ? `worth up to $${worth}, more than the server's cap of $${capUsd}` : undefined;
     const beast = a.mode === "open";
     return text({
       ok: true,
       placed: "nothing",
       what: q.words,
-      ...(q.order ? { market: q.order.name, price: q.order.price, worthNowUsd: q.order.notionalUsd, worthUpToUsd: q.order.maxUsd, ...(q.order.worstPrice !== undefined ? { worstPrice: q.order.worstPrice } : {}), ...(q.order.note ? { note: q.order.note } : {}) } : { feeUsd: q.feeUsd, arrivesUsd: q.receiveUsd, ...(q.live ? { toAddress: q.live.toAddress, network: q.live.network } : {}) }),
+      ...(q.order ? { market: q.order.name, price: q.order.price, worthNowUsd: q.order.notionalUsd, worthUpToUsd: q.order.maxUsd, ...(q.order.worstPrice !== undefined ? { worstPrice: q.order.worstPrice } : {}), ...(q.order.note ? { note: q.order.note } : {}), ...(q.order.paper ? { paper: true } : {}) } : { feeUsd: q.feeUsd, arrivesUsd: q.receiveUsd, ...(q.live ? { toAddress: q.live.toAddress, network: q.live.network } : {}) }),
       limit: limit ? { scope, allow: limit.allow, perOrderUsd: limit.perPaymentUsd, leftUsd, validUntil: limit.validUntil } : null,
       // the mode as every read wires it: guard is Guard (a card), open Beast (at once, inside the limit)
       mode: beast ? "open" : "guard",
@@ -1040,7 +1086,12 @@ server.registerTool(
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
     const out: Array<Record<string, unknown>> = [];
     for (const [i, leg] of legs.entries()) {
-      const action = liveOrderAction(leg);
+      const venue = await venueOf(leg.venue);
+      if (typeof venue !== "string") {
+        out.push({ leg: i + 1, ok: false, error: venue.error });
+        continue;
+      }
+      const action = liveOrderAction({ ...leg, venue });
       if (typeof action === "string") {
         out.push({ leg: i + 1, ok: false, error: action });
         continue;

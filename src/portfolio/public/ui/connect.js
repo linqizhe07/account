@@ -42,14 +42,15 @@ let CONNECT_TIMER = 0;
 
 /* every kind of account that can be connected, as tiles: the owner picks what it is, not how it is reached */
 const TILES = [
+  ["Paper", [["paper", "", "Paper account"]]],
   ["Exchanges", [["exchange", "okx", "OKX"], ["exchange", "kraken", "Kraken"], ["exchange", "coinbase", "Coinbase"], ["exchange", "bybit", "Bybit"], ["exchange", "binance", "Binance"], ["exchange", "", "Another exchange"]]],
   ["Brokers", [["robinhood", "", "Robinhood"], ["alpaca", "", "Alpaca"], ["robinhood-crypto", "", "Robinhood Crypto"]]],
   ["Wallets", [["wallet", "", "Browser wallet"], ["metamask", "", "MetaMask Agent Wallet"], ["wallet", "watch", "Watch an address"]]],
-  ["Markets and tokens", [["kalshi", "", "Kalshi"], ["polymarket-us", "", "Polymarket US"], ["polymarket-trade", "", "Polymarket"], ["polymarket", "", "Polymarket · by address"], ["hyperliquid-trade", "", "Hyperliquid"], ["hyperliquid", "", "Hyperliquid · by address"], ["ondo", "", "Ondo · OUSG"]]],
+  ["Markets and tokens", [["kalshi", "", "Kalshi"], ["polymarket-us", "", "Polymarket US"], ["polymarket-trade", "", "Polymarket"], ["polymarket", "", "Polymarket · by address"], ["hyperliquid-trade", "", "Hyperliquid"], ["hyperliquid-paper", "", "Hyperliquid · paper"], ["hyperliquid", "", "Hyperliquid · by address"], ["ondo", "", "Ondo · OUSG"]]],
 ];
-const HOW = { "key-file": "API key", "sign-in": "Sign in", address: "Address", cli: "mm on this machine" };
+const HOW = { "key-file": "API key", "sign-in": "Sign in", address: "Address", cli: "mm on this machine", none: "Nothing to connect" };
 /* the page at each venue where an API key is made (the venues' own account pages) */
-const API_PAGES = { okx: "https://www.okx.com/account/my-api", binance: "https://www.binance.com/en/my/settings/api-management", binanceus: "https://www.binance.us/settings/api-management", coinbase: "https://portal.cdp.coinbase.com/api-keys/secret", bybit: "https://www.bybit.com/app/user/api-management", kraken: "https://pro.kraken.com/app/settings/api", kucoin: "https://www.kucoin.com/account/api", bitget: "https://www.bitget.com/account/newapi", alpaca: "https://app.alpaca.markets/dashboard/overview", kalshi: "https://kalshi.com/account/profile", "polymarket-us": "https://polymarket.us/developer", "robinhood-crypto": "https://robinhood.com/account/crypto", "hyperliquid-trade": "https://app.hyperliquid.xyz/API" };
+const API_PAGES = { okx: "https://www.okx.com/account/my-api", binance: "https://www.binance.com/en/my/settings/api-management", binanceus: "https://www.binance.us/settings/api-management", coinbase: "https://portal.cdp.coinbase.com/api-keys/secret", bybit: "https://www.bybit.com/app/user/api-management", kraken: "https://pro.kraken.com/app/settings/api", kucoin: "https://www.kucoin.com/account/api", bitget: "https://www.bitget.com/account/newapi", alpaca: "https://app.alpaca.markets/dashboard/overview", kalshi: "https://kalshi.com/account/profile", "polymarket-us": "https://polymarket.us/developer", "robinhood-crypto": "https://robinhood.com/account/crypto", "hyperliquid-trade": "https://app.hyperliquid.xyz/API", "hyperliquid-paper": "https://app.hyperliquid-testnet.xyz/API" };
 /* what to tick when making the key, in each venue's own words (read 2026-10-05): trading on, withdrawals off */
 const KEY_HOW = {
   okx: "Tick Read and Trade (and Transfer, to move between Funding and Trading). Leave Withdraw off. Add this machine's IP: a trading key with no IP expires after 14 days unused. The passphrase you set goes in \"password\".",
@@ -68,12 +69,15 @@ const KEY_HOW = {
   "robinhood-crypto": "Add key with your Ed25519 public key, and enable reading accounts, holdings, orders, products and quotes, and placing crypto orders.",
   "polymarket-trade": "Put in the private key of the wallet that signs for your Polymarket account. If the money sits in a Polymarket wallet, add \"funderAddress\" (the address in your profile menu) and \"signatureType\": 1 (Proxy), 2 (Safe) or 3 (Deposit Wallet); leave both empty for a plain wallet. Polymarket checks your location before anything else.",
   "hyperliquid-trade": "More → API: name an API wallet, Generate, copy its private key, then Authorize API Wallet with your account's own wallet (valid up to 180 days). An API wallet signs trades for your account and can never withdraw. \"walletAddress\" is your account's own address; \"privateKey\" is the API wallet's, never your account's own key. Hyperliquid's terms (§1.6) are checked for where you are before anything else.",
+  "hyperliquid-paper": "PAPER TRADING on Hyperliquid's testnet: no real money. On app.hyperliquid-testnet.xyz, More → API: name an API wallet, Generate, copy its private key, then Authorize API Wallet with your account's own wallet (an approval made on mainnet does not count on the testnet). \"walletAddress\" is your account's own address; \"privateKey\" is the API wallet's, never your account's own key. Mock USDC comes from the faucet, app.hyperliquid-testnet.xyz/drip (1,000 mock USDC, to an address that has deposited on mainnet). Nothing here is counted in your net worth, and the server's cap does not apply. Hyperliquid's terms (§1.6) are checked for where you are, as for the real account.",
 };
 const keyHow = (venue) => KEY_HOW[venue] || "Turn on reading and trading; leave withdrawals off. Bind this machine's IP if the exchange offers it.";
 const optionOf = (kind) => ((A.connectLive || {}).options || []).find((o) => o.kind === kind);
 /* an address-based connection numbers itself after the first of its kind */
 const BY_ADDRESS = new Set(["wallet", "polymarket", "hyperliquid", "ondo"]);
-const isOn = (kind, extra) => (kind === "wallet" ? false : A.venues.some((v) => v.id === (extra || kind) || (BY_ADDRESS.has(kind) && v.id.startsWith(`${kind}-`))));
+/* the kinds that number themselves on the account: the address-based ones, and paper accounts (paper-1, paper-momentum …) */
+const NUMBERED = new Set([...BY_ADDRESS, "paper"]);
+const isOn = (kind, extra) => (kind === "wallet" ? false : A.venues.some((v) => v.id === (extra || kind) || (NUMBERED.has(kind) && v.id.startsWith(`${kind}-`))));
 /* the connection a tile stands for that the owner signed while its venue refused this network, or did not answer: on the account, waiting,
    read nowhere (connectLive.waiting); the account asks the venue again when a check of this network finds it answering. One the venue
    answered and refused itself (the key, the account: `stopped`) is in the same list, asked again only by the owner's new signature. One
@@ -230,7 +234,7 @@ function keyHowFor(v) {
 }
 
 /* what each key file holds, until the server says exactly (an exchange's own list comes from the exchange library) */
-const FIELDS = { exchange: ["apiKey", "secret"], alpaca: ["keyId", "secret"], kalshi: ["keyId", "privateKeyFile"], "polymarket-us": ["keyId", "secretKey"], "robinhood-crypto": ["apiKey", "privateKey"], "polymarket-trade": ["privateKey", "funderAddress", "signatureType"], "hyperliquid-trade": ["walletAddress", "privateKey"] };
+const FIELDS = { exchange: ["apiKey", "secret"], alpaca: ["keyId", "secret"], kalshi: ["keyId", "privateKeyFile"], "polymarket-us": ["keyId", "secretKey"], "robinhood-crypto": ["apiKey", "privateKey"], "polymarket-trade": ["privateKey", "funderAddress", "signatureType"], "hyperliquid-trade": ["walletAddress", "privateKey"], "hyperliquid-paper": ["walletAddress", "privateKey"] };
 /* a shell word, quoted */
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 /* the one command that makes a key file: the folder, an empty template if there is no file yet (an existing one is never overwritten),
@@ -299,6 +303,14 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
     const ref = (form.elements.ref ? form.elements.ref.value : "").trim();
     if (o.kind === "exchange") return label && slug(label) !== slug(exchangeName()) ? slug(label) : exchangeId();
     if (o.needs === "address") return A.venues.some((v) => v.id === o.kind) ? `${o.kind}-${ref.slice(2, 8).toLowerCase()}` : o.kind;
+    if (o.kind === "paper") {
+      // a paper account's own id: its name, or a number; never one already on the account (that would continue that book)
+      const ids = new Set(A.venues.map((v) => v.id));
+      const base = label && slug(label) ? `paper-${slug(label)}` : "";
+      let id = base || "paper-1";
+      for (let n = 2; ids.has(id); n++) id = `${base || "paper"}-${n}`;
+      return id;
+    }
     return o.kind;
   };
   /* what this form's venue answered from here before anything was made (live/reach.ts): something wanted on this machine first, or no way
@@ -487,6 +499,10 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
       };
       poll();
     });
+  } else if (o.needs === "none") {
+    // a paper account: a name and the paper money it starts with; nothing is asked of any venue
+    $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><div class="row">${field("Name", '<input name="label" maxlength="40" autocomplete="off" placeholder="Momentum" />')}${field("Starting paper money", '<input name="ref" maxlength="14" inputmode="decimal" autocomplete="off" placeholder="10000" />')}</div>`;
+    form.elements.label.value = shownAs || "";
   } else {
     $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><input type="hidden" name="ref" value="" /><input type="hidden" name="label" value="" />`;
   }
@@ -499,6 +515,7 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
     const ref = (form.elements.ref.value || "").trim();
     const label = (form.elements.label.value || "").trim();
     if (o.needs === "address" && !/^0x[0-9a-fA-F]{40}$/.test(ref)) return say("An address is 0x and 40 hex digits.", "no");
+    if (o.needs === "none" && ref && !/^\$?\d{1,9}(\.\d{1,2})?$/.test(ref.replace(/,/g, ""))) return say("Starting paper money is a number of dollars, like 25000; leave it empty for $10,000.", "no");
     $("modal-go").disabled = true;
     say("Asking the venue…", "wait");
     const r = await Owner.act({ type: "connectVenue", venue: venueId(), connector: o.kind === "exchange" ? `live:exchange:${exchangeId()}` : `live:${o.kind}`, label, credentialRef: ref });

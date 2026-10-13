@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isRefusal } from "../../src/core/errors.ts";
+import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import type { ExchangeClient, OpenExchange } from "../../src/portfolio/live/exchange.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { KALSHI_SERIES } from "../../src/portfolio/live/categories.ts";
 import { PRE_IPO_ISSUERS, PRE_IPO_NAMES } from "../../src/portfolio/live/preipo.ts";
-import { exchangeTickers, fixedHosts, holdBackMs, hyperliquidPublic, kalshiPublic, KEEP_MS, LIST_MS, polymarketPublic, PRE_IPO_VENUES, preIpoPublic, publicSources, stockTokensPublic, type Listing } from "../../src/portfolio/live/public-markets.ts";
+import { exchangeTickers, fixedHosts, holdBackMs, hyperliquidPublic, kalshiPublic, KEEP_MS, LIST_MS, polymarketPublic, polymarketUsPublic, PRE_IPO_VENUES, preIpoPublic, publicSources, stockTokensPublic, type Listing } from "../../src/portfolio/live/public-markets.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS } from "../../src/portfolio/live/robinhood.ts";
 import type { Candle } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply } from "../../src/portfolio/live/types.ts";
@@ -411,8 +411,10 @@ describe("Polymarket, keyless, through Gamma", () => {
     // the day's bitcoin market ends two hours from now; Brazil's end date has passed and the Fed's is weeks away
     expect(((await pm.events!({ closingWithinMs: 24 * HOUR, limit: 10 })) as Listing[]).map((m) => m.symbol)).toEqual(["bitcoin-up-or-down-on-october-5:Up", "bitcoin-up-or-down-on-october-5:Down"]);
     expect(((await pm.events!({ category: "politics", limit: 10 })) as Listing[]).map((m) => m.symbol)).toEqual(["lula-2026:Yes", "lula-2026:No"]);
-    // the busiest and the IPO tag, each once; the same events in both answers are one event each
-    expect(net.sent).toHaveLength(2);
+    // the busiest and the IPO tag, each once; the same events in both answers are one event each; a search also asks Gamma's own search
+    // (nothing answers it here, so the kept events answer alone)
+    expect(net.sent.filter((s) => !s.url.includes("/public-search")).map((s) => s.url)).toHaveLength(2);
+    expect(net.sent.filter((s) => s.url.includes("/public-search")).map((s) => query(s.url))).toEqual([{ q: "bolsonaro", events_status: "active", limit_per_type: "10" }, { q: "falcons", events_status: "active", limit_per_type: "10" }]);
     // a market Gamma says is closed is not shown, and an event with none open is not an event
     const closed = network([["gamma-api.polymarket.com/events?", json([GAMMA_EVENT({ id: "5", slug: "done", title: "Done?", volume24hr: 1e9, tags: tagged("Politics") }, [GAMMA_MARKET({ conditionId: `0x${"10".repeat(32)}`, slug: "done", closed: true, volume24hr: 1e9 })])])]]);
     expect(await polymarketPublic({ http: closed.http, clock: () => NOW }).listings({ limit: 5 })).toEqual([]);
@@ -448,7 +450,8 @@ describe("Polymarket, keyless, through Gamma", () => {
     expect(got.find((m) => m.symbol === "anthropic-ipo-by-m:Yes")).toMatchObject({ price: 0.83, bid: 0.82, ask: 0.84, volumeUsd24h: 27_272, eventVolumeUsd24h: 40_703.8, event: { id: "549019", title: "Anthropic IPO by __?" }, tags: expect.arrayContaining(["IPO", "IPOs", "Anthropic"]) });
     // the fourth and fifth IPO questions are read, not shown — until searched for
     expect(((await pm.listings({ q: "openai", limit: 10 })) as Listing[]).map((m) => m.symbol)).toEqual(["openai-ipo-valuation-m:Yes", "openai-ipo-valuation-m:No"]);
-    expect(net.sent).toHaveLength(2);
+    // the two reads, and the search's own request (unanswered here)
+    expect(net.sent.filter((s) => !s.url.includes("/public-search"))).toHaveLength(2);
     // the IPO read refusing: the ten stand, the IPO rows are simply not there this time
     const half = network([
       ["tag_slug=ipo", { status: 429, body: undefined, text: "too many requests" }],
@@ -771,11 +774,78 @@ describe("Pre-IPO perpetuals, keyless, at six venues", () => {
   });
 });
 
+describe("a search at Polymarket reaches its whole list, and an event market's settlement is its venue's word", () => {
+  it("a search asks Gamma's own search beside the events kept: every market of an event it finds, read as the busiest are; the kept events answer alone when the search refuses", async () => {
+    const net = network([
+      ["gamma-api.polymarket.com/events?", json([BRAZIL])],
+      ["gamma-api.polymarket.com/public-search?", (url) => (query(url).q === "fed" ? json({ events: [FED, SPORTS], pagination: { hasMore: false, totalResults: 2 } }) : { status: 429, body: undefined, text: "slow down" })],
+    ]);
+    const pm = polymarketPublic({ http: net.http, clock: () => NOW });
+    const fed = (await pm.listings({ q: "fed", limit: 10 })) as Listing[];
+    expect(fed.map((m) => m.symbol)).toEqual(["fed-decreases-50:Yes", "fed-decreases-50:No"]);
+    expect(fed[0]).toMatchObject({ category: "Fed Rates", event: { id: "1", title: "Fed Decision in October?", market: "50+ bps decrease" } });
+    expect(query(net.sent.find((s) => s.url.includes("public-search"))!.url)).toEqual({ q: "fed", events_status: "active", limit_per_type: "10" });
+    // the search refusing: the kept events still answer the words
+    expect(((await pm.listings({ q: "lula", limit: 10 })) as Listing[]).map((m) => m.symbol)).toEqual(["lula-2026:Yes", "lula-2026:No"]);
+    expect(pm.notes!({ q: "fed" })).toEqual(["Polymarket: its own search, which reaches every market it lists."]);
+  });
+
+  it("Polymarket: Gamma's market by slug — closed and resolved by its oracle pays each outcome its outcomePrices figure; closed and not resolved is closed; open is open; the words are checked before asking", async () => {
+    const net = network([
+      ["/markets/slug/lula-2026", json(GAMMA_MARKET({ slug: "lula-2026", closed: true, umaResolutionStatus: "resolved", outcomes: '["Yes","No"]', outcomePrices: '["1","0"]', closedTime: "2026-10-06 04:16:59+00" }))],
+      ["/markets/slug/waiting", json(GAMMA_MARKET({ slug: "waiting", closed: true, umaResolutionStatus: "proposed", outcomes: '["Yes","No"]', outcomePrices: '["0.98","0.02"]' }))],
+      ["/markets/slug/open-one", json(GAMMA_MARKET({ slug: "open-one", outcomes: '["Yes","No"]' }))],
+    ]);
+    const pm = polymarketPublic({ http: net.http, clock: () => NOW });
+    expect(await pm.settlement!("lula-2026:Yes")).toEqual({ settled: true, payout: 1, at: "2026-10-06T04:16:59.000Z" });
+    expect(await pm.settlement!("lula-2026:No")).toEqual({ settled: true, payout: 0, at: "2026-10-06T04:16:59.000Z" });
+    expect(await pm.settlement!("waiting:Yes")).toEqual({ settled: false, closed: true });
+    expect(await pm.settlement!("open-one:No")).toEqual({ settled: false });
+    expect((await pm.settlement!("lula-2026:Maybe") as Refusal).code).toBe("E_VENUE_REJECTED");
+    expect((await pm.settlement!("not a slug") as Refusal).code).toBe("E_ACCOUNT_BAD_ACTION");
+    // the market by slug is kept: one read for the two outcomes
+    expect(net.sent.filter((s) => s.url.includes("/markets/slug/lula-2026"))).toHaveLength(1);
+  });
+
+  it("Kalshi: GET /markets/{ticker} — a result (yes | no) pays $1 to that side, whatever the status word; a status past active without a result is closed", async () => {
+    const net = network([
+      ["/trade-api/v2/markets/KXFEDDECISION-26DEC-H25", json({ market: { ticker: "KXFEDDECISION-26DEC-H25", status: "finalized", result: "no", settlement_ts: "2026-12-09T19:05:00Z", last_price_dollars: "0.0100" } })],
+      ["/trade-api/v2/markets/KXOPEN-1", json({ market: { ticker: "KXOPEN-1", status: "active", result: "" } })],
+      ["/trade-api/v2/markets/KXCLOSED-1", json({ market: { ticker: "KXCLOSED-1", status: "closed" } })],
+      ["/trade-api/v2/markets/KXNONE-1", json({ market: {} })],
+    ]);
+    const k = kalshiPublic({ http: net.http, clock: () => NOW });
+    expect(await k.settlement!("KXFEDDECISION-26DEC-H25:NO")).toEqual({ settled: true, payout: 1, at: "2026-12-09T19:05:00Z" });
+    expect(await k.settlement!("kxfeddecision-26dec-h25:yes")).toEqual({ settled: true, payout: 0, at: "2026-12-09T19:05:00Z" });
+    expect(await k.settlement!("KXOPEN-1:YES")).toEqual({ settled: false });
+    expect(await k.settlement!("KXCLOSED-1:YES")).toEqual({ settled: false, closed: true });
+    expect((await k.settlement!("KXNONE-1:YES") as Refusal).code).toBe("E_VENUE_REJECTED");
+    expect((await k.settlement!("KXNONE-1") as Refusal).code).toBe("E_ACCOUNT_BAD_ACTION");
+  });
+
+  it("Polymarket US: GET /v1/markets/{slug}/settlement — 1 when YES won (so NO pays 0), 0 when NO did; HTTP 404 until the market settles", async () => {
+    const net = network([
+      ["/v1/markets/fed-cut/settlement", json({ slug: "fed-cut", settlement: 1 })],
+      ["/v1/markets/no-cut/settlement", json({ slug: "no-cut", settlement: 0 })],
+      ["/v1/markets/open-one/settlement", { status: 404, body: { code: 5, message: "Settlement not found for market open-one" }, text: '{"code":5,"message":"Settlement not found for market open-one"}' }],
+    ]);
+    const us = polymarketUsPublic({ http: net.http, clock: () => NOW });
+    expect(await us.settlement!("fed-cut:YES")).toEqual({ settled: true, payout: 1 });
+    expect(await us.settlement!("fed-cut:NO")).toEqual({ settled: true, payout: 0 });
+    expect(await us.settlement!("no-cut:YES")).toEqual({ settled: true, payout: 0 });
+    expect(await us.settlement!("open-one:YES")).toEqual({ settled: false });
+    expect((await us.settlement!("Open One") as Refusal).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(net.sent.every((s) => new URL(s.url).host === "gateway.polymarket.us")).toBe(true);
+  });
+});
+
 describe("every public source", () => {
-  it("is the five exchanges (Bybit by default, after Binance), Kalshi, Polymarket, Polymarket US, Hyperliquid, the Stock Tokens, the eight exchanges' pre-IPO perpetuals and Hyperliquid's HIP-3 ones, unless other exchanges are named", () => {
+  it("is the five exchanges (Bybit by default, after Binance), Kalshi, Polymarket, Polymarket US, Hyperliquid, US stocks at Cboe, the Stock Tokens, xStocks at Gate, Ondo Stocks, the eight exchanges' pre-IPO perpetuals and Hyperliquid's HIP-3 ones, unless other exchanges are named", () => {
     const preipo = ["okx-preipo", "gate-preipo", "krakenfutures-preipo", "deribit-preipo", "kucoinfutures-preipo", "mexc-preipo", "binance-preipo", "bybit-preipo", "hyperliquid-preipo"];
-    expect(publicSources().map((s) => s.id)).toEqual(["kraken", "coinbase", "okx", "binance", "bybit", "kalshi", "polymarket", "polymarket-us", "hyperliquid", "robinhood-stock-tokens", ...preipo]);
-    expect(publicSources({ exchanges: ["kraken"] }).map((s) => s.id)).toEqual(["kraken", "kalshi", "polymarket", "polymarket-us", "hyperliquid", "robinhood-stock-tokens", ...preipo]);
+    // the stocks before the Stock Tokens: a paper account's "NVDA" is the share
+    const rest = ["kalshi", "polymarket", "polymarket-us", "hyperliquid", "cboe", "robinhood-stock-tokens", "xstocks", "ondo-stocks", ...preipo];
+    expect(publicSources().map((s) => s.id)).toEqual(["kraken", "coinbase", "okx", "binance", "bybit", ...rest]);
+    expect(publicSources({ exchanges: ["kraken"] }).map((s) => s.id)).toEqual(["kraken", ...rest]);
     expect(PRE_IPO_VENUES.map((v) => v.id)).toEqual(["okx", "gate", "krakenfutures", "deribit", "kucoinfutures", "mexc", "binance", "bybit"]);
   });
 });

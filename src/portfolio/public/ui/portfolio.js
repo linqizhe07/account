@@ -35,6 +35,8 @@ const pfLastRead = (w) => !!w && w.lastUsd !== undefined && w.lastUsd !== null &
 /** the venues the lens shows: every account, one venue, or the wallets of one agent */
 function pfVenueIn(l = lensNow()) {
   if (l.kind === "all") return () => true;
+  if (l.kind === "real") return (id) => !paperVenue(id);
+  if (l.kind === "paper") return (id) => paperVenue(id);
   if (l.kind === "venue") return (id) => id === l.id;
   const mine = new Set((A.subAccounts || []).filter((s) => String(s.agent).toLowerCase() === l.id.toLowerCase()).map((s) => pfWalletVenue(s.name)));
   return (id) => mine.has(id);
@@ -45,6 +47,8 @@ const pfCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {
 function pfAboutIn(agent, venue, l = lensNow()) {
   if (l.kind === "all") return true;
   if (l.kind === "agent") return !!agent && String(agent).toLowerCase() === l.id.toLowerCase();
+  if (l.kind === "real") return !paperVenue(venue);
+  if (l.kind === "paper") return paperVenue(venue);
   return venue === l.id;
 }
 
@@ -231,6 +235,8 @@ function pfPut(el, part, html) {
 function pfDraw(el, owner) {
   const l = lensNow();
   const venueIn = pfVenueIn(l);
+  // under Paper the holdings are the paper accounts' (their own read, summed as paper money); under anything else the real ones
+  PF.hold = l.kind === "paper" ? PF.holdPaper || null : PF.holdReal || null;
   const rows = PF.hold && PF.hold.rows ? pfRowsIn(PF.hold.rows, venueIn) : null;
   pfPut(el, "steps", pfStepsHtml(owner, el.firstElementChild.dataset.pf === "fresh"));
   pfPut(el, "worth", pfWorthHtml(l, venueIn, rows));
@@ -266,8 +272,13 @@ function pfAgainNow() {
 /* the reads behind the pane, each kept a little while (the page reads again every 20 seconds) */
 function pfRead() {
   api("/api/account/holdings?cost=1", { ttl: 8_000 }).then((b) => {
-    if (b && b.ok) [PF.hold, PF.holdErr] = [b, ""];
+    if (b && b.ok) [PF.holdReal, PF.holdErr] = [b, ""];
     else PF.holdErr = refusalOf(b) || "The account did not answer.";
+    pfAgain();
+  });
+  // the paper accounts' holdings, for the Paper lens: read only while one is open
+  if (connected().some((v) => v.paper)) api("/api/account/holdings?cost=1&paper=1", { ttl: 8_000 }).then((b) => {
+    if (b && b.ok) PF.holdPaper = b;
     pfAgain();
   });
   pfReadHistory();
@@ -303,7 +314,9 @@ function pfStepsHtml(owner, fresh) {
   const trading = connected().some(canTrade);
   const asking = A.requests.length;
   const how = {
-    connect: ["An exchange, a broker, a wallet or a prediction market, read through its own interface. Nothing moves without your signature.", A.connectLive ? pfBtn("connect", "Connect an account", { cls: "btn btn-primary btn-sm", off: !owner, title: owner ? "" : PF_LOOK_ONLY }) : ""],
+    // no account to connect yet: a paper account is the first step too — nothing to connect, paper money in the public markets, the same
+    // doors, agents and limits as a real one, and the Real money / Paper switch in the top bar when both are on the account
+    connect: ["An exchange, a broker, a wallet or a prediction market, read through its own interface. Nothing moves without your signature. No account yet? Start a paper account: nothing to connect, paper money in the public markets, the same doors and limits.", A.connectLive ? `${pfBtn("connect", "Connect an account", { cls: "btn btn-primary btn-sm", off: !owner, title: owner ? "" : PF_LOOK_ONLY })}${pfBtn("paper", "Start a paper account", { cls: "btn btn-sm", off: !owner, title: owner ? "Paper money, nothing to connect" : PF_LOOK_ONLY })}` : ""],
     agent: [asking ? `${plural(asking, "agent")} asking to be let in.` : `Copy the command and run it where your agent runs; then let it in here.${A.agentSetup && A.agentSetup.command ? "" : " Run it in this account's folder."}`, `${pfBtn("setup", `${icon("copy", "sm")}Copy setup command`, { cls: "btn btn-sm" })}${asking ? pfBtn("letin", "Let it in…", { cls: "btn btn-primary btn-sm", data: { agent: A.requests[0].address }, off: !owner }) : ""}`],
     limit: [trading ? "It acts only inside a limit you sign: where, how much an order, how much in all. In Guard each order still waits for you." : "Connect an account that trades first: a limit names where an agent may trade.", pfBtn("limit", "Give a limit…", { cls: "btn btn-primary btn-sm", off: !owner || !trading || !steps[1].done })],
   };
@@ -318,17 +331,27 @@ function pfWorthHtml(l, venueIn, rows) {
     // nothing read yet; a connection may be on the account all the same, waiting for its venue to answer this network (one the venue
     // refused is under Venues, with Connect again)
     const w = pfWaiting().filter((x) => !x.stopped).length;
-    return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : "Nothing is connected yet. Connect an account and what it holds shows here."}</p></section>`;
+    return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : `Nothing is connected yet. Connect an account and what it holds shows here — or ${pfBtn("paper", "start a paper account", { cls: "link" })}: paper money in the public markets, nothing to connect.`}</p></section>`;
   }
   // the figure and today's change come from one read where they can (the holdings read says both), so they never disagree by a tick
   const usd = l.kind === "all" ? (PF.hold && Number.isFinite(Number(PF.hold.totalUsd)) ? Number(PF.hold.totalUsd) : A.liveUsd) : L.reduce((s, v) => s + v.usd, 0);
-  const label = l.kind === "all" ? "Net worth" : l.kind === "venue" ? `Net worth · ${l.name}` : `${l.name} · agent wallets`;
+  const label = l.kind === "all" ? "Net worth" : l.kind === "real" ? "Net worth · real money" : l.kind === "paper" ? `Paper · ${plural(L.length, "account")}` : l.kind === "venue" ? `Net worth · ${l.name}` : `${l.name} · agent wallets`;
   const day = !PF.hold ? null : l.kind === "all" ? PF.hold.change24h : pfDayChange(rows || []);
   const h = l.kind === "all" ? PF.hist.get(PF.range) : null;
   const today = l.kind !== "all" || PF.range === "1d";
   const notes = pfWorthNotes(l, today ? day : null, today ? null : h);
   const info = notes.length ? `<details class="more pf-info"><summary aria-label="About these figures" title="${esc(notes.join(" "))}">ⓘ</summary><ul class="pf-info-l">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></details>` : "";
   const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)}</div><div class="num">${money(usd)}</div><div class="pf-today">${today ? pfTodayLine(day) : pfRangeLine(h)}${info}</div>${PF.holdErr && !PF.hold ? `<div class="msg no">${esc(PF.holdErr)}</div>` : ""}</div>${l.kind === "all" ? pfSeg("range", PF_RANGES, PF.range, "Range") : ""}</div>`;
+  // paper money: what the paper accounts are worth now against what they started with, and nothing of it in the net worth
+  if (l.kind === "paper") {
+    // what was made or lost: only over the paper accounts that said what they started with (the account's own; a venue's test
+    // environment says nothing of it), each against its own start
+    const started = L.filter((v) => num(v.paperStartUsd) > 0);
+    const start = started.reduce((s, v) => s + num(v.paperStartUsd), 0);
+    const now = started.reduce((s, v) => s + num(v.usd), 0);
+    const who = started.length === L.length ? (L.length === 1 ? "it" : "they") : started.map((v) => v.name).join(", ");
+    return `${head}<p class="dim small pf-note">Paper money, not counted in your net worth.${start > 0 ? ` ${chg(now - start, "$")} since ${who} started with ${money(start)}.` : ""} ${pfBtn("all", "Show all accounts", { cls: "link" })}</p>`;
+  }
   if (l.kind !== "all") return `${head}<p class="dim small pf-note">The curve covers all accounts together. ${pfBtn("all", "Show all accounts", { cls: "link" })}</p>`;
   return `${head}${pfCurveHtml(h)}`;
 }
@@ -564,9 +587,11 @@ function pfChips(v) {
   // they are; what it can do from here waits until it answers again
   if (h.away) {
     const ed = v.notServed && v.notServed.edition;
-    return [`<span class="chip pf-health away" title="${esc(h.text)}"><span aria-hidden="true">·</span>${esc(word)}</span>`, ed ? `<span class="chip" title="${esc(ed.said)}">${esc(ed.name)} serves where you are</span>` : ""].filter(Boolean).join(" ");
+    return [v.paper ? '<span class="chip paper" title="A paper account: the venue\'s own test environment, no real money.">Paper</span>' : "", `<span class="chip pf-health away" title="${esc(h.text)}"><span aria-hidden="true">·</span>${esc(word)}</span>`, ed ? `<span class="chip" title="${esc(ed.said)}">${esc(ed.name)} serves where you are</span>` : ""].filter(Boolean).join(" ");
   }
   return [
+    // a paper account: the venue's own test environment, no real money — said first, so no number on the row reads as money
+    v.paper ? '<span class="chip paper" title="A paper account: the venue\'s own test environment, no real money. Its balance is not in your net worth, and its orders are rehearsals that the server\'s cap does not bound.">Paper</span>' : "",
     `<span class="chip pf-health${h.bad ? " bad" : ""}" title="${esc(h.text)}"><span aria-hidden="true">${h.bad ? "✗" : h.read ? "✓" : "·"}</span>${esc(word)}</span>`,
     // a venue that lets this network only close what is held: that state in a word, its own words on hover; it sells, it buys nothing
     v.closeOnly ? `<span class="chip" title="${esc(v.closeOnly.said || "")}">Close only here</span>` : "",
@@ -625,7 +650,7 @@ function renderVenues({ el, owner }) {
   const waits = W ? `waiting for ${W === 1 ? "its venue" : "their venues"}` : "";
   const refused = X ? `${X} not connected` : "";
   const sub = L.length
-    ? `${plural(L.length, "account")} · ${money(L.reduce((t, v) => t + num(v.usd), 0))}${agents ? ` · where ${agents === 1 ? "your agent" : "your agents"} may act is each one's switch` : ""}${W ? ` · ${W} ${waits}` : ""}${X ? ` · ${refused}` : ""}`
+    ? `${plural(L.length, "account")} · ${money(L.filter((v) => !v.paper).reduce((t, v) => t + num(v.usd), 0))}${L.some((v) => v.paper) ? ` (${plural(L.filter((v) => v.paper).length, "paper account")} not counted)` : ""}${agents ? ` · where ${agents === 1 ? "your agent" : "your agents"} may act is each one's switch` : ""}${W ? ` · ${W} ${waits}` : ""}${X ? ` · ${refused}` : ""}`
     : held.length
       ? `${[W ? `${plural(W, "connection")} ${waits}: nothing is read from ${W === 1 ? "it until it answers" : "them until they answer"} this network` : "", X ? `${refused}: ${X === 1 ? "connect it again, or disconnect it" : "connect them again, or disconnect them"}` : ""].filter(Boolean).join(" · ")}.`
       : "Connect an exchange, a broker, a wallet or a prediction market: each is read through its own interface, and nothing moves without your signature.";
@@ -707,6 +732,8 @@ async function pfAct(act, d) {
   const l = lensNow();
   switch (act) {
     case "connect": return void (typeof openPicker === "function" && openPicker());
+    // a paper account: the connect form for one, straight from the empty account
+    case "paper": return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account", back: true }));
     case "setup": return void copySetup();
     case "letin": return void pfLetIn(A.requests.find((r) => r.address === d.agent) || (A.asks || []).find((a) => a.agent === d.agent && a.kind === "letIn") || { address: d.agent });
     case "limit": return void pfLimitForm({});

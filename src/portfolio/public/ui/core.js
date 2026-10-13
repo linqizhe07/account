@@ -933,16 +933,27 @@ function routed() {
   for (const fn of ROUTED) fn(ROUTE.tab, ROUTE.params, moved);
 }
 
-/* the lens: what the top bar narrows the panes to — every account (""), one venue ("venue:<id>") or one agent ("agent:<0x…>") */
+/* the lens: what the top bar narrows the panes to — every account (""), real money only ("real": every account but the paper ones),
+   paper only ("paper": the paper accounts), one venue ("venue:<id>") or one agent ("agent:<0x…>"). Real and Paper are the switch between
+   rehearsing and trading for real: the same markets, the same ticket, the other accounts */
 function lensNow() {
+  if (!A) return { kind: "all", id: "", name: "All accounts" };
+  if (view.lens === "real") return { kind: "real", id: "", name: "Real money" };
+  if (view.lens === "paper") return { kind: "paper", id: "", name: "Paper" };
   const m = /^(venue|agent):(.+)$/.exec(view.lens || "");
-  if (!m || !A) return { kind: "all", id: "", name: "All accounts" };
+  if (!m) return { kind: "all", id: "", name: "All accounts" };
   return { kind: m[1], id: m[2], name: m[1] === "venue" ? nameOf(m[2]) : keyName(m[2]) };
 }
-/* a row is in the lens: every row under "All accounts"; under a venue, that venue's; under an agent, what that agent did */
+/* a venue on the account is a paper account (its own book, or a venue's test environment): no real money in it */
+const paperVenue = (id) => !!(A && (A.venues || []).some((v) => v.id === id && v.paper));
+/* a row is in the lens: every row under "All accounts"; under Real money, a row at no paper account; under Paper, a row at a paper account;
+   under a venue, that venue's; under an agent, what that agent did */
 const inLens = (venue, agent) => {
   const l = lensNow();
-  return l.kind === "all" || (l.kind === "venue" ? venue === l.id : !!agent && String(agent).toLowerCase() === l.id.toLowerCase());
+  if (l.kind === "all") return true;
+  if (l.kind === "real") return !paperVenue(venue);
+  if (l.kind === "paper") return paperVenue(venue);
+  return l.kind === "venue" ? venue === l.id : !!agent && String(agent).toLowerCase() === l.id.toLowerCase();
 };
 
 // ---- what an account can do -------------------------------------------------------------

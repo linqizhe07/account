@@ -53,6 +53,9 @@ export interface LiveVenue {
   trader?: LiveTrader | undefined;
   /** why no order is placed here, when none is */
   noTradeBecause?: string | undefined;
+  /** a PAPER account (live/types.ts LiveSource.paper): no real money there, so the server's real-money cap does not bound an order at it;
+   * the owner's signature, an agent's limit and the mode bound it as at any venue */
+  paper?: true | undefined;
   via: string;
 }
 

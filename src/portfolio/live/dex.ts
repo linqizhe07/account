@@ -216,6 +216,12 @@ const KNOWN: Known[] = [
   ).flatMap(([symbol, underlying, address]): Known[] => (["Ethereum", "BNB Chain"] as const).map((chain) => ({ issuer: "xstocks", chain, symbol, underlying, address: getAddress(address) }))),
 ];
 
+/** the best-known tokenised shares an issuer stands behind (KNOWN), for the keyless RWA listings (public-rwa.ts): read-only */
+export type IssuedToken = Readonly<Known>;
+export const knownIssued = (): readonly IssuedToken[] => KNOWN;
+/** each issuer's name and its own words on whom its tokens are not for, as the keyless listings carry them */
+export const ISSUER_TERMS: Readonly<Record<"ondo" | "xstocks", { kind: string; issuer: string; terms: string }>> = { ondo: { kind: ISSUERS.ondo.kind, issuer: ISSUERS.ondo.issuer, terms: ISSUERS.ondo.terms }, xstocks: { kind: ISSUERS.xstocks.kind, issuer: ISSUERS.xstocks.issuer, terms: ISSUERS.xstocks.terms } };
+
 /** The fund tokens shown with their issuer's rule and never swapped, wherever LI.FI's list has them or not: OUSG on Ethereum and Polygon
  * (docs.ondo.finance/addresses), BUIDL on Polygon (LI.FI verifies it) and on Ethereum; each contract's own name, symbol and decimals were
  * read on 2026-10-06 */
@@ -297,6 +303,8 @@ const same = (a: unknown, b: string): boolean => typeof a === "string" && a.toLo
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const usd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const chainId = (c: ChainName): number => CHAINS[c].chain.id;
+/** a chain's id, as LI.FI and the wallet name it (Ethereum 1, BNB Chain 56) */
+export const chainIdOf = (c: ChainName): number => chainId(c);
 /** the dollar a chain's markets are priced in and paid with: USDC (Circle's, chain.ts), and USDG on Robinhood Chain */
 const dollarOn = (c: ChainName): { symbol: string; address: Hex } => (c === "Robinhood Chain" ? { symbol: "USDG", address: USDG_ROBINHOOD.address } : { symbol: "USDC", address: STABLECOINS.find((t) => t.chain === c && t.asset === "USDC")!.address });
 const DOLLARS = new Set(DEX_CHAINS.map((c) => dollarOn(c).symbol));

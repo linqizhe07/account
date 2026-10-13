@@ -165,3 +165,21 @@ describe("change24h: holdings × each market's own 24-hour change", () => {
     expect(d).toEqual({ usd: 0, coveredUsd: 0, ofUsd: 2000, missing: ["equity:AAPL"] });
   });
 });
+
+describe("byAsset: the paper accounts on their own (the page's Paper lens)", () => {
+  const mixed = (): HoldingsVenue[] => [
+    { id: "ex", name: "An exchange", holdings: [{ asset: "USDT", amount: 5000, usd: 5000, class: "stable", inTransit: false }, { asset: "BTC", amount: 0.1, usd: 6000, class: "crypto", inTransit: false }], trade: { can: true, what: "spot" } },
+    { id: "paper-1", name: "Momentum · paper", paper: true, holdings: [{ asset: "USD", amount: 24000, usd: 24000, class: "cash", inTransit: false }, { asset: "AAPL", amount: 2, usd: 690, class: "equity", inTransit: false }, { asset: "BTC", amount: 0.01, usd: 600, class: "crypto", inTransit: false }], trade: { can: true, what: "paper" } },
+    { id: "paper-2", name: "Swing · paper", paper: true, holdings: [{ asset: "USD", amount: 9000, usd: 9000, class: "cash", inTransit: false }], trade: { can: true, what: "paper" } },
+  ];
+  it("leaves the paper accounts out by default, and with `paper` takes them alone: their cash is the ready cash, their rows the rows, nothing of the real venue", () => {
+    const real = byAsset(mixed(), { writes: true });
+    expect(real.rows.map((r) => [r.key, r.usd, r.venues.map((v) => v.venue)])).toEqual([["crypto:BTC", 6000, ["ex"]], ["stable:USDT", 5000, ["ex"]]]);
+    expect(real.money.readyUsd).toBe(5000);
+    const paper = byAsset(mixed(), { writes: true, paper: true });
+    expect(paper.rows.map((r) => [r.key, r.usd, r.venues.map((v) => v.venue)])).toEqual([["cash:USD", 33000, ["paper-1", "paper-2"]], ["equity:AAPL", 690, ["paper-1"]], ["crypto:BTC", 600, ["paper-1"]]]);
+    expect(paper.money.readyUsd).toBe(33000);
+    // no paper account open: nothing at all, not the real venue
+    expect(byAsset(mixed().filter((v) => !v.paper), { writes: true, paper: true }).rows).toEqual([]);
+  });
+});
