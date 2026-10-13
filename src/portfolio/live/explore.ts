@@ -96,6 +96,9 @@ export interface ExploreVenue {
   /** the venue's own place rule for this network, judged just now (compare.ts PlaceRule): `closed` — its lines cannot trade here, and say
    * why in its words; `close-only` — they can (a sell closes), and say that only closing is taken */
   place?: PlaceRule | undefined;
+  /** a PAPER account (LiveSource.paper): its markets are places to rehearse, not prices — its lines come after every real venue's, set no
+   * row's price, change or volume, and make a row of their own only where no real venue lists the thing (then the row says `paper`) */
+  paper?: true | undefined;
 }
 
 export interface ExploreSources {
@@ -140,6 +143,8 @@ export interface ExploreAt {
   symbol: string;
   /** the owner has connected this venue */
   connected: boolean;
+  /** a PAPER account's line (ExploreVenue.paper): an order there is a rehearsal, no real money; its price is its test environment's */
+  paper?: true | undefined;
   /** a connected venue that lets the network the account runs on only close what is held (its own rule): no buy is offered there */
   closeOnly?: true | undefined;
   /** may the connected key or sign-in trade there: what the venue said (`unknown`: its first refusal will say); a public listing: false */
@@ -229,6 +234,8 @@ export interface ExploreItem {
   /** the tabs it is in: `all` first, then its own */
   tabs: TabId[];
   at: ExploreAt[];
+  /** every line of the row is a paper account's: its price is that test environment's, and it carries no volume */
+  paper?: true | undefined;
 }
 
 export type Mover = ExploreItem & { changePct24h: number; volumeUsd24h: number };
@@ -266,6 +273,8 @@ interface Reader {
   id: string;
   name: string;
   connected: boolean;
+  /** a paper account (ExploreVenue.paper) */
+  paper?: true | undefined;
   canTrade: boolean | "unknown";
   whyNot?: string | undefined;
   /** the venue's close-only rule for this network, in its words: it trades, but only what closes */
@@ -340,6 +349,7 @@ function fromVenue(v: ExploreVenue): Reader {
     id: v.id,
     name: v.name,
     connected: true,
+    ...(v.paper ? { paper: true as const } : {}),
     canTrade,
     whyNot,
     ...(v.place?.rule === "close-only" ? { closeOnly: v.place.words } : {}),
@@ -589,6 +599,7 @@ function atOf(r: Reader, m: Market, symbol = m.symbol, price = priceOf(m), open 
     venueName: lineName(r, m),
     symbol,
     connected: r.connected,
+    ...(r.paper ? { paper: true as const } : {}),
     canTrade: r.connected ? (ordersTaken ? r.canTrade : false) : false,
     public: !r.connected,
     // a connected venue that lets this network only close what is held: sells and closes go there, a buy does not (the page offers no buy)
@@ -609,16 +620,24 @@ function atOf(r: Reader, m: Market, symbol = m.symbol, price = priceOf(m), open 
 const TAB_OF: Record<Exclude<ExploreKind, "event">, TabId> = { coin: "crypto", stock: "stocks", rwa: "rwas", perp: "perps" };
 const displayLabel = (label: string): string => (/^yes$/i.test(label) ? "Yes" : /^no$/i.test(label) ? "No" : label);
 
-/** one row from a thing's markets, venue by venue (connected venues first); markets set aside by the median guard go to `aside` */
+/** one row from a thing's markets, venue by venue (connected venues first, a paper account's after every real one); markets set aside by
+ * the median guard go to `aside`. A paper account's line is a place to rehearse, not a price: the row's price, change, volume, funding and
+ * session come from the real venues; only a row no real venue lists takes its price from the paper line, says so (`paper`) and carries no
+ * volume */
 function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside: ExploreMissing[], now: number): ExploreItem | undefined {
-  const all = [...venues.values()].sort((a, b) => Number(b[0]!.r.connected) - Number(a[0]!.r.connected));
+  const rank = (l: Got[]): number => (l[0]!.r.connected ? (l[0]!.r.paper ? 1 : 2) : 0);
+  const all = [...venues.values()].sort((a, b) => rank(b) - rank(a));
   if (kind === "event") return eventRow(key, all, now);
-  // a public listing of an exchange a connected venue reads already is the same market again: the connected venue speaks for it
-  const reads = new Set(all.filter((l) => l[0]!.r.connected).map((l) => l[0]!.r.family));
+  // a public listing of an exchange a connected venue reads already is the same market again: the connected venue speaks for it (a paper
+  // account speaks for no public listing: its prices are its test environment's)
+  const reads = new Set(all.filter((l) => l[0]!.r.connected && !l[0]!.r.paper).map((l) => l[0]!.r.family));
   const order = all.filter((l) => l[0]!.r.connected || !reads.has(l[0]!.r.family));
   // each venue once, by its most traded market for the thing (an open one before a closed one, then the venue's own order)
   let entries = order.map((list) => [...list].sort((a, b) => (b.m.volumeUsd24h ?? -1) - (a.m.volumeUsd24h ?? -1) || Number(b.m.open !== false) - Number(a.m.open !== false))[0]!);
   if (key.startsWith(PRE_IPO_GROUP)) return preIpoRow(key, entries, aside);
+  // the paper lines, kept apart: in no guard, no sum and no choice of the row's figures
+  const papers = entries.filter((e) => e.r.paper);
+  entries = entries.filter((e) => !e.r.paper);
   const priced = entries.filter((e) => priceOf(e.m) !== undefined);
   if (priced.length >= 3) {
     const prices = priced.map((e) => priceOf(e.m)!).sort((x, y) => x - y);
@@ -627,10 +646,12 @@ function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside
     for (const e of far) aside.push({ venue: e.r.id, venueName: lineName(e.r, e.m), connected: e.r.connected, symbol: e.m.symbol, why: `lists ${e.m.symbol} at ${priceOf(e.m)}, more than 10% from the other venues' ${middle} for ${key.slice(key.indexOf(":") + 1)}: it may be another token under the same name, so it is left out of that row` });
     entries = entries.filter((e) => !far.has(e));
   }
-  if (!entries.length) return undefined;
+  if (!entries.length && !papers.length) return undefined;
   entries.sort((a, b) => (b.m.volumeUsd24h ?? -1) - (a.m.volumeUsd24h ?? -1) || Number(b.r.connected) - Number(a.r.connected));
   const base = key.slice(key.indexOf(":") + 1);
-  const priceAt = entries.find((e) => priceOf(e.m) !== undefined);
+  // a row only a paper account lists: priced by it, and said to be
+  const paperOnly = !entries.length;
+  const priceAt = entries.find((e) => priceOf(e.m) !== undefined) ?? papers.find((e) => priceOf(e.m) !== undefined);
   const moved = entries.find((e) => fin(e.m.changePct24h) !== undefined);
   // one market's volume once: the largest figure of the venues that read one exchange, then the exchanges summed
   const byFamily = new Map<string, number>();
@@ -642,7 +663,7 @@ function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside
   const funded = entries.find((e) => fin(e.m.fundingRate) !== undefined);
   // a stock's session: its first connected venue's that says one (the order its lines are in)
   const sessioned = entries.find((e) => e.r.connected && sessionOf(e.m) !== undefined);
-  const named = entries.find((e) => e.m.name && !e.m.name.includes(" / ") && e.m.name.toUpperCase() !== e.m.symbol.toUpperCase());
+  const named = [...entries, ...papers].find((e) => e.m.name && !e.m.name.includes(" / ") && e.m.name.toUpperCase() !== e.m.symbol.toUpperCase());
   const name = kind === "coin" ? base : kind === "perp" ? `${base} perpetual` : (named?.m.name ?? base);
   const category = entries.map((e) => e.m.category).find((c): c is string => typeof c === "string" && c !== "");
   const issued = kind === "rwa" ? entries.find((e) => typeof e.m.issuer === "string" && e.m.issuer !== "") : undefined;
@@ -655,6 +676,7 @@ function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside
     name,
     base,
     ...(priceAt ? { price: priceOf(priceAt.m) } : {}),
+    ...(paperOnly ? { paper: true as const } : {}),
     ...(moved ? { changePct24h: moved.m.changePct24h, ...(fin(moved.m.change24h) !== undefined ? { change24h: moved.m.change24h } : {}), changeFrom: { venue: moved.r.id, venueName: lineName(moved.r, moved.m) } } : {}),
     ...(vols.length ? { volumeUsd24h: vols.reduce((s, v) => s + v, 0) } : {}),
     ...(category ? { category } : {}),
@@ -663,7 +685,7 @@ function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside
     ...(issued ? { issuer: issued.m.issuer } : {}),
     ...(eligible ? { eligibility: eligible.m.eligibility } : {}),
     tabs: ["all", TAB_OF[kind as Exclude<ExploreKind, "event">]],
-    at: entries.map((e) => atOf(e.r, e.m, e.m.symbol, priceOf(e.m), e.m.open, !(trades && e.r.readOnly !== undefined))),
+    at: [...entries.map((e) => atOf(e.r, e.m, e.m.symbol, priceOf(e.m), e.m.open, !(trades && e.r.readOnly !== undefined))), ...papers.map((e) => atOf(e.r, e.m, e.m.symbol, priceOf(e.m), e.m.open))],
   };
 }
 
@@ -679,7 +701,9 @@ function impliedOf(m: Market): { usd: number; unit: string } | undefined {
  * implies in the venue's own unit; the median guard on the implied valuation; the row's `implied.usd` the median of the venues', its `price`
  * that median in the $1-per-$1,000,000,000 convention. The row is Pre-IPO, not Perps */
 function preIpoRow(key: string, every: Got[], aside: ExploreMissing[]): ExploreItem | undefined {
-  let entries = every.filter((e) => impliedOf(e.m) !== undefined || priceOf(e.m) === undefined);
+  // a paper account's contract is a line to rehearse on, not a valuation: it joins a company the real venues price, and makes no row
+  const papers = every.filter((e) => e.r.paper);
+  let entries = every.filter((e) => !e.r.paper && (impliedOf(e.m) !== undefined || priceOf(e.m) === undefined));
   const title = every.map((e) => e.m.group?.title).find((t): t is string => typeof t === "string" && t !== "") ?? key.slice(PRE_IPO_GROUP.length);
   const valued = entries.filter((e) => impliedOf(e.m) !== undefined);
   if (valued.length >= 3) {
@@ -719,7 +743,7 @@ function preIpoRow(key: string, every: Got[], aside: ExploreMissing[]): ExploreI
     ...(issued ? { issuer: issued.m.issuer } : {}),
     ...(eligible ? { eligibility: eligible.m.eligibility } : {}),
     tabs: ["all", "preipo"],
-    at: entries.map((e) => {
+    at: [...entries, ...papers].map((e) => {
       const implied = impliedOf(e.m);
       return { ...atOf(e.r, e.m, e.m.symbol, priceOf(e.m), e.m.open), ...(implied ? { implied } : {}) };
     }),

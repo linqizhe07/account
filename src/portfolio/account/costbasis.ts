@@ -34,6 +34,8 @@ import type { LiveOrder } from "./live-orders.ts";
 export interface VenuePosition extends Position {
   venue: string;
   venueName?: string | undefined;
+  /** at a PAPER account (the venue's own test environment): no real money in it */
+  paper?: true | undefined;
 }
 
 export type CostSource = "account orders" | "venue";

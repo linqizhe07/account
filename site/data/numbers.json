@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-11",
+  "generatedAt": "2026-10-13",
   "mcpTools": {
     "real": 32,
     "simulationOnly": 7,
@@ -50,7 +50,7 @@
     ]
   },
   "connectionKinds": {
-    "count": 13,
+    "count": 14,
     "ids": [
       "exchange",
       "alpaca",
@@ -62,6 +62,7 @@
       "wallet",
       "hyperliquid",
       "hyperliquid-trade",
+      "hyperliquid-paper",
       "polymarket",
       "polymarket-trade",
       "ondo"
@@ -75,7 +76,7 @@
   "capUsd": 100,
   "cardMinutes": 30,
   "tests": {
-    "files": 131,
+    "files": 133,
     "attackFiles": 30
   },
   "strip": [

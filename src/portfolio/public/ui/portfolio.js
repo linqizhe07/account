@@ -564,9 +564,11 @@ function pfChips(v) {
   // they are; what it can do from here waits until it answers again
   if (h.away) {
     const ed = v.notServed && v.notServed.edition;
-    return [`<span class="chip pf-health away" title="${esc(h.text)}"><span aria-hidden="true">·</span>${esc(word)}</span>`, ed ? `<span class="chip" title="${esc(ed.said)}">${esc(ed.name)} serves where you are</span>` : ""].filter(Boolean).join(" ");
+    return [v.paper ? '<span class="chip paper" title="A paper account: the venue\'s own test environment, no real money.">Paper</span>' : "", `<span class="chip pf-health away" title="${esc(h.text)}"><span aria-hidden="true">·</span>${esc(word)}</span>`, ed ? `<span class="chip" title="${esc(ed.said)}">${esc(ed.name)} serves where you are</span>` : ""].filter(Boolean).join(" ");
   }
   return [
+    // a paper account: the venue's own test environment, no real money — said first, so no number on the row reads as money
+    v.paper ? '<span class="chip paper" title="A paper account: the venue\'s own test environment, no real money. Its balance is not in your net worth, and its orders are rehearsals that the server\'s cap does not bound.">Paper</span>' : "",
     `<span class="chip pf-health${h.bad ? " bad" : ""}" title="${esc(h.text)}"><span aria-hidden="true">${h.bad ? "✗" : h.read ? "✓" : "·"}</span>${esc(word)}</span>`,
     // a venue that lets this network only close what is held: that state in a word, its own words on hover; it sells, it buys nothing
     v.closeOnly ? `<span class="chip" title="${esc(v.closeOnly.said || "")}">Close only here</span>` : "",
@@ -625,7 +627,7 @@ function renderVenues({ el, owner }) {
   const waits = W ? `waiting for ${W === 1 ? "its venue" : "their venues"}` : "";
   const refused = X ? `${X} not connected` : "";
   const sub = L.length
-    ? `${plural(L.length, "account")} · ${money(L.reduce((t, v) => t + num(v.usd), 0))}${agents ? ` · where ${agents === 1 ? "your agent" : "your agents"} may act is each one's switch` : ""}${W ? ` · ${W} ${waits}` : ""}${X ? ` · ${refused}` : ""}`
+    ? `${plural(L.length, "account")} · ${money(L.filter((v) => !v.paper).reduce((t, v) => t + num(v.usd), 0))}${L.some((v) => v.paper) ? ` (${plural(L.filter((v) => v.paper).length, "paper account")} not counted)` : ""}${agents ? ` · where ${agents === 1 ? "your agent" : "your agents"} may act is each one's switch` : ""}${W ? ` · ${W} ${waits}` : ""}${X ? ` · ${refused}` : ""}`
     : held.length
       ? `${[W ? `${plural(W, "connection")} ${waits}: nothing is read from ${W === 1 ? "it until it answers" : "them until they answer"} this network` : "", X ? `${refused}: ${X === 1 ? "connect it again, or disconnect it" : "connect them again, or disconnect them"}` : ""].filter(Boolean).join(" · ")}.`
       : "Connect an exchange, a broker, a wallet or a prediction market: each is read through its own interface, and nothing moves without your signature.";

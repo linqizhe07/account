@@ -11,6 +11,8 @@
  *   live:hyperliquid     a perp DEX account                                                           an address
  *   live:hyperliquid-trade  the same account, traded through an API wallet that cannot withdraw;     a key file
  *                        Hyperliquid's own line (its Terms of Use §1.6) is held to where the user is first
+ *   live:hyperliquid-paper  PAPER TRADING: the same connection to Hyperliquid's own testnet — mock USDC,  a key file
+ *                        no real money (LiveSource.paper), held to the same line
  *   live:polymarket      a prediction-market wallet                                                   an address
  *   live:polymarket-trade  the same wallet, traded on Polymarket's CLOB                              a key file
  *   live:wallet          any EVM wallet: an exchange's own wallet, a browser wallet, a hardware one,  an address
@@ -27,7 +29,7 @@ import { ALPACA_KEY, alpacaSource } from "./alpaca.ts";
 import type { ChainReader, ChainSender } from "./chain.ts";
 import { defaultKeyRef, loadKeyFile, type KeyShape } from "./credentials.ts";
 import { EXCHANGE_KEY, exchangeSource, type OpenExchange } from "./exchange.ts";
-import { HYPERLIQUID_TRADE_KEY, hyperliquidTradeSource, type OpenHyperliquid } from "./hyperliquid-trade.ts";
+import { HYPERLIQUID_PAPER_KEY, HYPERLIQUID_TRADE_KEY, hyperliquidTradeSource, type OpenHyperliquid } from "./hyperliquid-trade.ts";
 import { KALSHI_KEY, kalshiSource } from "./kalshi.ts";
 import { locator } from "./location.ts";
 import { metamaskSource, type RunMm } from "./metamask.ts";
@@ -217,6 +219,22 @@ const hyperliquidTrade: Connector = {
     return isRefusal(opened) ? opened : { ...opened, summary: said(opened.source), price: deps.price };
   },
 };
+/** Hyperliquid's TESTNET, a paper account: the same connection, the same line held to where the user is, mock USDC and no real money
+ * (LiveSource.paper: nothing of it is counted as money, and its orders are rehearsals the door holds to the owner's limits and not to the
+ * server's cap). Its key file is its own — an API wallet approved on the testnet — under credentials/hyperliquid-paper/api-key.json */
+const hyperliquidPaper: Connector = {
+  kind: "hyperliquid-paper",
+  label: "Hyperliquid · paper trading on its testnet, with an API wallet (no real money)",
+  needs: "key-file",
+  example: HYPERLIQUID_PAPER_KEY.example,
+  venues: [],
+  async open(req, deps) {
+    const key = loadKeyFile(deps.home, req.reference, HYPERLIQUID_PAPER_KEY, req.venue);
+    if (isRefusal(key)) return key;
+    const opened = await hyperliquidTradeSource({ venue: req.venue, label: req.label, reference: req.reference || defaultKeyRef(req.venue), key, where: locator({ http: deps.http, clock: deps.clock }), clock: deps.clock, open: deps.openHyperliquid, net: "testnet" });
+    return isRefusal(opened) ? opened : { ...opened, summary: said(opened.source), price: deps.price };
+  },
+};
 const polymarket = byAddress("polymarket", "Polymarket · by the account wallet's address", "The account wallet Polymarket shows in the profile menu (the deposit or proxy wallet), not the key that signs for it.", ["polymarket"], polymarketSource, false);
 /** Polymarket to trade: the key that signs for the account wallet, in a key file. Polymarket's location check comes before anything else */
 const polymarketTrade: Connector = {
@@ -248,7 +266,7 @@ const metamask: Connector = {
   },
 };
 
-export const CONNECTORS: Connector[] = [exchange, alpaca, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, polymarket, polymarketTrade, ondo];
+export const CONNECTORS: Connector[] = [exchange, alpaca, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, hyperliquidPaper, polymarket, polymarketTrade, ondo];
 
 /** register a connector kind (the other sources add themselves here) */
 export function register(c: Connector): void {
@@ -269,7 +287,7 @@ export function liveOptions(home: string): LiveOptions {
 }
 
 /** the key file each kind of connection reads */
-export const KEY_SHAPES: Record<string, KeyShape> = { exchange: EXCHANGE_KEY, alpaca: ALPACA_KEY, kalshi: KALSHI_KEY, "polymarket-us": POLYMARKET_US_KEY, "robinhood-crypto": ROBINHOOD_CRYPTO_KEY, "polymarket-trade": POLYMARKET_TRADE_KEY, "hyperliquid-trade": HYPERLIQUID_TRADE_KEY };
+export const KEY_SHAPES: Record<string, KeyShape> = { exchange: EXCHANGE_KEY, alpaca: ALPACA_KEY, kalshi: KALSHI_KEY, "polymarket-us": POLYMARKET_US_KEY, "robinhood-crypto": ROBINHOOD_CRYPTO_KEY, "polymarket-trade": POLYMARKET_TRADE_KEY, "hyperliquid-trade": HYPERLIQUID_TRADE_KEY, "hyperliquid-paper": HYPERLIQUID_PAPER_KEY };
 
 /** Is a key file ready for a connection? Where it is, whether only its owner can read it, which fields it is missing — the same checks a
  * connection makes, said before connecting so the page can say what to do next. Field NAMES are said; no value ever leaves this process.

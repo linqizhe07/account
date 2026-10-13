@@ -71,7 +71,12 @@ const earner: LiveEarner = {
   },
 };
 register({ kind: "standin-mcp-real", label: "a venue for the MCP seat", needs: "key-file", example: "", venues: [], async open(req) {
-  return { source: { name: req.label || "Exchange", kind: "cex", reference: "standin", via: "a stand-in", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USDT", amount: 5000, usd: 5000 }], trader, readOnlyBecause: "the stand-in moves no money", earner } as never, first: [], summary: "connected" };
+  return { source: { name: req.label || "Exchange", kind: "cex", reference: "standin", via: "a stand-in", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USDT", amount: 5000, usd: 5000 }], trader, readOnlyBecause: "the stand-in moves no money", earner } as never, first: [{ asset: "USDT", amount: 5000, usd: 5000 }], summary: "connected" };
+} });
+/** the same venue again as a PAPER account (the venue's own test environment, LiveSource.paper): the seat sees `paper: true`, its money is
+ * not counted, and the door holds no server cap to an order there */
+register({ kind: "standin-mcp-paper", label: "a paper venue for the MCP seat", needs: "key-file", example: "", venues: [], async open(req) {
+  return { source: { name: req.label || "Paper Exchange", kind: "cex", reference: "standin", via: "a stand-in's test environment", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USDT", amount: 5000, usd: 5000 }], trader, readOnlyBecause: "a paper account: its balance is not money", paper: true } as never, first: [{ asset: "USDT", amount: 5000, usd: 5000 }], summary: "connected" };
 } });
 
 let home: string;
@@ -94,6 +99,7 @@ beforeAll(async () => {
   svc = await PortfolioService.create({ home, venues: "frontline", real: true, liveWrites: { capUsd: 5000, pairingCode: "K7QX-M2PA" }, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
   server = await startPortfolioServer({ port: 0, service: svc });
   await own({ type: "connectVenue", venue: "ex", connector: "live:standin-mcp-real", label: "Exchange", credentialRef: "" });
+  await own({ type: "connectVenue", venue: "paper-ex", connector: "live:standin-mcp-paper", label: "Paper Exchange", credentialRef: "" });
   client = new Client({ name: "vitest", version: "0" });
   // no PORTFOLIO_SEAT_KEYS: the seat makes its own key, in this home
   await client.connect(new StdioClientTransport({ command: join(ROOT, "node_modules", ".bin", "tsx"), args: [join(ROOT, "src", "portfolio", "mcp.ts")], env: { ...(process.env as Record<string, string>), PORTFOLIO_URL: server.url, PORTFOLIO_AGENT: "DeepSeek Harness", BUYER_HOME: home }, stderr: "ignore" }));
@@ -223,6 +229,34 @@ describe("the wallet through the MCP seat: what the page reads, steering, a prev
     expect(st.body.lines.map((l: { kind: string; status: string; agentName: string }) => [l.kind, l.status, l.agentName])).toEqual([["buy", "open", "Codex"]]);
     expect((await tool("portfolio_statement", { mine: true })).body.lines.every((l: { agent?: string }) => l.agent === key1)).toBe(true);
   }, 60_000);
+
+  it("a paper venue: the seat sees paper: true and no money in it; an order there is held to the seat's limit and the mode, not to the server's cap; it is never compared", async () => {
+    const a = (await tool("portfolio_account")).body;
+    const paper = a.venues.find((v: { id: string }) => v.id === "paper-ex");
+    expect(paper).toMatchObject({ paper: true, live: true, usd: 5000 });
+    expect(paper.trading).toMatch(/^PAPER TRADING, no real money/);
+    expect(paper.realMoney).toMatch(/paper account/);
+    expect(a.venues.find((v: { id: string }) => v.id === "ex").paper).toBeUndefined();
+    // its 5,000 USDT is not money: the assets and the ready cash are the real venue's alone
+    expect(a.assets.find((x: { key: string }) => x.key === "stable:USDT")).toMatchObject({ amount: 5000, venues: ["ex"] });
+    expect(a.readyCashUsd).toBe(5000);
+    const key = a.seat.key as `0x${string}`;
+    // one trading limit names both venues (a new one replaces the seat's): the same order is judged by the same limit at each
+    await own({ type: "approveSpend", agent: key, scope: "trade", allow: "ex,paper-ex", perPayment: "7000", budget: "14000", windowHours: 0, validUntil: Date.now() + 7 * DAY });
+    // the same $6,000 order: over the server's cap at the real venue, a card (Guard) at the paper one
+    const big = { symbol: PERP.symbol, side: "buy", orderType: "limit", limitPrice: 3000, qty: 2 };
+    expect((await tool("portfolio_live_order", { venue: "ex", ...big })).body.code).toBe("E_ACCOUNT_LIMIT");
+    const asked = await tool("portfolio_live_order", { venue: "paper-ex", ...big });
+    expect(asked.body).toMatchObject({ ok: true, pending: true });
+    expect(asked.body.card.reason).toMatch(/asks to PAPER · buy/);
+    expect((await tool("portfolio_live_preview", { order: { venue: "paper-ex", ...big } })).body).toMatchObject({ ok: true, placed: "nothing", worthUpToUsd: 6000, wouldBe: "card" });
+    // not compared: a paper account's prices are its test environment's
+    expect((await tool("portfolio_live_compare", { base: "ETH", side: "buy" })).body.rows.map((r: { venue: string }) => r.venue)).toEqual(["ex"]);
+    // its positions say so
+    expect((await tool("portfolio_live_positions", {})).body.positions.filter((p: { venue: string }) => p.venue === "paper-ex")).toMatchObject([{ paper: true }]);
+    // the seat's limit as the tests after this one expect it
+    await own({ type: "approveSpend", agent: key, scope: "trade", allow: "ex", perPayment: "2000", budget: "4000", windowHours: 0, validUntil: Date.now() + 7 * DAY });
+  }, 30_000);
 
   it("a batch of orders: one signed instruction and one answer each; a leg that is wrong is answered on its own", async () => {
     const b = await tool("portfolio_live_batch", { legs: [{ venue: "ex", symbol: PERP.symbol, side: "buy", orderType: "limit", limitPrice: 2900, qty: 0.1 }, { venue: "ex", symbol: PERP.symbol, side: "buy", orderType: "limit", limitPrice: 2900 }, { venue: "ex", symbol: PERP.symbol, side: "buy", orderType: "limit", limitPrice: 2800, qty: 0.2 }] });

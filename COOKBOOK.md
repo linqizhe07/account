@@ -34,6 +34,7 @@
 | 从零开始，不接着以前的运行 | `npm run account -- --fresh` |
 | 扮演一个 agent，对跑着的服务发请求 | `npx tsx examples/account/agent-seat.ts whoami` |
 | 让 Claude Code、Codex 这类 agent 来当 agent | Agents 弹层里 "Copy agent setup command" 复制的那一行（Portfolio 的三步清单里是 "Copy setup command"）：`claude mcp add portfolio -e PORTFOLIO_URL=http://127.0.0.1:4820 -- npx tsx <仓库的绝对路径>/src/portfolio/mcp.ts`（第 11 条） |
+| 真钱之前先用假钱排练一遍 | 卡片 "Hyperliquid · paper"：Hyperliquid 自己的测试网，同一扇门、同样的额度和模式，余额不算钱（第 6b 条） |
 | 让 DeepSeek Harness 来当 agent | 第 11 条的配置 |
 | 在一个不联网、不动钱的账户上把页面点一遍 | `npx tsx test/standin/ui-standin.ts --port 4821`（第 11c 条） |
 | 模拟账户里的规则，一个脚本从头走到尾，不起服务 | `npx tsx examples/account/headless.ts` |
@@ -86,7 +87,7 @@ OKX connected live · $1,000.00 there now · the venue says this credential can 
 
 **钱包**（OKX Wallet、Binance Wallet、MetaMask 扩展等）：在装了钱包的浏览器里点 "Browser wallet"，再点你的钱包。钱包先给地址，再签一句话（不是交易，什么都不批准），这个地址就是你的，从它可以换币（下面第 5 条）。"Watch an address" 只粘贴地址：能看，既不交易也不收发。
 
-**Hyperliquid**：卡片 "Hyperliquid" 是 API 钱包连接：在 app.hyperliquid.xyz → More → API 里起个名、Generate、Authorize API Wallet（最长 180 天），把它的私钥放进 `privateKey`、你账户自己的地址放进 `walletAddress`（`credentials/hyperliquid-trade/api-key.json`）。API 钱包只能下单、不能提币；账户自己的私钥拒收。接上以后永续、现货、HIP-3（含 io:ANTH 这类 pre-IPO）都在 Trade 里下，每一单、每次改杠杆之前按它条款 §1.6 查你此刻所在的地方。只想看，用 "Hyperliquid · by address"。
+**Hyperliquid**：卡片 "Hyperliquid" 是 API 钱包连接：在 app.hyperliquid.xyz → More → API 里起个名、Generate、Authorize API Wallet（最长 180 天），把它的私钥放进 `privateKey`、你账户自己的地址放进 `walletAddress`（`credentials/hyperliquid-trade/api-key.json`）。API 钱包只能下单、不能提币；账户自己的私钥拒收。接上以后永续、现货、HIP-3（含 io:ANTH 这类 pre-IPO）都在 Trade 里下，每一单、每次改杠杆之前按它条款 §1.6 查你此刻所在的地方。只想看，用 "Hyperliquid · by address"。要先演练，用 "Hyperliquid · paper"：同一个连接接它的测试网——在 app.hyperliquid-testnet.xyz → More → API 批一个 API 钱包（主网批的在测试网不算），私钥和账户地址放进 `credentials/hyperliquid-paper/api-key.json`；mock USDC 从它的水龙头领（app.hyperliquid-testnet.xyz/drip：1,000 个，要求同一地址在主网存过款）。这是真接口、假钱：Accounts 那一行标 Paper，余额不进净值和可用现金；下单走同一扇门（你的签名或 agent 的额度、Guard / Beast），只是不受 `--live-cap`；Markets 里它排在真场所后面、不定行价，比价不比它；对账单的那几行标 Paper。§1.6 照样查你所在的地方——测试网也是 Hyperliquid 的 Interface，纸上账户不是绕开它的办法。
 
 **Robinhood**：
 - 投资账户：卡片 "Robinhood" → "Sign in at Robinhood…"，在 Robinhood 自己的页面登录、批准，回来点 "Connect"。读各账户的现金和股票持仓；下单只在 Robinhood 的 Agentic 账户里，整股。令牌只在服务的内存里，重启要重新登录。
@@ -294,6 +295,38 @@ agent 设杠杆有一条你签的上限：Settings 弹层里 "Their leverage"，
 ```
 
 agent 只能撤自己下的单；你能撤任何单（撤单从不出卡；你撤 agent 的单时页面先问一次）。重启后场所没接回来的单，账户不再跟（Statement 里 "not followed since a restart"）：agent 或你撤它只是把它那份额度放回来，单要在场所那边撤，账户既撤不了也看不到成交。在模拟账户里才有的指令（`agentOrder`、`agentExecute`、`agentSendAsset`、`agentSwap`）在这里回 `E_ACCOUNT_BAD_ACTION · this account holds real accounts only`；`agentPay` 只在服务能从 agent 钱包付真钱时收（第 7b 条）。
+
+## 6b · 纸上交易：先在 Hyperliquid 测试网演练
+
+真钱之前先排练一遍。**"Hyperliquid · paper"** 是同一个 Hyperliquid 连接接到它自己的测试网——真接口、假钱：门、额度、模式、卡片、对账单都和真的一样，只是余额不算钱、订单不受 `--live-cap`，页面和 agent 处处标 **Paper**。
+
+**准备（一次）**
+
+1. 打开 app.hyperliquid-testnet.xyz，用你的钱包连上。邮箱（Privy）登录在测试网是另一个地址：它的文档说把主网的邮箱钱包导出、装进 MetaMask 或 Rabby，再用那个钱包连测试网。
+2. 水龙头 app.hyperliquid-testnet.xyz/drip 领 1,000 个 mock USDC。它的要求是**同一个地址在主网存过款**（多少都行）。
+3. More → API：起个名、Generate、复制 API 钱包的私钥，再 Authorize API Wallet。主网批过的在测试网不算，要在测试网再批一次；最长 180 天。
+4. 钥匙文件 `~/.buyer-agent-demo/credentials/hyperliquid-paper/api-key.json`：`{"walletAddress": "你账户自己的地址", "privateKey": "API 钱包的私钥"}`，`chmod 600`。Connect an account 的卡片上有一条现成的命令（建目录、空模板、权限、打开编辑器）。账户自己的私钥会被拒收——它能提币。
+
+**接入**：Connect an account → "Hyperliquid · paper" → 钥匙文件路径 → Connect（一次签名）。接的顺序和真的一样：先按它条款 §1.6 查你此刻所在的地方（测试网也是它的 Interface、同一份条款，美国、安大略、受制裁地区不服务，和真的一个答案），再问测试网这把 API 钱包批给的是不是这个账户、有没有过期，最后读余额。Venues 里多一行 "Hyperliquid · paper"，标 Paper；净值、持仓表、Cash ready 和净值曲线都不算它（Venues 的标题写 "1 paper account not counted"）。
+
+**自己下单**：Trade → Perps（现货在 Crypto）→ 搜 BTC → Where 里 "Hyperliquid · paper [Paper]"（排在真场所后面；没接真的那家时，公开行照样给 "Connect to trade"）→ 金额 → Sign and place。签名的那句话以 "PAPER · " 开头，上限那一句不出现（`--live-cap` 管的是真钱）；`--read-only` 起的服务照样不下。Statement 里那几行标 Paper，合计不算它们，CSV 多一列 `paper`。Markets 里它的那一条排在真场所后面、不定行价；只有它一家有的市场整行标 Paper，按钮写 "Paper trade"；比价（Where 的 Best、`portfolio_live_compare`）不比它。
+
+**让 agent 演练**：第 3 条给额度时场所填 `hyperliquid-paper`（和真的 `hyperliquid-trade` 是两家，各自一条额度）。Guard 下每单一张卡，卡上写 "paper order (no real money)"；Beast 下额度内直接下。MCP 里：
+
+```
+portfolio_account                                        venues 里 "hyperliquid-paper" 带 paper: true，trading 一栏以 "PAPER TRADING, no real money" 开头
+portfolio_live_markets   {venue: "hyperliquid-paper", query: "BTC"}
+portfolio_live_preview   {order: {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}}
+portfolio_live_order     {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}
+                                                         答复里的订单带 paper: true；Guard 是 {pending: true, card}，portfolio_wait {card} 等你
+portfolio_live_positions {venue: "hyperliquid-paper"}    每条带 paper: true
+portfolio_live_close     {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC"}
+portfolio_live_leverage  {venue: "hyperliquid-paper", symbol: "BTC/USDC:USDC", leverage: 3}
+```
+
+市场的写法和真的一样：`BTC/USDC:USDC` 永续、`HYPE/USDC` 现货、`XYZ-NVDA/USDC:USDC` HIP-3；测试网上有些市场主网没有，反过来也是。
+
+**换成真的**：接 "Hyperliquid"（主网的 API 钱包，`credentials/hyperliquid-trade/api-key.json`），给 agent 一条写着 `hyperliquid-trade` 的额度，工具和写法一字不改。不同的只有三件：钱是真的、`--live-cap` 管着每一单、Markets 和比价拿它当价格。
 
 ## 7 · 动钱
 
@@ -819,6 +852,8 @@ npx vitest run test/attack
 | 页面按钮全灰，顶栏下面一行 "can look but not sign" | 你不是 owner，见第 1 条 |
 | 钥匙文件那一步一直 "Waiting for the file…" | 路径不对，或者文件还没存盘。复制弹窗里的路径或那条命令 |
 | 席位一直 `401` | 钥匙没授权、过期或被撤销，见第 3、9 条 |
+| "Hyperliquid · paper" 的卡片写 "Not served here"，或接上后一直 "Waiting for the venue" | 和真的 Hyperliquid 一个规矩：它的条款 §1.6 对你此刻所在的地方不服务，测试网也是它的 Interface。换了网络按 "Check again"；账户不提供绕开的办法 |
+| 接 "Hyperliquid · paper" 时说这把 API 钱包没批给这个账户 | 批要在 app.hyperliquid-testnet.xyz 上做，主网批的在测试网不算；或者 180 天到期了，再批一次。水龙头领不到 mock USDC 是另一回事：它要求同一地址在主网存过款 |
 | `this account holds real accounts only` | 这条指令只动模拟的钱。下单走 `liveOrder` / `agentLiveOrder`，动钱走 `liveMove` / `agentLiveMove`，见第 5、6、7 条 |
 | Trade 屏上少一种市场，或下单票的 Where 里这家写着原因 | 没有接上的场所交易这一种，公开行情里也没有：没东西的种类不画（替身上没有 Stocks）；`--read-only` 起的服务价格照样有，签名按钮写只读的那句话；或者钥匙没开交易（Accounts 那一行的标签写场所的话，Details 里写着要勾什么，还有 "Connect a new key"）；或者这个场所不能从这里下单（按地址接的 Hyperliquid、Ondo、只填了地址的 Polymarket） |
 | Markets 的 Perps 里找不到 ANTHROPIC、OPENAI | 它们是 pre-IPO 永续，只在 Pre-IPO tab，每家公司一行（第 2c 条） |

@@ -49,7 +49,7 @@ function openAmend(o) {
     },
     show: (p) => {
       const q = p.quote.order;
-      return `<div class="big"><span>${esc(q.words)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${o.side === "buy" ? `costs at most ${money(q.maxUsd)}` : `worth about ${money(q.maxUsd)}`}</div>`;
+      return `<div class="big"><span>${esc(q.words)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${o.side === "buy" ? `costs at most ${money(q.maxUsd)}` : `worth about ${money(q.maxUsd)}`}</div>${q.paper ? '<div class="path tk-paper">Paper account: no real money changes hands.</div>' : ""}`;
     },
     signNotes: (p) => tkSignNotes(p, ev),
     done: (r) => (r.body.order ? `Changed: ${r.body.order.id} · ${r.body.order.note}` : ""),
@@ -797,8 +797,8 @@ function tkTicket(panel, kind0, preset) {
     box2.innerHTML = `${!rows.length ? '<p class="dim small">No venue that lists it serves this network.</p>' : none ? `<p class="dim small">${rows.some((r) => r.state === "public" && r.connector) ? "None of your accounts trades it yet: connect one where it is listed." : nobody ? "None of the venues that list it would take you from where you are." : "None of your accounts can trade it now."}</p>` : ""}${rows.map((r, i) => {
       // a venue that takes the user only in part (close-only) or wants something here first: its word, its whole sentence on hover
       if (r.state === "public") return `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why"><b>${esc(r.terms.word)}</b>${r.terms.said ? ` — ${esc(r.terms.said)}` : ""}</span>` : !r.connector && r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>${r.connector ? '<span class="tk-sep"> · </span>' : ""}` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`;
-      if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(r.venueName)}</b><span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
-      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
+      if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
+      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
     }).join("")}`;
     for (const b of box2.querySelectorAll("button[data-at]")) b.addEventListener("click", () => choose(rows[Number(b.dataset.at)]));
     for (const b of box2.querySelectorAll("button[data-connect]")) b.addEventListener("click", () => {
@@ -1343,10 +1343,12 @@ function tkWhereRows(item, ranked, kind = "") {
       continue;
     }
     const able = canTrade(v) && r.canTrade !== false;
-    rows.push(able ? { state: "able", ...(v.closeOnly ? { closeOnly: true } : {}), venue: r.venue, venueName: r.venueName, symbol: r.symbol, price: r.price, best: !!r.best, closed: !r.open, worse: r.best ? 0 : r.worse, note: r.ready === false && r.open ? r.note || "" : "" } : { state: "off", venue: r.venue, venueName: r.venueName, why: tkWhyNot(v), how: tkHow(v) });
+    rows.push(able ? { state: "able", ...(v.closeOnly ? { closeOnly: true } : {}), ...(v.paper ? { paper: true } : {}), venue: r.venue, venueName: r.venueName, symbol: r.symbol, price: r.price, best: !!r.best, closed: !r.open, worse: r.best ? 0 : r.worse, note: r.ready === false && r.open ? r.note || "" : "" } : { state: "off", ...(v.paper ? { paper: true } : {}), venue: r.venue, venueName: r.venueName, why: tkWhyNot(v), how: tkHow(v) });
   }
-  // a public line is a price; it offers its connection only where none of your accounts trades the thing (a connected venue whose key may)
-  const tradedHere = (item.at || []).some((a) => a.connected && a.canTrade !== false);
+  // a public line is a price; it offers its connection only where none of your accounts trades the thing (a connected venue whose key may;
+  // a paper account — by its leg or by the account's own row for the venue — rehearses, it does not trade the thing)
+  const paperAt = (a) => !!(a.paper || (A.venues.find((v) => v.id === a.venue) || {}).paper);
+  const tradedHere = (item.at || []).some((a) => a.connected && !paperAt(a) && a.canTrade !== false);
   for (const a of item.at || []) {
     if (a.public) {
       if (a.connectTo && A.venues.some((v) => v.id === a.connectTo && v.live)) continue;
@@ -1371,10 +1373,11 @@ function tkWhereRows(item, ranked, kind = "") {
       continue;
     }
     const able = canTrade(v) && a.canTrade !== false;
-    rows.push(able ? { state: "able", ...(v.closeOnly || a.closeOnly ? { closeOnly: true } : {}), venue: a.venue, venueName: a.venueName, symbol: a.symbol, price: a.price, ...(a.implied ? { implied: a.implied } : {}), closed: a.open === false, note: a.note || "" } : { state: "off", venue: a.venue, venueName: a.venueName, why: a.note || tkWhyNot(v), how: tkHow(v) });
+    rows.push(able ? { state: "able", ...(v.closeOnly || a.closeOnly ? { closeOnly: true } : {}), ...(v.paper || a.paper ? { paper: true } : {}), venue: a.venue, venueName: a.venueName, symbol: a.symbol, price: a.price, ...(a.implied ? { implied: a.implied } : {}), closed: a.open === false, note: a.note || "" } : { state: "off", ...(v.paper || a.paper ? { paper: true } : {}), venue: a.venue, venueName: a.venueName, why: a.note || tkWhyNot(v), how: tkHow(v) });
   }
+  // your accounts first (a paper account after the real ones), then the ones that cannot, then the public prices
   const order = { able: 0, off: 1, public: 2 };
-  return Object.assign(rows.sort((x, y) => order[x.state] - order[y.state]), { away });
+  return Object.assign(rows.sort((x, y) => order[x.state] - order[y.state] || Number(!!x.paper) - Number(!!y.paper)), { away });
 }
 /* why a venue that offers something cannot do it now, in its own words where it gave some */
 const tkWhyNot = (v) => v.noTradeBecause || (v.trade && v.trade.can === false ? "this key can't trade" : watched(v) ? "a watched address: nothing is traded from it" : "orders are not placed here");

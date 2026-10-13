@@ -168,7 +168,8 @@ function mkRoute(item, oi) {
     return { act: "why", venue: mkVenue(a.venue) ? a.venue : "", text: `${a.venueName || "The venue"}: ${mkSaid(a.note) || "this market has closed"}.` };
   }
   let refused = null;
-  for (const l of mkLegs(item, oi)) {
+  // a real account before a paper one: a rehearsal is offered only where nothing real trades the thing
+  for (const l of [...mkLegs(item, oi)].sort((a, b) => Number(!!mkAtOf(item, a.venue).paper) - Number(!!mkAtOf(item, b.venue).paper))) {
     const v = mkVenue(l.venue);
     // a connected venue that does not serve this network now is not offered, nor said: the list is what serves the user
     if (!v || !l.symbol || !servedHere(v)) continue;
@@ -179,7 +180,7 @@ function mkRoute(item, oi) {
       refused = refused || { venue: v.id, word: "Close only here", said: (v.closeOnly && v.closeOnly.said) || "", text: `${v.name}: close only here. What you hold there can be sold.` };
       continue;
     }
-    if (canTrade(v) && a.canTrade !== false && a.open !== false) return { act: "trade", venue: v.id, symbol: l.symbol, venueName: v.name };
+    if (canTrade(v) && a.canTrade !== false && a.open !== false) return { act: "trade", venue: v.id, symbol: l.symbol, venueName: v.name, ...(v.paper || a.paper ? { paper: true } : {}) };
     refused = refused || { venue: v.id, text: mkWhyNot(v, a) };
   }
   // connecting another venue is offered only where none of the owner's connected venues trades the thing at all — and only a venue that
@@ -202,7 +203,7 @@ function mkRoute(item, oi) {
 
 /* a connected venue of the owner's trades the thing (its key may, and it is not close-only on this network): a public line of the same row
    is then a price, never a connection to offer */
-const mkTradedHere = (item) => (item.at || []).some((a) => a.connected && a.canTrade !== false && !mkCloseOnly(item, a.venue));
+const mkTradedHere = (item) => (item.at || []).some((a) => a.connected && !a.paper && !(mkVenue(a.venue) || {}).paper && a.canTrade !== false && !mkCloseOnly(item, a.venue));
 /* a connected venue that lets this network only close what is held, for this market (its explore line) or as the account marks the venue:
    sells and closes go there, buys do not */
 const mkCloseOnly = (item, venue) => !!(mkAtOf(item, venue).closeOnly || (mkVenue(venue) || {}).closeOnly);
@@ -321,7 +322,7 @@ function mkAbout(item) {
  * on it shows (data-peek: mkPeek), in words for a screen reader, and in the drawer */
 function mkNameBtn(item, i) {
   const about = mkAbout(item);
-  return `<button type="button" class="mk-name" data-act="open" data-i="${i}" data-fk="open:${esc(item.key)}" data-peek="${i}">${mkAv(item)}<span class="mk-nm"><b>${mkShortHtml(item)}</b>${about ? `<span class="sr">. ${esc(about)}</span>` : ""}</span></button>`;
+  return `<button type="button" class="mk-name" data-act="open" data-i="${i}" data-fk="open:${esc(item.key)}" data-peek="${i}">${mkAv(item)}<span class="mk-nm"><b>${mkShortHtml(item)}</b>${item.paper ? ' <span class="tag paper" title="Only a paper account lists it: its price is that test environment\'s, not a market\'s">Paper</span>' : ""}${about ? `<span class="sr">. ${esc(about)}</span>` : ""}</span></button>`;
 }
 /** what a market's hover card says: its whole name (an event's question, with the market's own words), what kind of thing it is — an
  * event's category and its countdown, which ticks with the others — who issues it and whom it is for in the issuer's words, and where it is
@@ -333,7 +334,7 @@ function mkPeekHtml(item) {
   const iss = mkIssuerWords(item);
   const seen = new Set();
   const at = [...item.at.filter((a) => a.connected), ...item.at.filter((a) => !a.connected)].filter((a) => !seen.has(a.venueName) && seen.add(a.venueName));
-  const where = at.map((a) => (a.connected ? esc(a.venueName) : `<span class="dim">${esc(a.venueName)}</span>`)).join(" · ");
+  const where = at.map((a) => (a.connected ? `${esc(a.venueName)}${a.paper ? " (paper)" : ""}` : `<span class="dim">${esc(a.venueName)}</span>`)).join(" · ");
   return `<b class="mk-peek-n">${esc(item.name)}</b>${kind ? `<span class="mk-peek-k">${kind}</span>` : ""}${iss ? `<span class="mk-peek-i">${esc(iss)}</span>` : ""}${where ? `<span class="mk-peek-w">${where}</span>` : ""}`;
 }
 /* a row, by its place in what was drawn (data-i) */
@@ -354,7 +355,7 @@ function mkWhere(item) {
   const seen = new Set();
   const at = [...item.at.filter((a) => a.connected), ...item.at.filter((a) => !a.connected)].filter((a) => !seen.has(a.venueName) && seen.add(a.venueName));
   // two venues by name (yours first), the rest as "+N" with their names in its title (and all of them in the row's hover card)
-  const name = (a) => (a.connected ? `<span class="mk-v">${esc(a.venueName)}</span>` : `<span class="mk-v pub" title="Public prices, read without a key">${esc(a.venueName)}</span>`);
+  const name = (a) => (a.connected ? (a.paper ? `<span class="mk-v paper" title="A paper account: no real money">${esc(a.venueName)} · paper</span>` : `<span class="mk-v">${esc(a.venueName)}</span>`) : `<span class="mk-v pub" title="Public prices, read without a key">${esc(a.venueName)}</span>`);
   const more = at.length > 2 ? ` <span class="dim mk-more" title="${esc(at.slice(2).map((a) => a.venueName).join(", "))}">+${at.length - 2}</span>` : "";
   return `<span class="mk-where">${at.slice(0, 2).map(name).join(" · ")}${more}</span>`;
 }
@@ -363,7 +364,7 @@ function mkWhere(item) {
 function mkActs(item, i) {
   const r = mkRoute(item);
   const k = esc(item.key);
-  if (r.act === "trade") return `<div class="acts"><button type="button" class="btn btn-sm" data-act="trade" data-i="${i}" data-fk="trade:${k}"${mkDis()}>Trade</button></div>`;
+  if (r.act === "trade") return `<div class="acts"><button type="button" class="btn btn-sm" data-act="trade" data-i="${i}" data-fk="trade:${k}"${r.paper ? ' title="At a paper account: no real money"' : ""}${mkDis()}>${r.paper ? "Paper trade" : "Trade"}</button></div>`;
   if (r.act === "connect") return `<div class="acts"><button type="button" class="btn btn-sm" data-act="connect" data-connector="${esc(r.connector)}" data-name="${esc(r.venueName)}" data-fk="connect:${k}"${r.terms ? ` title="${esc(r.terms)}"` : ""}${mkDis()}>${icon("plug", "sm")}Connect to trade</button></div>`;
   // a state in a word (Not served here, Close only here) is said as that; anything else opens the drawer, which says why
   return `<div class="acts"><button type="button" class="link dim mk-why" data-act="open" data-i="${i}" data-fk="why:${k}" title="${esc(r.text)}">${esc(r.word || "Can't trade here · why")}</button></div>`;

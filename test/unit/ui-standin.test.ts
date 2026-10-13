@@ -77,8 +77,9 @@ describe("the stand-in account", () => {
     expect(a.connectLive.writes).toMatchObject({ on: true, capUsd: 250 });
     expect([a.mode, a.dial.maxLeverage]).toEqual(["guard", 5]);
     expect(a.signers.owners.map((o: { label: string }) => o.label)).toEqual(["Stand-in seed key"]);
-    // five venues: the exchange, the event market, the wallet, the broker and the agent's wallet
-    expect(s.seeded.venues).toEqual(["ex", "predict", "wallet", "broker", s.seeded.agent.wallet]);
+    // six venues: the exchange, the event market, the wallet, the broker, a paper account and the agent's wallet
+    expect(s.seeded.venues).toEqual(["ex", "predict", "wallet", "broker", "paper", s.seeded.agent.wallet]);
+    expect(a.venues.find((v: { id: string }) => v.id === "paper")).toMatchObject({ paper: true, live: true, name: "Stand-in Paper" });
     expect(a.venues.map((v: { id: string }) => v.id).sort()).toEqual([...s.seeded.venues].sort());
     // the broker: a stock broker's one kind, said by its own trader; a cash account — no positions call, no order changed in place, no
     // leverage — where no money moves from here, in its own words
@@ -117,10 +118,13 @@ describe("the stand-in account", () => {
     // with its own contract price and implied valuation, the row's the median; it is Pre-IPO, not Perps
     const anthropic = row("preipo:anthropic");
     expect(anthropic).toMatchObject({ kind: "perp", name: "Anthropic", category: "Pre-IPO", group: { id: "preipo:anthropic", title: "Anthropic" }, tabs: ["all", "preipo"], issuer: "Anthropic" });
+    // the paper account's line (the same book as the public perp exchange's) is there to rehearse on, after the real venue's
     expect(anthropic.at.map((a: { venue: string; connected: boolean; canTrade: unknown; connectTo?: string }) => [a.venue, a.connected, a.canTrade, a.connectTo]).sort()).toEqual([
       ["ex", true, true, undefined],
+      ["paper", true, true, undefined],
       ["standin-pubperps-public", false, false, "standin-pubperps"],
     ]);
+    expect(anthropic.at.find((a: { venue: string }) => a.venue === "paper").paper).toBe(true);
     expect(anthropic.implied.usd).toBeGreaterThan(1.9e12);
     expect(anthropic.implied.usd).toBeLessThan(2.3e12);
     expect(anthropic.at.every((a: { implied?: { usd: number; unit: string } }) => a.implied && a.implied.usd > 1.9e12 && typeof a.implied.unit === "string")).toBe(true);

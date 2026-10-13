@@ -402,6 +402,7 @@ const CONNECTIONS: Record<string, string> = {
   "live:polymarket-trade": "polymarket",
   "live:polymarket": "polymarket",
   "live:hyperliquid-trade": "hyperliquid",
+  "live:hyperliquid-paper": "hyperliquid",
   "live:hyperliquid": "hyperliquid",
 };
 

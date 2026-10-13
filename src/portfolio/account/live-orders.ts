@@ -6,7 +6,9 @@
  *   1. the server moves real money (it does unless it was started `--read-only`);
  *   2. the market is priced in dollars, is open, and the venue takes the order as written (its smallest size, its steps, its order types);
  *   3. it is worth no more than the most one order may be on this server (`--live-cap`), valued at the price the venue shows now: a buy at
- *      the ask (or its limit, if higher), a sell at the bid (or its limit, if higher — a sell priced under the bid fills at the bid);
+ *      the ask (or its limit, if higher), a sell at the bid (or its limit, if higher — a sell priced under the bid fills at the bid). At a
+ *      PAPER account (LiveVenue.paper: the venue's own test environment, no real money there) the cap does not apply; everything else
+ *      here does, so a rehearsal there goes through the same door as the real thing;
  *   4. a MARKET order carries a worst price to the venue: a buy pays at most 2% over the ask, a sell takes at least 2% under the bid. What
  *      the account counts is what that worst price allows, and if a venue fills worse anyway, the real cost is counted, not the plan;
  *   5. the OWNER signed it — the exact size, the limit price, what it is worth and ten minutes — or an AGENT asked inside the trading limit
@@ -117,6 +119,8 @@ export interface LiveOrder {
   native: unknown;
   /** from a wallet: the transactions the wallet is asked to send, in order */
   walletTxs?: OrderState["walletTxs"];
+  /** at a PAPER account (the venue's own test environment): a rehearsal, no real money in it */
+  paper?: true | undefined;
 }
 
 /** what this door uses of the engine, besides what the money door uses */
@@ -341,7 +345,8 @@ export class LiveOrders {
     const notional = notionalOf(mk, qty, price);
     if (mk.minNotional !== undefined && notional < mk.minNotional - 1e-9) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is worth ${usd(mk.minNotional)}`, detail: { minNotional: mk.minNotional } });
     const maxUsd = side === "buy" && worstPrice !== undefined ? notionalOf(mk, qty, worstPrice) : notional;
-    if (!uncapped && maxUsd > w.capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: v.id, message: `${usd(maxUsd)} is more than the most one order may be on this server (${usd(w.capUsd)}). It is set when the server starts: --live-cap`, detail: { capUsd: w.capUsd, orderUsd: maxUsd } });
+    // the server's cap bounds real money: a paper account holds none, so an order there is bounded by the owner's limits alone
+    if (!uncapped && !v.paper && maxUsd > w.capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: v.id, message: `${usd(maxUsd)} is more than the most one order may be on this server (${usd(w.capUsd)}). It is set when the server starts: --live-cap`, detail: { capUsd: w.capUsd, orderUsd: maxUsd } });
     return { f, v: v as Plan["v"], m: mk, side, type, qty, limitPrice, price, notional, ...(worstPrice !== undefined ? { worstPrice } : {}), ...(stopPrice !== undefined ? { stopPrice } : {}), ...(tif ? { tif } : {}), ...(f.postOnly === "true" ? { postOnly: true } : {}), ...(f.reduceOnly === "true" ? { reduceOnly: true } : {}), maxUsd };
   }
 
@@ -452,7 +457,7 @@ export class LiveOrders {
     const worth = (p.side === "buy" ? cents(p.maxUsd) : Math.floor(p.notional * 100 + 1e-6) / 100).toFixed(2);
     return {
       action: { type: "liveOrder", venue: p.v.id, symbol: p.m.symbol, side: p.side, orderType: p.type, qty: plain(p.qty), limitPrice: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stopPrice: p.stopPrice !== undefined ? plain(p.stopPrice) : "", tif: p.tif ?? "", postOnly: p.postOnly ? "true" : "", reduceOnly: p.reduceOnly ? "true" : "", maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS },
-      quote: { words: this.words(p), name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.m.note ? { note: p.m.note } : {}), capUsd: this.money()!.writes().capUsd },
+      quote: { words: this.words(p), name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.m.note ? { note: p.m.note } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) },
     };
   }
 
@@ -476,7 +481,7 @@ export class LiveOrders {
     // an order the venue's place rule refuses from here raises no card and holds nothing of the limit
     const line = await this.placeRule(p.v, p.side, p.reduceOnly, p.m.symbol);
     if (line) return line;
-    const flight = this.e.host.openFlight({ id: slug(who.agent.name), name: who.agent.name, code: who.agent.code }, `${this.words(p)} · real money`);
+    const flight = this.e.host.openFlight({ id: slug(who.agent.name), name: who.agent.name, code: who.agent.code }, `${this.words(p)} · ${p.v.paper ? "paper" : "real money"}`);
     if (this.e.host.policy().mode === "open") {
       const c = covers(spend, p.v.id, micro(p.maxUsd.toFixed(6)), now);
       if (c) return c;
@@ -490,7 +495,7 @@ export class LiveOrders {
     const worth = cents(p.maxUsd);
     const c = covers(spend, p.v.id, micro(worth.toFixed(2)), now);
     if (c) return c;
-    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `real order · ${p.type}${p.limitPrice !== undefined ? ` at ${plain(p.limitPrice)}` : ` near ${plain(p.price)}`}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)}` };
+    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `${p.v.paper ? "paper order (no real money)" : "real order"} · ${p.type}${p.limitPrice !== undefined ? ` at ${plain(p.limitPrice)}` : ` near ${plain(p.price)}`}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)}` };
     // the owner's answer signs the card's hash: it covers the agent's request AND the market, size, price and worth the owner is shown
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, symbol: p.m.symbol, qty: plain(p.qty), price: plain(p.price), worth: worth.toFixed(2) })));
     const intent: Intent = { kind: "trade", symbol: p.m.symbol, side: p.side, qty: p.qty };
@@ -675,7 +680,7 @@ export class LiveOrders {
   private words(p: Plan): string {
     const how = p.type === "limit" ? `limit ${plain(p.limitPrice!)}` : p.type === "stop" ? `stop at ${plain(p.stopPrice!)}` : p.type === "stop_limit" ? `stop at ${plain(p.stopPrice!)}, limit ${plain(p.limitPrice!)}` : "market";
     const flags = [p.tif ? p.tif.toUpperCase() : "", p.postOnly ? "post-only" : "", p.reduceOnly ? "reduce-only" : ""].filter(Boolean).join(", ");
-    return `${p.side} ${qtyText(p.qty)} ${p.m.base} at ${p.v.name} · ${how}${flags ? ` (${flags})` : ""} · about ${usd(p.notional)}`;
+    return `${p.v.paper ? "PAPER · " : ""}${p.side} ${qtyText(p.qty)} ${p.m.base} at ${p.v.name} · ${how}${flags ? ` (${flags})` : ""} · about ${usd(p.notional)}`;
   }
 
   /** The one venue call, and the order it becomes. `send`: another call than place — a venue's own close of a position. An order call whose
@@ -720,6 +725,7 @@ export class LiveOrders {
       ...(p.postOnly ? { postOnly: true } : {}),
       ...(p.reduceOnly ? { reduceOnly: true } : {}),
       ...(p.m.contractSize !== undefined ? { contractSize: p.m.contractSize } : {}),
+      ...(p.v.paper ? { paper: true as const } : {}),
       price: p.price,
       usd: Number(p.maxUsd.toFixed(6)),
       status: r.status,
@@ -743,7 +749,7 @@ export class LiveOrders {
     this.e.orders.unshift(order);
     this.polled.set(id, this.money()!.realNow());
     // the owner's envelope goes on the ledger with the order: a later run of the account then knows this instruction was taken
-    this.e.host.log({ kind: "order", venue: p.v.id, tool: "live order", outcome: lost ? "unconfirmed" : order.status, venueOrderId: r.ref, notionalUsd: p.notional, reason: `${id} · real money · ${this.words(p)}${lost ? ` · ${order.note}` : ""}`, native: r.native, signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}) });
+    this.e.host.log({ kind: "order", venue: p.v.id, tool: "live order", outcome: lost ? "unconfirmed" : order.status, venueOrderId: r.ref, notionalUsd: p.notional, reason: `${id} · ${p.v.paper ? "paper" : "real money"} · ${this.words(p)}${lost ? ` · ${order.note}` : ""}`, native: r.native, signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}) });
     if (DONE.has(order.status)) this.giveBack(order);
     this.line(order);
     if (isRefusal(answer)) return no(answer.code, { venue: p.v.id, message: `${answer.message} — the account keeps it as ${id}, looked for under its id until ${p.v.name} shows it or shows none`, detail: { ...(answer.detail ?? {}), order: id, unsure: true }, native: answer.native });
@@ -913,7 +919,7 @@ export class LiveOrders {
       return { ...planned, worstPrice, maxUsd: planned.side === "buy" ? notionalOf(planned.m, planned.qty, worstPrice) : planned.maxUsd };
     })();
     const capUsd = this.money()!.writes().capUsd;
-    if (p.maxUsd > capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: o.venue, message: `${usd(p.maxUsd)} is more than the most one order may be on this server (${usd(capUsd)}): the stop keeps the worst price it was placed with, ${plain(old!)}`, detail: { capUsd, orderUsd: p.maxUsd } });
+    if (!p.v.paper && p.maxUsd > capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: o.venue, message: `${usd(p.maxUsd)} is more than the most one order may be on this server (${usd(capUsd)}): the stop keeps the worst price it was placed with, ${plain(old!)}`, detail: { capUsd, orderUsd: p.maxUsd } });
     return { p, change: { ...(given(a.qty) ? { qty: p.qty } : {}), ...(given(a.limitPrice) ? { limitPrice: p.limitPrice } : {}), ...(given(a.stopPrice) ? { stopPrice: p.stopPrice } : {}) } };
   }
 
@@ -946,7 +952,7 @@ export class LiveOrders {
     if (isRefusal(r)) return r;
     const p = r.p;
     const worth = (p.side === "buy" ? cents(p.maxUsd) : Math.floor(p.notional * 100 + 1e-6) / 100).toFixed(2);
-    return { action: { type: "liveAmend", ...a, maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS }, quote: { words: `${o.id}: ${this.words(p)}`, name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), capUsd: this.money()!.writes().capUsd } };
+    return { action: { type: "liveAmend", ...a, maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS }, quote: { words: `${o.id}: ${this.words(p)}`, name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) } };
   }
 
   /** Change an open order in place. The owner: held to what was signed. An agent: only its own order; what the order becomes worth MORE is
@@ -987,7 +993,7 @@ export class LiveOrders {
     const extra = cents(more);
     const c = covers(spend, o.venue, micro(extra.toFixed(2)), now, { window: false });
     if (c) return c;
-    const flight = this.e.host.openFlight({ id: slug(who.agent!.name), name: who.agent!.name, code: who.agent!.code }, `change ${o.id}: ${this.words(p)} · real money`);
+    const flight = this.e.host.openFlight({ id: slug(who.agent!.name), name: who.agent!.name, code: who.agent!.code }, `change ${o.id}: ${this.words(p)} · ${o.paper ? "paper" : "real money"}`);
     const offer = { payee: o.venueName, payTo: o.symbol, amount: `${o.id} → ${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `change an order · ${this.words(p)}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${usd(extra)} more than now` };
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, qty: plain(p.qty), limit: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stop: p.stopPrice !== undefined ? plain(p.stopPrice) : "", worth: worth.toFixed(2) })));
     const card = this.e.host.raiseCard(flight.no, { account: o.venue, intent: { kind: "trade", symbol: p.m.symbol, side: p.side, qty: p.qty }, usd: extra, reason: `${who.agent!.name} asks to change ${o.id}: ${this.words(p)}`, why: "live", action: a as AgentLiveAmendAction, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, approval: spend.id });
@@ -1152,10 +1158,10 @@ export class LiveOrders {
     if (line) return line;
     const capUsd = m.writes().capUsd;
     const worthUsd = cents(p.maxUsd);
-    const overCap = p.maxUsd > capUsd + 1e-9;
+    const overCap = !v.paper && p.maxUsd > capUsd + 1e-9;
     return {
       action: { type: "liveClose", venue: v.id, symbol: p.m.symbol, qty: f.qty === "" ? "" : plain(qty) },
-      quote: { words: `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} at ${v.name}: ${this.words(p)}`, venue: v.id, venueName: v.name, symbol: p.m.symbol, name: p.m.name, side: p.side, qty, ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), price: p.price, worthUsd, capUsd, overCap, ...(overCap ? { why: `${usd(worthUsd)} is more than the most one order may be on this server (${usd(capUsd)}): close part of it, or start the server with a higher --live-cap` } : {}) },
+      quote: { words: `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} at ${v.name}: ${this.words(p)}`, venue: v.id, venueName: v.name, symbol: p.m.symbol, name: p.m.name, side: p.side, qty, ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), price: p.price, worthUsd, capUsd, overCap, ...(v.paper ? { paper: true as const } : {}), ...(overCap ? { why: `${usd(worthUsd)} is more than the most one order may be on this server (${usd(capUsd)}): close part of it, or start the server with a higher --live-cap` } : {}) },
     };
   }
 
@@ -1165,9 +1171,9 @@ export class LiveOrders {
   private closeCard(a: CloseFields | AgentLiveCloseAction, p: Plan, qty: number, who: { signer: string; agent?: AgentKey | undefined; envelope?: Envelope | undefined; hash: Hex }, spend?: SpendApproval): Outcome {
     const agent = who.agent!;
     const now = Date.parse(this.e.host.now());
-    const flight = this.e.host.openFlight({ id: slug(agent.name), name: agent.name, code: agent.code }, `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} · real money`);
+    const flight = this.e.host.openFlight({ id: slug(agent.name), name: agent.name, code: agent.code }, `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} · ${p.v.paper ? "paper" : "real money"}`);
     const worth = cents(p.maxUsd);
-    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `close · ${p.side} ${qtyText(qty)} ${p.m.base}`, protocol: "real order · a close at market", network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${spend ? "it sells what is held, and counts against the trading limit like a sell order" : "it only shrinks what is held"}` };
+    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `close · ${p.side} ${qtyText(qty)} ${p.m.base}`, protocol: `${p.v.paper ? "paper order (no real money)" : "real order"} · a close at market`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${spend ? "it sells what is held, and counts against the trading limit like a sell order" : "it only shrinks what is held"}` };
     // the owner's answer signs the card's hash: the agent's request AND the market and size the owner is shown
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, symbol: p.m.symbol, qty: plain(qty), worth: worth.toFixed(2) })));
     const card = this.e.host.raiseCard(flight.no, { account: p.v.id, intent: { kind: "trade", symbol: p.m.symbol, side: p.side, qty }, usd: worth, reason: `${agent.name} asks to close ${qtyText(qty)} ${p.m.base} of ${p.m.name}`, why: "live", action: a as AgentLiveCloseAction, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, ...(spend ? { approval: spend.id } : {}) });
@@ -1422,6 +1428,8 @@ export interface CloseQuote {
   /** worth more than the most one order may be on this server: the door refuses it as it stands */
   overCap: boolean;
   why?: string;
+  /** at a PAPER account: a rehearsal, no real money */
+  paper?: true;
 }
 
 /** what the owner is shown before signing an order */
@@ -1438,6 +1446,8 @@ export interface OrderQuote {
   worstPrice?: number;
   note?: string;
   capUsd: number;
+  /** at a PAPER account: a rehearsal, no real money, and the cap does not apply */
+  paper?: true;
 }
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");

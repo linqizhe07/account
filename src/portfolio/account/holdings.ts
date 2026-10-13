@@ -34,7 +34,7 @@ import type { AccountPage } from "./exchange.ts";
 
 type PageVenue = AccountPage["venues"][number];
 /** what byAsset reads of a venue on the account page: its balances, and what decides where its dollars can go */
-export type HoldingsVenue = Pick<PageVenue, "id" | "name" | "holdings"> & Partial<Pick<PageVenue, "trade" | "liveCan" | "readOnlyBecause" | "address" | "proven" | "stale">>;
+export type HoldingsVenue = Pick<PageVenue, "id" | "name" | "holdings"> & Partial<Pick<PageVenue, "trade" | "liveCan" | "readOnlyBecause" | "address" | "proven" | "stale" | "paper">>;
 
 /** one venue's part of a row */
 export interface AssetLine {
@@ -180,7 +180,8 @@ export function byAsset(venues: readonly HoldingsVenue[], opts: ByAssetOptions =
   let cashUsd = 0;
   let stableUsd = 0;
   let inTransitUsd = 0;
-  for (const v of venues) {
+  // a paper account's balance is not money: it is not a row, not ready, not in the total
+  for (const v of venues.filter((x) => !x.paper)) {
     const watched = isWatched(v);
     for (const h of v.holdings ?? []) {
       if (!(h.amount > 0) && !(h.usd > 0)) continue;

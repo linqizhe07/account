@@ -197,6 +197,8 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   const stocksOpen = stockSession(now).open;
   if (!stocksOpen) for (const [symbol, qty] of [["AAPL", 0.5], ["NVDA", 1]] as const) world.broker.add("stocks", symbol, qty);
   ok("Stand-in Broker", await own({ type: "connectVenue", venue: "broker", connector: "live:standin-broker", label: "Stand-in Broker", credentialRef: "" }));
+  // a paper account beside the real ones: its chip says Paper, its balance is not in the net worth, its orders are rehearsals
+  ok("Stand-in Paper", await own({ type: "connectVenue", venue: "paper", connector: "live:standin-paper", label: "Stand-in Paper", credentialRef: "" }));
   ok("the agents' leverage cap", await own({ type: "setPolicy", change: "maxLeverage", value: "5" }));
 
   // ---- the owner's own trading: the statement's first lines ----
@@ -336,7 +338,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   every(o.tickMs ?? 3_000, () => tick(world));
   every(o.agentMs ?? 15_000, agentLooks);
 
-  const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
+  const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", "paper", walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
   return {
     url: server.url,
     code,

@@ -69,6 +69,9 @@ export interface Account {
   noTradeBecause?: string | undefined;
   /** why a live venue is only ever read */
   readOnlyBecause?: string | undefined;
+  /** a live venue that is a PAPER account (live/types.ts LiveSource.paper): the venue's own test environment, no real money — its balance
+   * is not counted as money, its orders are rehearsals */
+  paper?: true | undefined;
 }
 
 /** `event`: shares of a prediction-market outcome, worth $1 or $0 at settlement · `earn`: money in a venue's earn product (a vault, OKX's

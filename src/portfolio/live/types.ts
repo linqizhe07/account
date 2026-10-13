@@ -65,6 +65,11 @@ export interface LiveSource {
   /** how money is put to earn here (earn.ts: the mm wallet's vaults), when the source itself has a way; an exchange's earn is reached
    * through its trader's own client instead (exchange-trade.ts exchangeEarnHook) */
   earner?: LiveEarner | undefined;
+  /** a PAPER account: the venue's own test environment (Hyperliquid's testnet), reached through the venue's real interface and holding no
+   * real money. Its balance is not money (holdings, net worth and the cash ready leave it out), its prices are not the market's (Markets
+   * takes no row's price from it, the comparison leaves it out), and its orders are rehearsals: held to the owner's signature or an agent's
+   * limit and to the owner's mode as every order is, and not to the server's real-money cap */
+  paper?: true | undefined;
 }
 
 export interface HttpReply {
