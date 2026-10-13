@@ -1454,6 +1454,26 @@ export function publicSources(): PublicSource[] {
     },
     notes: (o) => (!o.q && shownTokens && shownTokens.of < shownTokens.total ? [`Stand-in Stock Tokens: ${shownTokens.of} of ${shownTokens.total} shown · search for the rest`] : []),
   };
+  // the public side of US stocks, as Cboe's delayed quotes are (public-stocks.ts): read-only, the session from the market calendar, the
+  // broker to connect to trade; a paper account prices its shares at it
+  const pubstocks: PublicSource = {
+    id: "standin-stocks-public",
+    name: "Stand-in Delayed Quotes",
+    kind: "stocks",
+    connectTo: "standin-broker",
+    connector: "live:standin-broker",
+    readOnly: "a stand-in's delayed quotes, 15 minutes behind the market: a US stock trades at the connected broker, or in a paper account",
+    listings: async (o) => {
+      const session = regularSession(Date.now());
+      const matching = STOCK_TOKENS.filter((t) => !o.q || `${t.symbol} ${t.name}`.toLowerCase().includes(o.q.toLowerCase()));
+      return matching.slice(0, o.limit).map((t) => {
+        const p = w().prices.now(t.key);
+        const d = w().prices.day(t.key);
+        return { symbol: t.symbol, name: t.name.replace(/ Stock Token$/i, ""), kind: "stock" as MarketKind, base: t.symbol, quote: "USD", price: toStep(p, 0.01), bid: toStep(p * 0.9995, 0.01, "floor"), ask: toStep(p * 1.0005, 0.01, "ceil"), open: true, types: [], session, ...(session.open ? {} : { note: "the US stock market is closed; the quote is from the close (a stand-in)" }), changePct24h: Number(d.changePct24h.toFixed(2)), venueName: "Stand-in · 15 min delayed" };
+      });
+    },
+    notes: () => ["Stand-in Delayed Quotes: US stocks fifteen minutes behind the market (a stand-in: nothing here is real)."],
+  };
   // an exchange that does not serve this location: the page shows its own words, and nothing looks for a way around it
   const geo: PublicSource = {
     id: "standin-geo",
@@ -1463,7 +1483,8 @@ export function publicSources(): PublicSource[] {
     connector: "live:standin-geo",
     listings: async () => no("E_VENUE_GEOBLOCKED", { venue: "standin-geo", message: "Stand-in Geo Exchange does not serve this location: that is its own rule, and the account does not look for a way around it", native: { status: 451, said: '{"code":0,"msg":"Service unavailable from a restricted location (stand-in)."}' } }),
   };
-  return [pubex, pubevents, pubperps, tokens, geo];
+  // the stocks before the tokens, as the real list is: a paper account's "NVDA" is the share, not the token
+  return [pubex, pubevents, pubperps, pubstocks, tokens, geo];
 }
 
 // ---- the network, the chain and the payees, as the stand-in answers them: nothing leaves the process -------------------------------------

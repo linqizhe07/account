@@ -111,7 +111,8 @@ describe("a paper account: opened with paper money, its book in the home", () =>
   it("lists what the public sources list, in dollars, the first source speaking for a symbol two list; one market priced fresh, with the account's own steps and rule", async () => {
     const { t } = await open(home());
     const all = ok(await t.markets(""));
-    expect(all.map((m) => m.symbol)).toEqual(["BTC/USD", "ETH/USD", "SOL/USD", "BTC-PERP", "ETH-PERP", "KXFED-25DEC-T4.00:YES", "NVDA"]);
+    // the sources in turn, each one's first market, then each one's second: every kind is in the few to start from
+    expect(all.map((m) => m.symbol)).toEqual(["BTC/USD", "SOL/USD", "BTC-PERP", "KXFED-25DEC-T4.00:YES", "NVDA", "ETH/USD", "ETH-PERP"]);
     // Kraken's BTC/USD, not Coinbase's; no euro market, no dated future
     expect(all.find((m) => m.symbol === "BTC/USD")!.price).toBe(60000);
     expect(ok(await t.markets("BTC")).map((m) => m.symbol)).toEqual(["BTC/USD", "BTC-PERP"]);
@@ -272,5 +273,203 @@ describe("the book", () => {
     expect(refusal(await openLive({ venue: "paper-2", connector: "live:paper", label: "", reference: "a lot" }, deps)).code).toBe("E_ACCOUNT_CREDENTIAL");
     const state: OrderState | Refusal = await opened.source.trader!.place(order({ qty: 0.01 }));
     expect(ok(state).status).toBe("filled");
+  });
+});
+
+// ---- V2: US stocks in their window, perpetuals with leverage, funding and liquidation, event contracts settled ------------------------
+
+import { fromEt } from "../../src/portfolio/account/calendar.ts";
+import { liquidationPriceOf } from "../../src/portfolio/live/paper.ts";
+import { usSession } from "../../src/portfolio/live/public-stocks.ts";
+
+/** a Cboe-like stocks source (its id is what the paper account's window rule looks for), its session from the calendar at the clock */
+function cboeLike(rows: Row[]) {
+  const s = source("cboe", "Cboe", "stocks", rows, { readOnly: "a stand-in's delayed quotes" });
+  s.listings = async (o) => {
+    const Q = (o.q ?? "").trim().toUpperCase();
+    return (Q ? s.rows.filter((m) => m.symbol.toUpperCase().includes(Q) || m.base.toUpperCase().includes(Q)) : s.rows).slice(0, o.limit).map((m) => ({ ...m, session: usSession(clock()), venueName: "Cboe · 15 min delayed" }));
+  };
+  return s;
+}
+
+describe("US stocks: Cboe's delayed quote, only inside the delayed window", () => {
+  it("a market order fills inside the window (09:45–16:15 New York) at the quote and is held as shares; out of it no market order is taken, a limit order rests and is judged when the window opens", async () => {
+    now = fromEt(2026, 10, 7, 11, 0);
+    try {
+      const h = home();
+      const cboe = cboeLike([row("AAPL", "stock", "AAPL", "USD", 340, { volumeUsd24h: undefined, changePct24h: 0.25 })]);
+      const { t, source: src } = await open(h, "paper-1", { all: [cboe] });
+      expect(src.trader!.kinds).toContain("stock");
+      const m = ok(await t.market("AAPL"));
+      expect(m).toMatchObject({ kind: "stock", base: "AAPL", quote: "USD", types: ["market", "limit"], session: { open: true }, sellsReduce: true, qtyStep: 0.000001 });
+      expect(m.note).toContain("a US stock at Cboe's delayed quote");
+      const bought = ok(await t.place(order({ symbol: "AAPL", qty: 2 })));
+      expect(bought).toMatchObject({ status: "filled", avgPrice: 340.068, filledQty: 2 });
+      const line = (await src.read()).find((b) => b.asset === "AAPL")!;
+      expect(line).toMatchObject({ amount: 2, usd: 680, class: "equity", where: "paper · AAPL from Cboe · 15 min delayed" });
+      expect(refusal(await t.place(order({ symbol: "AAPL", side: "sell", qty: 5 }))).message).toContain("sells only what the paper account holds");
+      // after the close: the session is over, the quote is the close, no market order
+      now = fromEt(2026, 10, 7, 16, 20);
+      const closed = ok(await t.market("AAPL"));
+      expect(closed.types).toEqual(["limit"]);
+      expect(closed.session).toMatchObject({ open: false });
+      expect(closed.note).toContain("no market order now");
+      const refused = refusal(await t.place(order({ symbol: "AAPL", qty: 1 })));
+      expect([refused.code, refused.message]).toEqual(["E_VENUE_MARKET_CLOSED", expect.stringContaining("only from 09:45 to 16:15 New York")]);
+      // a limit above the ask rests all the same: it is judged only inside the window, and fills then at its limit
+      const resting = ok(await t.place(order({ symbol: "AAPL", type: "limit", limitPrice: 345, qty: 1 })));
+      expect(resting.status).toBe("open");
+      expect((resting.native as { note?: string }).note).toContain("resting until 09:45 New York");
+      now = fromEt(2026, 10, 8, 9, 40);
+      expect(ok(await t.status(resting.ref, "AAPL")).status).toBe("open");
+      now = fromEt(2026, 10, 8, 9, 50);
+      expect(ok(await t.status(resting.ref, "AAPL"))).toMatchObject({ status: "filled", avgPrice: 345 });
+      expect(book(h).holdings["AAPL"]).toMatchObject({ qty: 3 });
+      // an IOC limit out of the window fills nothing
+      now = fromEt(2026, 10, 10, 12, 0);
+      expect(ok(await t.place(order({ symbol: "AAPL", type: "limit", limitPrice: 345, qty: 1, tif: "ioc" }))).status).toBe("canceled");
+    } finally {
+      now = NOW;
+    }
+  });
+});
+
+describe("perpetuals with leverage: isolated margin, funding each hour, liquidation at the mark", () => {
+  const leveraged = () => {
+    const s = sources();
+    const hl = source("hyperliquid", "Hyperliquid", "exchange", [row("BTC-PERP", "perp", "BTC", "USDC", 60005, { fundingRate: 0.0001, maxLeverage: 40 }), row("ETH-PERP", "perp", "ETH", "USDC", 2001)]);
+    return { all: [s.kraken, hl], hl };
+  };
+
+  it("the leverage set for a market bounds the margin put up (1x unless set, at most the source's); the position carries it and its liquidation price; a change with a position open moves margin to or from cash", async () => {
+    const h = home();
+    const { hl, all } = leveraged();
+    const { t } = await open(h, "paper-1", { all });
+    expect(ok(await t.market("BTC-PERP"))).toMatchObject({ maxLeverage: 40, marginModes: ["isolated"] });
+    expect(refusal(await t.setLeverage!("BTC-PERP", 41)).code).toBe("E_VENUE_ORDER_INVALID");
+    expect(refusal(await t.setLeverage!("BTC/USD", 2)).message).toContain("perpetual");
+    expect(refusal(await t.setLeverage!("BTC-PERP", 2, "cross")).message).toContain("isolated margin");
+    expect(ok(await t.setLeverage!("BTC-PERP", 10))).toMatchObject({ leverage: 10, marginMode: "isolated" });
+    expect(book(h).leverage).toEqual({ "BTC-PERP": 10 });
+    const opened = ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
+    expect(opened).toMatchObject({ status: "filled", avgPrice: 60017.001 });
+    const p = book(h).positions["BTC-PERP"]!;
+    expect(p).toMatchObject({ side: "long", qty: 0.1, entryPrice: 60017.001, marginUsd: 600.17001, leverage: 10, fundingUsd: 0, fundedAt: NOW });
+    expect(book(h).cashUsd).toBeCloseTo(10000 - 600.17001 - 6.0017001, 6);
+    const pos = ok(await t.positions!())[0]!;
+    expect(pos).toMatchObject({ leverage: 10, marginMode: "isolated", markPrice: 60005 });
+    expect(pos.liquidationPrice).toBeCloseTo((60017.001 * 0.1 - 600.17001) / (0.1 * (1 - 1 / 80)), 3);
+    expect(liquidationPriceOf({ side: "long", qty: 1, entryPrice: 100, marginUsd: 100 }, 1)).toBeUndefined();
+    // 20x on the open position: half the initial margin goes back to cash
+    expect(ok(await t.setLeverage!("BTC-PERP", 20))).toMatchObject({ leverage: 20 });
+    expect(book(h).positions["BTC-PERP"]).toMatchObject({ marginUsd: 300.085005, leverage: 20 });
+    expect(book(h).cashUsd).toBeCloseTo(10000 - 300.085005 - 6.0017001, 6);
+    // back to 2x needs margin from cash; more than the cash there is refused
+    expect(ok(await t.setLeverage!("BTC-PERP", 2))).toMatchObject({ leverage: 2 });
+    expect(book(h).positions["BTC-PERP"]).toMatchObject({ marginUsd: 3000.85005 });
+    ok(await t.place(order({ symbol: "BTC-PERP", side: "sell", qty: 0.1, reduceOnly: true })));
+    expect(book(h).positions).toEqual({});
+    void hl;
+  });
+
+  it("funding: each whole hour the position stands, the notional at the mark times the source's hourly rate, paid out of the margin by the long and received by the short; liquidation when the margin left falls to half the initial margin at the most leverage", async () => {
+    const h = home();
+    const { hl, all } = leveraged();
+    const { t, source: src } = await open(h, "paper-1", { all });
+    try {
+      ok(await t.setLeverage!("BTC-PERP", 10));
+      ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
+      const cash = book(h).cashUsd;
+      // two hours on: funding for two hours at 0.01% an hour on $6,000.50 at the mark
+      now = NOW + 2 * 3_600_000 + 60_000;
+      const rows = await src.read();
+      const margin = rows.find((b) => b.where?.startsWith("paper margin"))!;
+      expect(margin.where).toBe("paper margin · long 0.1 BTC-PERP · 10x · −$1.20 unrealised · −$1.20 funding");
+      expect(book(h).positions["BTC-PERP"]).toMatchObject({ marginUsd: 598.96991, fundingUsd: 1.2001, fundedAt: NOW + 2 * 3_600_000 });
+      // the same hour again charges nothing
+      await src.read();
+      expect(book(h).positions["BTC-PERP"]!.fundingUsd).toBe(1.2001);
+      expect(ok(await t.positions!())[0]!.native).toMatchObject({ fundingUsd: 1.2001, marginUsd: 598.96991, maxLeverage: 40 });
+      // the mark falls: the margin left (598.97 − 501.70) is above the maintenance margin (5,500 / 80): the position stands
+      reprice(hl, "BTC-PERP", 55000);
+      await src.read();
+      expect(book(h).positions["BTC-PERP"]).toBeDefined();
+      // further: the margin left is gone, the position is liquidated at the mark, nothing comes back, the fill says so
+      reprice(hl, "BTC-PERP", 54000);
+      await src.read();
+      expect(book(h).positions).toEqual({});
+      expect(book(h).cashUsd).toBeCloseTo(cash, 6);
+      const last = book(h).fills.at(-1)!;
+      expect(last).toMatchObject({ symbol: "BTC-PERP", side: "sell", qty: 0.1, price: 54000 });
+      expect(last.note).toContain("liquidated at the mark (54000)");
+      expect(Object.values(book(h).orders).at(-1)).toMatchObject({ status: "filled", reduceOnly: true, symbol: "BTC-PERP" });
+      // a short at 1x (the market's most is 1x, so the maintenance margin is half the notional) is liquidated once the price has risen by a third
+      const short = ok(await t.place(order({ symbol: "ETH-PERP", side: "sell", qty: 1 })));
+      expect(short.status).toBe("filled");
+      expect(ok(await t.positions!())[0]!.liquidationPrice).toBeCloseTo((2000.5998 * 2) / 1.5, 3);
+      reprice(hl, "ETH-PERP", 2600);
+      await src.read();
+      expect(book(h).positions["ETH-PERP"]).toBeDefined();
+      reprice(hl, "ETH-PERP", 2700);
+      await src.read();
+      expect(book(h).positions).toEqual({});
+      // the margin and the fee went out when the short was opened; what was left of the margin at the mark (2000.5998 − 699.4002) came
+      // back less the fee (0.10% of 2,700)
+      expect(book(h).fills.at(-1)!.note).toContain("liquidated");
+      expect(book(h).cashUsd).toBeCloseTo(cash - 2000.5998 - 2.0005998 + (2000.5998 - 699.4002 - 2.7), 3);
+    } finally {
+      now = NOW;
+    }
+  });
+});
+
+describe("event contracts settled by their venue", () => {
+  it("a contract held is paid out at what its venue says it paid once the market settles — asked every ten minutes before the close, every minute after — and a market closed without a settlement is said to be waiting", async () => {
+    const h = home();
+    const s = sources();
+    let state: { settled: false; closed?: boolean } | { settled: true; payout: number; at?: string } = { settled: false };
+    const asked: string[] = [];
+    s.kalshi.settlement = async (symbol) => {
+      asked.push(symbol);
+      return state;
+    };
+    const { t, source: src } = await open(h, "paper-1", { all: s.all });
+    try {
+      const bought = ok(await t.place(order({ symbol: "KXFED-25DEC-T4.00:YES", qty: 10 })));
+      expect(bought).toMatchObject({ status: "filled", avgPrice: 0.63 });
+      const cash = book(h).cashUsd;
+      await src.read();
+      expect(asked).toEqual(["KXFED-25DEC-T4.00:YES"]);
+      // within ten minutes, not asked again
+      now = NOW + 5 * 60_000;
+      await src.read();
+      expect(asked).toHaveLength(1);
+      state = { settled: false, closed: true };
+      now = NOW + 11 * 60_000;
+      const rows = await src.read();
+      expect(asked).toHaveLength(2);
+      expect(rows.find((b) => b.class === "event")!.where).toContain("closed, waiting for its settlement");
+      expect(book(h).markets["KXFED-25DEC-T4.00:YES"]!.closed).toBe(true);
+      state = { settled: true, payout: 1, at: "2026-10-08T00:00:00.000Z" };
+      now = NOW + 22 * 60_000;
+      const after = await src.read();
+      expect(after.find((b) => b.class === "event")).toBeUndefined();
+      expect(book(h).cashUsd).toBeCloseTo(cash + 10, 6);
+      expect(book(h).holdings).toEqual({});
+      const fill = book(h).fills.at(-1)!;
+      expect(fill).toMatchObject({ symbol: "KXFED-25DEC-T4.00:YES", side: "sell", qty: 10, price: 1, feeUsd: 0 });
+      expect(fill.note).toContain("settled by Kalshi: $1.00 a contract to this side, which won");
+      expect(fill.realizedUsd).toBeCloseTo(10 - 6.3063, 6);
+      expect(book(h).markets["KXFED-25DEC-T4.00:YES"]!.settled).toEqual({ payout: 1, at: "2026-10-08T00:00:00.000Z" });
+      // a source that says no settlements never settles here: the contract stays, marked at its price
+      const ev = row("pm-x:Yes", "event", "Yes", "pUSD", 0.4, { bid: 0.39, ask: 0.41, group: { id: "0xabc", title: "X?" }, outcome: "Yes" });
+      const pm = source("polymarket", "Polymarket", "events", [ev], { events: async () => [{ ...ev }] });
+      const other = await open(h, "paper-2", { all: [...s.all, pm] });
+      ok(await other.t.place(order({ symbol: "pm-x:Yes", qty: 5 })));
+      now = NOW + 60 * 60_000;
+      expect((await other.source.read()).find((b) => b.class === "event")).toMatchObject({ amount: 5, usd: 2 });
+    } finally {
+      now = NOW;
+    }
   });
 });

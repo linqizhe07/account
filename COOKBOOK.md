@@ -143,7 +143,7 @@ agent 读同样的东西：`portfolio_holdings {cost}`、`portfolio_history {ran
 rail 上点 "Markets"，或在顶栏搜索里打几个字母。一张表里两样东西：
 
 - **你接上的场所**列的市场；
-- **你没接的场所**不带钥匙读来的真实公开行情：Kraken、Coinbase、OKX、Binance、Bybit 的公开 ticker，Hyperliquid 的永续（"Connect to trade" 接的是 Hyperliquid 的 API 钱包连接；MetaMask Agent Wallet 的 `mm perps` 也能下），Kalshi 名单上 12 个 series 的市场、Polymarket 按 24 小时成交额最忙的事件和 Polymarket US 六个分类里最热的市场（下面 **Predictions**），Robinhood 的 Stock Token 清单，九个源的 pre-IPO 永续（下面 **Pre-IPO**）。这些行写 **"Connect to trade"**，点了就是那家的连接表单；接上以后，开着的下单票自动换成它。
+- **你没接的场所**不带钥匙读来的真实公开行情：Kraken、Coinbase、OKX、Binance、Bybit 的公开 ticker，Hyperliquid 的永续（"Connect to trade" 接的是 Hyperliquid 的 API 钱包连接；MetaMask Agent Wallet 的 `mm perps` 也能下），Kalshi 名单上 12 个 series 的市场、Polymarket 按 24 小时成交额最忙的事件（搜索走 Gamma 的全站搜索，任何市场都搜得到）和 Polymarket US 六个分类里最热的市场（下面 **Predictions**），**美股**按 Cboe 自己的延迟报价（晚 15 分钟，行上写着；"Connect to trade" 接券商），Robinhood 的 Stock Token 清单，Gate 上的 **xStocks**（Gate 的现货行情加 xStocks 自己的交易状态；接 Gate 的钥匙就能交易）和 **Ondo** 的股票代币（LI.FI 的报价；从接上的钱包买卖），九个源的 pre-IPO 永续（下面 **Pre-IPO**）。这些行写 **"Connect to trade"**，点了就是那家的连接表单；接上以后，开着的下单票自动换成它。
 
 Markets 只管看和挑，不管账户：接上、拔掉、对 agent 开关、换钥匙都在 Account › Venues（第 2 条）。
 
@@ -303,8 +303,8 @@ agent 只能撤自己下的单；你能撤任何单（撤单从不出卡；你�
 **Paper account（什么都不用接）**
 
 - 开：Connect an account → "Paper account"（Portfolio 空着的时候那句 "start a paper account" 也是它）→ 起个名（Momentum）、写一笔起始资金（空着是 $10,000）→ Connect（一次签名，不问任何场所）。可以开好几个，各有各的名字和账本：`~/.buyer-agent-demo/paper/<id>/book.json`，id 是 `paper-<名字>`（没起名就是 `paper-1`、`paper-2`）；同一个 id 再接是接着记，不是重开；重启照旧。
-- 它交易什么：Markets 不带钥匙读到的全部公开行情——交易所的币（Kraken、Coinbase、OKX、Binance、Bybit）、Hyperliquid 的永续、Kalshi 和 Polymarket 的事件合约、Robinhood 的代币化股票、pre-IPO 永续。市场的写法是那家公开源自己的（Kraken 的 `BTC/USD`、Hyperliquid 的 `BTC-PERP`、Kalshi 的 ticker、Polymarket 的 `pm:…`）；两家都列的同一个符号，排在前面的那家说了算。美股还没有不带钥匙的行情源，所以先没有美股。
-- 成交规则是账户自己定的，票上、Details 里、MCP 答复里都写着：市价单按公开报价的卖一（买）/ 买一（卖）整单成交，受门给的最差价约束；限价单挂着，报价穿过限价时按限价成交——"穿过"是在账户看它的时候判的（读余额、查单、看持仓、页面每次刷新），没人看就不判；IOC 没穿过就撤；手续费 0.10%；不模拟深度、部分成交和滑点；挂单不冻结资金，穿过时钱不够就拒。现货、代币、事件合约只能卖持有的；永续 1 倍：名义额作保证金、按报价标记未实现盈亏、只减仓或反向单平仓（超过仓位的反向单拒掉，不翻仓）、不收资金费、不强平；事件合约按价格标记、不结算。
+- 它交易什么：Markets 不带钥匙读到的全部公开行情，四类都有——**美股**（Cboe 自己的延迟报价，比市场晚 15 分钟，Stocks tab 里不接券商也能看到；行上写着 delayed）、**crypto**（Kraken、Coinbase、OKX、Binance、Bybit 的现货，Hyperliquid 的永续，pre-IPO 永续）、**RWA**（Robinhood 的 Stock Tokens，Gate 上的 xStocks，Ondo 的股票代币按 LI.FI 的报价）、**预测市场**（Kalshi、Polymarket、Polymarket US 的事件合约；Polymarket 搜任何市场都能搜到——Gamma 的全站搜索）。市场的写法是那家公开源自己的（Cboe 的 `AAPL`、Kraken 的 `BTC/USD`、Hyperliquid 的 `BTC-PERP`、Gate 的 `AAPLX/USDT`、Kalshi 的 ticker、Polymarket 的 `<slug>:Yes`）；两家都列的同一个符号，排在前面的那家说了算。
+- 成交规则是账户自己定的，票上、Details 里、MCP 答复里都写着：市价单按公开报价的卖一（买）/ 买一（卖）整单成交，受门给的最差价约束；限价单挂着，报价穿过限价时按限价成交——"穿过"是在账户看它的时候判的（读余额、查单、看持仓、页面每次刷新），没人看就不判；IOC 没穿过就撤；手续费 0.10%；不模拟深度、部分成交和滑点；挂单不冻结资金，穿过时钱不够就拒。**美股**只在 Cboe 的延迟报价来自盘中的那段时间成交——纽约时间 09:45 到 16:15（常规时段往后挪 15 分钟），这段之外不收市价单（票上只剩 Limit），限价单挂着等窗口开了再判，和券商持单等开盘一个意思。现货、代币、股票、事件合约只能卖持有的。**永续**是逐仓：杠杆按市场设（`portfolio_live_leverage` / 票上的 Leverage，1 倍起、最多到那家源公布的上限），名义额除以杠杆作保证金、按报价标记未实现盈亏、只减仓或反向单平仓（超过仓位的反向单拒掉，不翻仓）；**资金费**每整小时按那家源当时显示的费率、按标记价的名义额从保证金里扣（Hyperliquid 的费率按小时，别家是 8 小时一期，按八分之一算；多头在费率为正时付、空头收）；**强平**：保证金减亏损减已付资金费跌到维持保证金（标记价名义额除以两倍最大杠杆，即最大杠杆下初始保证金的一半）就按标记价平掉，剩下的扣掉手续费退回现金，成交记录写 "liquidated"（1 倍多头永远不会被强平，1 倍空头涨三分之一会）。**事件合约**按价格标记，场所结算后按场所付的钱付掉（赢的一边每张 $1、输的 $0，Polymarket 看 Gamma 的 resolved 和 outcomePrices，Kalshi 看 result，Polymarket US 看它的 settlement 接口；每十分钟问一次，截止后每分钟一次），合约从账本里拿掉；截止了还没结算的标 "waiting for its settlement"。
 - 页面：Venues 一行标 Paper，余额不进净值（标题写 "paper account not counted"）；Trade 的 Where 里它排在真场所后面，公开行照样给 "Connect to trade"；只有它一家有的市场整行标 Paper、按钮写 "Paper trade"；Statement 标 Paper。
 - agent：第 3 条给额度时场所填它的 id（`paper-momentum`）；`portfolio_venues` 里 `live:paper` 永远 connectable、`needs: none`，agent 可以用 `portfolio_ask {kind: "venue", venue: "paper"}` 请你开一个。
 
@@ -326,8 +326,10 @@ portfolio_live_markets   {venue: "paper-momentum", query: "BTC"}
 portfolio_live_preview   {order: {venue: "paper-momentum", symbol: "BTC/USD", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}}
 portfolio_live_order     {venue: "paper-momentum", symbol: "BTC/USD", side: "buy", orderType: "limit", limitPrice: 60000, usd: 50}
                                                        答复里的订单带 paper: true；Guard 是 {pending: true, card}，portfolio_wait {card} 等你
-portfolio_live_positions {venue: "paper-momentum"}     永续仓位，每条带 paper: true
+portfolio_live_leverage  {venue: "paper-momentum", symbol: "BTC-PERP", leverage: 5}      逐仓；有仓位时保证金随之进出现金
+portfolio_live_positions {venue: "paper-momentum"}     永续仓位，每条带 paper: true、杠杆、强平价、已付资金费（native.fundingUsd）
 portfolio_live_close     {venue: "paper-momentum", symbol: "BTC-PERP"}
+portfolio_live_order     {venue: "paper-momentum", symbol: "AAPL", side: "buy", orderType: "market", usd: 500}   美股：纽约时间 09:45–16:15 之外只收限价单
 ```
 
 测试网的市场写法和主网一样：`BTC/USDC:USDC` 永续、`HYPE/USDC` 现货、`XYZ-NVDA/USDC:USDC` HIP-3；测试网上有些市场主网没有，反过来也是。

@@ -113,12 +113,13 @@ const mkAllPairs = (item) => [...new Set(item.kind === "event" && item.outcomes 
 const mkLeadLeg = (item, oi) => mkLegs(item, oi).find((l) => l.symbol && mkVenue(l.venue)) || null;
 /** a stock's trading session (Market.session) at its connected venues: the lead venue's fresh market's while it is fresh (read with the
  * price, from the venue's own clock), else what the explore read carried — the row's (its first connected venue that says one), else a
- * connected line's. Null for anything else, and where no venue says one: then nothing is said of a session */
+ * connected line's, else a public line's (Cboe's delayed quotes carry the market calendar's session). Null for anything else, and where no
+ * venue says one: then nothing is said of a session */
 function mkSessionOf(item) {
   if (!item || item.kind !== "stock") return null;
   const lead = mkLeadLeg(item);
   const m = lead && mkFresh(`${lead.venue}|${lead.symbol}`);
-  const line = (item.at || []).find((a) => a.connected && a.session);
+  const line = (item.at || []).find((a) => a.connected && a.session) || (item.at || []).find((a) => a.session);
   const s = (m && m.session) || item.session || (line && line.session);
   return s && typeof s.open === "boolean" ? s : null;
 }

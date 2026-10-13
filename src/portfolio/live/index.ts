@@ -245,9 +245,9 @@ const hyperliquidPaper: Connector = {
  * default); the venue id names its book under <home>/paper/<venue>/, continued when it exists; several can be open at once */
 const paper: Connector = {
   kind: "paper",
-  label: "Paper account · paper money, the public markets, the account's own book",
+  label: "Paper account · paper money, the public markets (US stocks, coins, perpetuals, tokenised shares, event contracts), the account's own book",
   needs: "none",
-  example: `Nothing to connect: the account opens a paper account of its own — ${PAPER_DEFAULT_CASH.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} of paper money unless another sum in dollars is given — trading every market the public sources list, filled at the public quote by the account's own rule. No real money anywhere. Several can be open at once, each with its own name.`,
+  example: `Nothing to connect: the account opens a paper account of its own — ${PAPER_DEFAULT_CASH.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} of paper money unless another sum in dollars is given — trading every market the public sources list (US stocks at Cboe's delayed quotes, coins, perpetuals with leverage, tokenised shares, Kalshi and Polymarket event contracts), filled at the public quote by the account's own rule and settled when their venues settle. No real money anywhere. Several can be open at once, each with its own name.`,
   venues: [],
   async open(req, deps) {
     const cash = parsePaperCash(req.reference, req.venue);

@@ -6,6 +6,7 @@ import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { byAsset } from "../../src/portfolio/account/holdings.ts";
 import { networthPath } from "../../src/portfolio/account/networth.ts";
+import { fromEt } from "../../src/portfolio/account/calendar.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import { paperBookPath, type PaperBook } from "../../src/portfolio/live/paper.ts";
@@ -76,11 +77,11 @@ afterAll(() => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
 });
 
-async function boot(o: { writes?: boolean; home?: string; sources?: PublicSource[]; connect?: boolean; nonceFrom?: number; at?: number } = {}) {
+async function boot(o: { writes?: boolean; home?: string; sources?: PublicSource[]; connect?: boolean; nonceFrom?: number; at?: number; clock?: number } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), "account-paper-"));
   if (!o.home) homes.push(home);
   let n = o.nonceFrom ?? 0;
-  const liveDeps: Partial<LiveDeps> = { clock: () => REAL, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
+  const liveDeps: Partial<LiveDeps> = { clock: () => o.clock ?? REAL, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
   // a later run on the same home comes later by the clock, as a restart does
   const svc = await PortfolioService.create({ home, now: () => new Date(START + (o.at ?? 0)).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: o.sources ?? [], ...(o.writes === false ? {} : { liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" } }), account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
   const engine = svc.account!;
@@ -225,6 +226,27 @@ describe("a paper account beside a real one", () => {
     expect(back.venues.find((v) => v.id === "paper-alpha")!.usd).toBeCloseTo(book.cashUsd + 0.049011 * 60000, 1);
     expect(back.venues.find((v) => v.id === "paper-2")).toMatchObject({ paper: true, usd: 10000 });
     expect(back.venues.find((v) => v.id === "paper-alpha")!.holdings.find((h) => h.asset === "BTC")).toMatchObject({ amount: 0.049011 });
+  });
+
+  it("a US stock in a paper account: priced at the public stocks line, filled inside its window through the same door; the Stocks tab's row carries the public line's session and the paper leg", async () => {
+    const session = { open: true, closesAt: "2026-10-07T20:00:00.000Z" };
+    const aapl: Listing = { symbol: "AAPL", name: "Apple Inc", kind: "stock", base: "AAPL", quote: "USD", price: 340, bid: 339.95, ask: 340.06, open: true, types: [], session, change24h: 0.84, changePct24h: 0.25, venueName: "Cboe · 15 min delayed" };
+    const cboe: PublicSource = { id: "cboe", name: "Cboe", kind: "stocks", connectTo: "alpaca", connector: "live:alpaca", readOnly: "Cboe's own delayed quotes, 15 minutes behind the market: a US stock trades at a connected broker (Alpaca, Robinhood), or in a paper account", listings: async (q) => [aapl].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    // Wednesday 7 October 2026, 11:00 New York: inside the delayed window
+    const { svc, own, order, home } = await boot({ sources: [cboe], connect: false, clock: fromEt(2026, 10, 7, 11, 0) });
+    expect(code(await own({ type: "connectVenue", venue: "paper-stocks", connector: "live:paper", label: "Stocks", credentialRef: "" }))).toBe("account");
+    const placed = await order("paper-stocks", { symbol: "AAPL", side: "buy", orderType: "market", usd: "1000" });
+    if (isRefusal(placed) || placed.kind !== "order") throw new Error(`expected an order, got ${code(placed)}`);
+    expect(placed.order).toMatchObject({ paper: true, status: "filled", avgPrice: 340.06 });
+    expect(placed.order.qty).toBeGreaterThan(2.8);
+    expect((JSON.parse(readFileSync(paperBookPath(home, "paper-stocks"), "utf8")) as PaperBook).holdings["AAPL"]).toMatchObject({ qty: placed.order.qty });
+    const x = await svc.explore({ tab: "stocks" });
+    if (isRefusal(x)) throw new Error(x.message);
+    const row = x.items.find((i) => i.key === "stock:AAPL")!;
+    expect(row).toMatchObject({ kind: "stock", name: "Apple Inc", price: 340 });
+    expect(row.at.map((a) => [a.venue, a.connected, a.paper ?? false, a.connectTo])).toEqual([["cboe", false, false, "alpaca"], ["paper-stocks", true, true, undefined]]);
+    expect(row.at[0]).toMatchObject({ session, note: expect.stringContaining("15 minutes behind") });
+    expect(x.tabs.find((t) => t.id === "stocks")!.count).toBe(1);
   });
 
   it("positions say paper; the net worth curve counts the real venue alone", async () => {
