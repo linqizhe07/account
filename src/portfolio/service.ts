@@ -589,6 +589,11 @@ export class PortfolioService {
   }
 
   /** what is held at a venue connected live, fifteen seconds old at most (the page asks often; the venue is asked once) */
+  /** a venue on the account is a paper account (LiveSource.paper): its positions, orders and balances are no money */
+  paperVenue(venue: string): boolean {
+    return this.liveVenues.get(venue)?.paper === true;
+  }
+
   async livePositions(venue: string): Promise<Position[] | Refusal> {
     if (!this.account) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
     const engine = this.account;
@@ -813,22 +818,24 @@ export class PortfolioService {
    * and what the holdings did in the last 24 hours — each coin's and share's own 24-hour change as a venue reports it (the connected
    * venues' first, then the exchanges' public tickers), never estimated: what no venue reports is `missing`. `cost`: also what was paid for
    * what is held (account/costbasis.ts), from the account's own orders and each venue's positions */
-  async holdings(opts: { cost?: boolean | undefined } = {}): Promise<HoldingsView | Refusal> {
+  /** `paper`: the PAPER accounts' holdings instead of the real ones — the page's Paper lens — summed as paper money, never as the account's */
+  async holdings(opts: { cost?: boolean | undefined; paper?: boolean | undefined } = {}): Promise<HoldingsView | Refusal> {
     const h = await this.held(opts);
     return isRefusal(h) ? h : h.view;
   }
 
-  private async held(opts: { cost?: boolean | undefined }): Promise<{ view: HoldingsView; page: AccountPage } | Refusal> {
+  private async held(opts: { cost?: boolean | undefined; paper?: boolean | undefined }): Promise<{ view: HoldingsView; page: AccountPage } | Refusal> {
     const page = await this.accountView();
     if (!page) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
-    const { rows, money } = byAsset(page.venues, { writes: page.connectLive?.writes?.on === true });
+    const { rows, money } = byAsset(page.venues, { writes: page.connectLive?.writes?.on === true, ...(opts.paper ? { paper: true } : {}) });
     const [day, pos] = await Promise.all([this.dayStats(rows), opts.cost ? this.allPositions() : undefined]);
     const held: HeldRow[] = rows.map((r) => {
       const s = day.stats.get(r.key);
       const pct = s ? pctOf(s) : undefined;
       return pct === undefined || !s ? r : { ...r, changePct24h: Number(pct.toFixed(4)), changeFrom: { venue: s.venue, venueName: s.venueName } };
     });
-    const view: HoldingsView = { asOf: page.now, totalUsd: page.totalUsd, rows: held, money, change24h: change24h(rows, day.stats), missing: day.missing };
+    // the paper accounts' total is paper money: said as that, apart from the account's own figure
+    const view: HoldingsView = { asOf: page.now, totalUsd: opts.paper ? r2(page.venues.filter((v) => v.paper).reduce((s, v) => s + v.usd, 0)) : page.totalUsd, rows: held, money, change24h: change24h(rows, day.stats), missing: day.missing, ...(opts.paper ? { paper: true } : {}) };
     if (pos && !isRefusal(pos)) {
       view.positions = pos.positions;
       // money in an earn product was not bought: what was paid is its asset's own row's
@@ -1540,7 +1547,10 @@ export class PortfolioService {
     if (src.noTradeBecause) src.noTradeBecause = unaddressed(src.noTradeBecause);
     // who showed the address is the user's: the wallet that signed the account's sentence, or the mm session on this machine
     const proven = src.address === undefined ? undefined : connector === "live:metamask" ? "the mm session on this machine" : deps.proofs.proven(src.address)?.wallet;
-    Object.assign(adapter.account, { ...(proven ? { proven } : {}), ...(src.writer ? { liveCan: src.writer.can } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}), ...(src.paper ? { paper: true as const } : {}) });
+    // the account's own paper account says what it started with (paper.ts probe): the page shows what it made or lost since
+    const native = (src.probe as { native?: { startCashUsd?: unknown } } | undefined)?.native;
+    const paperStart = src.paper && typeof native?.startCashUsd === "number" && native.startCashUsd > 0 ? native.startCashUsd : undefined;
+    Object.assign(adapter.account, { ...(proven ? { proven } : {}), ...(src.writer ? { liveCan: src.writer.can } : {}), ...(src.noTradeBecause ? { noTradeBecause: src.noTradeBecause } : {}), ...(src.readOnlyBecause ? { readOnlyBecause: src.readOnlyBecause } : {}), ...(src.paper ? { paper: true as const, ...(paperStart ? { paperStartUsd: paperStart } : {}) } : {}) });
     // what the key may do is read from the trader each time: a venue can say it only after connecting (Kalshi's key scopes)
     const trader = src.trader;
     // the kinds of market its trader offers, where it says them itself (the mm trader: tokens, event contracts, perpetuals); the page falls
@@ -2718,6 +2728,8 @@ export interface HoldingsView {
   /** asked with `cost`: what was paid (account/costbasis.ts), and the positions it was read with */
   cost?: CostBasis[] | undefined;
   positions?: VenuePosition[] | undefined;
+  /** asked with `paper`: these are the paper accounts' rows and total, paper money and not the account's */
+  paper?: true | undefined;
 }
 
 export interface ReceiveAddress {

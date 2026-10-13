@@ -254,6 +254,13 @@ describe("the wallet through the MCP seat: what the page reads, steering, a prev
     expect((await tool("portfolio_live_compare", { base: "ETH", side: "buy" })).body.rows.map((r: { venue: string }) => r.venue)).toEqual(["ex"]);
     // its positions say so
     expect((await tool("portfolio_live_positions", {})).body.positions.filter((p: { venue: string }) => p.venue === "paper-ex")).toMatchObject([{ paper: true }]);
+    // `paper` names the one paper account in every trading tool: the same order, at paper, without knowing its id
+    expect(a.paperVenues).toEqual(["paper-ex"]);
+    expect((await tool("portfolio_live_markets", { venue: "paper", query: "ETH" })).body.markets.map((m: { symbol: string }) => m.symbol)).toContain(PERP.symbol);
+    expect((await tool("portfolio_live_preview", { order: { venue: "paper", ...big } })).body).toMatchObject({ ok: true, placed: "nothing", wouldBe: "card" });
+    expect((await tool("portfolio_live_positions", { venue: "paper" })).body.positions).toMatchObject([{ paper: true }]);
+    const noSuch = await tool("portfolio_live_order", { venue: "PAPER", symbol: "nope", side: "buy", orderType: "market", usd: 10 });
+    expect(noSuch.body.ok).toBe(false);
     // the seat's limit as the tests after this one expect it
     await own({ type: "approveSpend", agent: key, scope: "trade", allow: "ex", perPayment: "2000", budget: "4000", windowHours: 0, validUntil: Date.now() + 7 * DAY });
   }, 30_000);

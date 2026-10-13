@@ -169,8 +169,12 @@ function mkRoute(item, oi) {
     return { act: "why", venue: mkVenue(a.venue) ? a.venue : "", text: `${a.venueName || "The venue"}: ${mkSaid(a.note) || "this market has closed"}.` };
   }
   let refused = null;
-  // a real account before a paper one: a rehearsal is offered only where nothing real trades the thing
-  for (const l of [...mkLegs(item, oi)].sort((a, b) => Number(!!mkAtOf(item, a.venue).paper) - Number(!!mkAtOf(item, b.venue).paper))) {
+  // a real account before a paper one: a rehearsal is offered only where nothing real trades the thing — unless the page is on Paper, where
+  // the paper account comes first; on Real money a paper account is not offered at all
+  const lens = lensNow();
+  const isPaper = (l) => !!mkAtOf(item, l.venue).paper || paperVenue(l.venue);
+  const legs = [...mkLegs(item, oi)].filter((l) => lens.kind !== "real" || !isPaper(l)).sort((a, b) => (lens.kind === "paper" ? -1 : 1) * (Number(isPaper(a)) - Number(isPaper(b))));
+  for (const l of legs) {
     const v = mkVenue(l.venue);
     // a connected venue that does not serve this network now is not offered, nor said: the list is what serves the user
     if (!v || !l.symbol || !servedHere(v)) continue;
@@ -263,8 +267,14 @@ const mkServes = (a) => {
   const no = a.connector ? venueRefuses(a.connector) : null;
   return !(no && (no.verdict === "not-served" || no.verdict === "closed"));
 };
-/* the lens narrows Markets to one venue's markets; under an agent's lens every market stays (agents hold no markets of their own) */
-const mkInLens = (item, lens) => !lens || lens.kind !== "venue" || item.at.some((a) => a.venue === lens.id || a.connectTo === lens.id);
+/* the lens narrows Markets to one venue's markets; under Real money to the rows a real account or a public venue lists, under Paper to the
+   rows a paper account lists; under an agent's lens every market stays (agents hold no markets of their own) */
+const mkInLens = (item, lens) => {
+  if (!lens || lens.kind === "all" || lens.kind === "agent") return true;
+  if (lens.kind === "venue") return item.at.some((a) => a.venue === lens.id || a.connectTo === lens.id);
+  if (lens.kind === "paper") return item.at.some((a) => a.paper || (a.connected && paperVenue(a.venue)));
+  return item.at.some((a) => a.public || (a.connected && !a.paper && !paperVenue(a.venue)));
+};
 
 /* the venues that did not answer this read, each in its own words (a venue's rule for this location is said as its rule, nothing more).
    One line per venue and answer: an exchange read through two public sources (its spot tickers, its pre-IPO perpetuals) that refused both

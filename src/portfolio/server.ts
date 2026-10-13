@@ -50,7 +50,8 @@
  *                                                        publish without a key ("Connect to trade"), as one list with tabs, movers,
  *                                                        what closes soon and what trades most
  *   GET  /api/account/holdings?cost=1                    Portfolio: what is held by asset across every venue, the dollars that are ready,
- *                                                        the last 24 hours; `cost=1` adds what was paid
+ *                                                        the last 24 hours; `cost=1` adds what was paid; `paper=1` the paper accounts'
+ *                                                        instead (the Paper lens), summed as paper money
  *   GET  /api/account/history?range=1d|1w|1m|all         the net worth curve
  *   GET  /api/account/receive?venue=&asset=&network=     where to send an asset so that it lands at a venue
  *   GET  /api/account/asset?key=crypto:BTC&interval=1h   one asset: its row, every venue's price, price history, positions, orders, lines
@@ -497,7 +498,9 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
       return void res.status(isRefusal(all) ? 409 : 200).json(isRefusal(all) ? { ok: false, refusal: all } : { ok: true, ...all });
     }
     const r = await svc.livePositions(q.venue);
-    res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, positions: r });
+    // a paper account's positions say so here too, as the read across every venue says it
+    const paper = svc.paperVenue(q.venue);
+    res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, positions: paper ? r.map((p) => ({ ...p, paper: true as const })) : r });
   }));
 
   // ---- the wallet's reads: Portfolio · Markets · Trade, and the agents one by one. None of them orders, moves or signs anything ----
@@ -517,9 +520,10 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
   // PORTFOLIO: what is held, by asset across every venue, the dollars that are ready, the last 24 hours; `cost=1` adds what was paid
   app.get("/api/account/holdings", wrap(async (req, res) => {
     if (!mounted(res)) return;
-    const q = strings(req, res, { cost: 5 });
+    const q = strings(req, res, { cost: 5, paper: 5 });
     if (!q) return;
-    answerOf(res, await svc.holdings({ cost: q.cost === "1" }));
+    // paper=1: the paper accounts' holdings, for the page's Paper lens
+    answerOf(res, await svc.holdings({ cost: q.cost === "1", paper: q.paper === "1" }));
   }));
 
   // the net worth curve: range 1d · 1w · 1m · all

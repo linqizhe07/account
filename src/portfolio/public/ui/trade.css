@@ -96,6 +96,12 @@
 
 /* where: one row a venue — yours that trade it (pressed: the one the order goes to), yours that cannot (in their words), public ones */
 .tk-where { display: flex; flex-direction: column; gap: 6px; }
+/* the switch between real money and paper, above the venues, and the band that says which the order is for */
+.tk-money-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tk-money-seg button { min-height: 32px; padding: 0 12px; font-size: 12px; }
+.tk-money { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.tk-money.paper { border: 1px dashed var(--text); color: var(--text); }
+.tk-money.real { background: var(--text); color: var(--surface); }
 .tk-at { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-s); font-size: 14px; text-align: left; background: transparent; color: var(--text); width: 100%; }
 /* the name, its word beside it (Best · Closed · Public), the venue's note under them */
 .tk-at > span:first-child { display: block; min-width: 0; }

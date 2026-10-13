@@ -43,9 +43,9 @@ function renderChrome(L, owner) {
   count("count-portfolio", waiting, `${plural(waiting, "thing")} waiting for you`);
   // agents knocking to be let in, which the Agents sheet answers
   count("count-agents", A.requests.length, `${plural(A.requests.length, "agent")} asking to be let in`);
-  // a lens on a venue disconnected, or an agent revoked, is let go
+  // a lens on a venue disconnected, or an agent revoked, is let go; so is Paper once no paper account is open
   const l = lensNow();
-  if ((l.kind === "venue" && !L.some((v) => v.id === l.id)) || (l.kind === "agent" && !A.keys.some((k) => k.address.toLowerCase() === l.id.toLowerCase()))) view.lens = "";
+  if ((l.kind === "venue" && !L.some((v) => v.id === l.id)) || (l.kind === "agent" && !A.keys.some((k) => k.address.toLowerCase() === l.id.toLowerCase())) || (l.kind === "paper" && !L.some((v) => v.paper))) view.lens = "";
   $("lens-name").textContent = lensNow().name;
   $("lens").setAttribute("aria-label", `Showing ${lensNow().name}: choose what the page shows`);
   drawBanner(owner);
@@ -226,7 +226,11 @@ function lensMenu(open) {
   const keys = A.keys.filter((k) => k.status === "ok" || k.status === "expired");
   const item = (v, label, hint) => `<button type="button" role="menuitemradio" aria-checked="${String(view.lens === v)}" data-lens="${esc(v)}"><span>${esc(label)}</span>${hint ? `<span class="dim">${esc(hint)}</span>` : ""}</button>`;
   const L = connected();
-  m.innerHTML = `${item("", "All accounts", money(A.liveUsd))}${L.length ? `<div class="menu-h" role="presentation">Accounts</div>${L.map((v) => item(`venue:${v.id}`, v.name, money(v.usd))).join("")}` : ""}${keys.length ? `<div class="menu-h" role="presentation">Agents</div>${keys.map((k) => item(`agent:${k.address}`, k.name, k.status === "expired" ? "expired" : short(k.address))).join("")}` : ""}`;
+  // the switch between real money and paper: Real money is every account but the paper ones; Paper the paper accounts (offered once one
+  // is open; before that, the Portfolio offers to start one)
+  const papers = L.filter((v) => v.paper);
+  const money2 = papers.length ? `${item("real", "Real money", money(L.filter((v) => !v.paper).reduce((s, v) => s + num(v.usd), 0)))}${item("paper", "Paper", `${plural(papers.length, "paper account")} · no real money`)}` : "";
+  m.innerHTML = `${item("", "All accounts", money(A.liveUsd))}${money2}${L.length ? `<div class="menu-h" role="presentation">Accounts</div>${L.map((v) => item(`venue:${v.id}`, v.name, v.paper ? `${money(v.usd)} paper` : money(v.usd))).join("")}` : ""}${keys.length ? `<div class="menu-h" role="presentation">Agents</div>${keys.map((k) => item(`agent:${k.address}`, k.name, k.status === "expired" ? "expired" : short(k.address))).join("")}` : ""}`;
   m.hidden = false;
   (m.querySelector('[aria-checked="true"]') || m.querySelector("button")).focus();
 }

@@ -153,7 +153,15 @@ describe("the stand-in account", () => {
   it("Portfolio by asset once the venues are read again: coins at two venues, the RWA, the event contract, the dollars", async () => {
     // a venue's balances are read again after thirty seconds on the account's clock
     clockMs += 31_000;
+    // the Paper lens's read: the paper accounts' holdings alone, summed as paper money, with no row of a real venue
+    const paper = (await get("/api/account/holdings?cost=1&paper=1")).body;
+    expect(paper.paper).toBe(true);
+    expect(paper.rows.length).toBeGreaterThan(0);
+    expect(paper.rows.every((r: { venues: Array<{ venue: string }> }) => r.venues.every((v) => ["paper", "paper-momentum"].includes(v.venue)))).toBe(true);
+    expect(paper.totalUsd).toBeGreaterThan(0);
     const { status, body: h } = await get("/api/account/holdings?cost=1");
+    expect(h.paper).toBeUndefined();
+    expect(h.rows.every((r: { venues: Array<{ venue: string }> }) => r.venues.every((v) => !["paper", "paper-momentum"].includes(v.venue)))).toBe(true);
     expect(status).toBe(200);
     const row = (key: string) => h.rows.find((r: { key: string }) => r.key === key);
     expect(row("crypto:BTC").venues.map((v: { venue: string }) => v.venue).sort()).toEqual(["ex", "wallet"]);

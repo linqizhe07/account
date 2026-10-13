@@ -57,7 +57,9 @@ function renderStatement(owner) {
   // who did what: you, and each agent a line names (by its key; its name as the account knows it, or as the line recorded it)
   const agents = [...new Map(S.filter((l) => l.agent).map((l) => [lineBy(l), l.agentName || keyName(l.agent)])).entries()];
   if (view.agent && view.agent !== "you" && !agents.some(([a]) => a === view.agent)) view.agent = "";
-  const lines = S.filter((l) => (month === "all" || monthOf(l.at) === month) && (!view.account || l.account === view.account || l.to === view.account) && (!view.type || l.type === view.type) && (!view.agent || lineBy(l) === view.agent));
+  // under Real money the paper lines are left out, under Paper only they are shown
+  const lk = lensNow().kind;
+  const lines = S.filter((l) => (month === "all" || monthOf(l.at) === month) && (!view.account || l.account === view.account || l.to === view.account) && (!view.type || l.type === view.type) && (!view.agent || lineBy(l) === view.agent) && (lk !== "real" || !l.paper) && (lk !== "paper" || !!l.paper));
   $("statement-tools").innerHTML = S.length ? `<button type="button" class="btn btn-sm" id="csv-statement">${icon("download", "sm")}Download CSV</button><button type="button" class="btn btn-sm" id="print-statement">${icon("print", "sm")}Print</button>` : "";
   const accounts = [...new Map(S.flatMap((l) => [[l.account, l.accountName], ...(l.to ? [[l.to, l.toName || l.to]] : [])])).entries()];
   /* the filters: each select's options and value, by its name. The selects are made once and then kept — their options and values follow

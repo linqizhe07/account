@@ -318,6 +318,12 @@ agent 只能撤自己下的单；你能撤任何单（撤单从不出卡；你�
 
 **自己下单**：Trade → Perps（现货在 Crypto，事件在 Predictions）→ 搜 BTC → Where 里选纸上账户那一行（标 Paper）→ 金额 → Sign and place。签名的那句话以 "PAPER · " 开头，上限那一句不出现（`--live-cap` 管的是真钱）；`--read-only` 起的服务照样不下。Statement 里那几行标 Paper，合计不算它们，CSV 多一列 `paper`。比价（Where 的 Best、`portfolio_live_compare`）不比纸上账户。
 
+**模拟仓和真仓怎么分、怎么切**（真账户和纸上账户同时在账户上时）：
+- 票里 Where 上方有一条横幅，写的是这一单归哪种钱——`PAPER · no real money · Momentum · paper`（虚线框）或 `REAL MONEY · Coinbase Advanced`（实心）；横幅旁边是 **Real money | Paper** 两个按钮，一键在同一个市场的真账户和纸上账户之间翻转，金额、单型、限价都原样保留。签名按钮在纸上账户上写 **Sign and place · PAPER**，签名的那句话以 PAPER 开头。
+- 页面顶部 "All accounts ▾" 里多了 **Real money** 和 **Paper** 两档：选 Paper，Markets 每行的按钮变成 "Paper trade"、票默认选纸上账户、Portfolio 只看纸上账户（标题写 Paper，显示自开户以来的盈亏，不进净值）、Statement 只列纸上的行；选 Real money 则反过来，纸上账户根本不出现在票和按钮里。All accounts 是默认：真账户优先，只有没真账户交易的市场才给 "Paper trade"。
+- 没有任何账户可接的人，第一步 "Connect an account" 旁边就是 **Start a paper account**：先开纸上账户接进来，agent、额度、下单全套照走，之后接上真账户再切过去。
+- agent：MCP 的所有交易工具里 `venue` 写 `"paper"` 就是你那个纸上账户（`portfolio_account` 的 `paperVenues` 列出 id；开了多个要写明 id），同一单先在纸上跑一遍再发真账户，只改 venue。
+
 **让 agent 演练**：第 3 条给额度时场所填纸上账户的 id（`paper-momentum`，或测试网的 `hyperliquid-paper`；和真的 `hyperliquid-trade` 是各自一条额度）。Guard 下每单一张卡，卡上写 "paper order (no real money)"；Beast 下额度内直接下。MCP 里：
 
 ```
