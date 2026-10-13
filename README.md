@@ -18,13 +18,14 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
 
 ## 页面
 
-样子是 Demo v2 画布第七轮的（F1 / F5，用这一层自己的 tokens 和尺寸）：左边一条白 rail，Markets · Trade · Agents；rail 最下面是 **Account** 钱包按钮（净值 · 模式），打开 Account 的三页，头上是模式（Guard | Beast）、"Trading on · $100 a move"、Settings。
+样子是 Demo v2 画布第七轮的（F1 / F5，用这一层自己的 tokens 和尺寸）：左边一条白 rail，Markets · Trade · Agents；rail 最下面是 **Account** 钱包按钮（净值 · 模式），打开 Account 的三页，头上是模式（Guard | Beast）、"Trading on · $100 a move"（单笔上限，点它去 Settings 改，一次签名）、Settings。
 
-- **Portfolio**：你有什么。净值曲线、跨场所按资产汇总、持仓；右栏是等你批的卡和 agent 的请求（第七轮的圆键：蓝的 ✓ 批、✗ 拒）、agent 在做什么、现成的钱、配置条。Move · Receive · Earn · Sell many 都从这里开。
+- **Portfolio**：你有什么。净值曲线；**Open positions · live**——每一样账户知道成本的持仓（你自己下的单、场所报了入场价的仓位）一张实时卡：入场价、现价、未实现盈亏和百分比，每 5 秒拿一次场所的新价，数字闪一下、点在梯子上滑过去、走势线一点点长出来，纸上账户的也在（标 Paper）；跨场所按资产汇总、持仓；右栏是等你批的卡和 agent 的请求（第七轮的圆键：蓝的 ✓ 批、✗ 拒）、agent 在做什么、现成的钱、配置条。Move · Receive · Earn · Sell many 都从这里开。
 - **Venues**：接上的账户（健康、对 agent 的开关、Details）和 Connect an account。
 - **Memory**：照画布的 F13，「<agent> 记得的你」：风格 · 规矩 · 场所和人三段，每条写着从哪来（你说的 · 它学的 · 来自额度），三个开关，Export 和 Forget all（下面「记忆」）。
 - **Markets**：有什么可以交易。接上的场所，加上没接的场所不带钥匙读来的公开行情（标 "Connect to trade"）。tab：All · Crypto · Stocks · RWAs · Perps · Pre-IPO · Predictions · Watching；一个市场一个抽屉。
 - **Trade**：在一个市场里建仓位。一张下单票，按种类六面（Crypto · Stocks · RWAs · Perps · Pre-IPO · Predictions，和 Markets 同样的词），加 Under way。
+- **Agents**（rail 上，`#/desk`）：账户自己的 agent 团队——**Desk**（下面一节），和「带你自己的 agent 进来」（复制 MCP 命令、放敲门的钥匙进来）。
 
 页面上只有真的：没有模拟场所、没有样例数据，没有接口的就不画。界面英文，背景可选 Cream / Black。
 
@@ -41,7 +42,7 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
   | 超出额度 | 拒绝 | 拒绝 |
 
   切到 Guard 一键，切到 Beast 要签名；卡 30 分钟没人答自动过期。十扇门的完整对照在页面的 Mode 弹层（服务器给的 `modeRules`）。接口上的值仍是 `guard` | `open`。
-- **不变的线**：`--live-cap` 单笔上限；钱只去你自己的地方；随时撤销；场所自己的地区规则不绕。
+- **不变的线**：单笔上限（启动时 `--live-cap`，之后在 Settings 里改，升降都是 owner 一次签名 `setPolicy cap`，重启按最后一次签的恢复；纸上账户不受它）；钱只去你自己的地方；随时撤销；场所自己的地区规则不绕。
 
 ## 能接什么
 
@@ -69,14 +70,27 @@ agent 记得的你放在账户里，不放在某一个 agent 程序里：换一�
 
 记忆是话，不是权限：额度、门、卡都不读它。钥匙、密钥、密码、助记词、IP 一律不收；忘了就是从文件里删掉，记忆的字从不进账本。agent 用 `portfolio_memory` 读，用 `portfolio_remember` / `portfolio_forget` 记它学到的。
 
+## Desk：账户自己的 agent 团队
+
+没有 agent 可接的人是大多数，就像没有钱包可接的人是大多数——纸上账户给后者，Desk 给前者。照「八个 agent 跑一个 desk」的套路做在账户里（`src/portfolio/account/desk.ts`）：
+
+- **八个席位，各一份章程**（owns · good output · never）：Head of desk（从不交易，管漏斗、早晚报、日亏熔断）· Search（从 Markets 找线索）· Risk（清算：市场开着、有报价、价差、当日亏损余量、仓位大小）· Sniper（下入场单）· Exit（止盈 / 止损 / 时限，提前平）· Watch（盯危险：强平距离、资金费、事件收盘、场所不应答）· Flow 和 Sentiment（账户没有那两种数据，只能由你自己的 agent 来坐）。
+- **章程变成额度**：每个席位都是 owner 签名放进来的一把 agent 钥匙（`approveAgent`），会交易的席位（Sniper · Exit · Watch）拿 owner 签的交易额度（`approveSpend`），不该交易的席位没有额度——门拒绝它们下单，不管它们"想"什么。Guard 下每一单还是一张卡；Beast 下在额度内直接走。
+- **一个房间，一个目标**：你的一句话 + 一个场所（推荐先用纸上账户）+ 范围 + 本周目标 % + 每笔最多占权益 % + 当日亏损熔断 % + 会话几小时 + 几分钟一轮 + 晚报几点（纽约时间）。房间里每条消息带线索号 `L-0047`，各席位能互相核对；漏斗 scanned → cleared → confirmed → executed → closed。
+- **每一轮**：先按计划处理在手的线索（止盈 / 止损 / 时限自动平，Exit 可以提前平），Search 读账户自己的 Markets 列表找线索，Risk 先跑硬检查再问脑子，Sniper 通过 `agentLiveOrder` 下单，Head 写一行。21:00 晚报、周日周评、日亏到线就熔断到纽约次日、会话到点就结束——都在房间里。
+- **脑子**：房里的席位用 Claude（Anthropic API，默认 `claude-opus-5-5`，可选 Sonnet / Haiku 和 effort），或任何 OpenAI 格式的 chat 接口（OpenAI、DeepSeek、Kimi、本机的 vLLM / Ollama：`credentials/openai/api-key.json` 里写 `apiKey`、`baseUrl`、`model`，或 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`；每家接口收的字段不一样，脑子按它的 400 回答自己换字段再问，最多三次；模型名自己填，价格自己填，没填就只计 token 不计钱），雇的时候选、雇了以后 "Brain…" 一个签名换；一次只问一个结构化问题；钥匙从 `ANTHROPIC_API_KEY`、`ant auth login` 或 `~/.buyer-agent-demo/credentials/anthropic/api-key.json`（600，每次检查重新读；文件里还是示例值时不算有钥匙）来；没有钥匙时 desk 照样雇得了，但房间会说它没法想，不编线索。花了多少按 API 返回的 token 数和模型标价算，页面上写着「about $x」。
+- **实时界面**（照一段 perps bot 的直播画面做的）：LIVE 计时 / 会话时长、权益和曲线、到目标的进度条、每条在手线索一张实时卡（入场、现价、TP / SL、未实现）、Trade tape（一笔一根柱）、Big closes（最大的五笔）、房间、名单、脑子的花费。
+- **接口留着**：任何席位都可以换成你自己的 agent（MCP 席位、任何签名的钥匙）——它用 `portfolio_desk` 读自己的章程和房间，用 `portfolio_desk_say` 在房里说话，下单还是 `portfolio_live_order`。Flow 和 Sentiment 只能这样来。怎么用见 [COOKBOOK](COOKBOOK.md) 第 3b 条。
+
 ## 给 agent 的接口
 
-- **MCP**：`npm run portfolio:mcp`（stdio；席位持自己的钥匙，每次写都签名）。接 Claude Code：页面 Agents 弹层的 "Copy agent setup command"。真实账户上的工具：
+- **MCP**：`npm run portfolio:mcp`（stdio；席位持自己的钥匙，每次写都签名）。接 Claude Code：Agents 页的 "Copy setup command"。真实账户上的工具：
   - 读：`portfolio_account` · `portfolio_venues`（从用户所在的网络自动判断哪些场所能接，各用场所自己的话）· `portfolio_overview` · `portfolio_holdings` · `portfolio_history` · `portfolio_asset` · `portfolio_candles` · `portfolio_explore` · `portfolio_receive` · `portfolio_earn` · `portfolio_watchlist` · `portfolio_statement`
   - 下单和动钱：`portfolio_live_markets` · `portfolio_live_compare` · `portfolio_live_positions` · `portfolio_live_preview` · `portfolio_live_order` · `portfolio_live_batch` · `portfolio_live_amend` · `portfolio_live_cancel` · `portfolio_live_close` · `portfolio_live_leverage` · `portfolio_live_move` · `portfolio_live_earn` · `portfolio_pay`
   - 纸上交易：开一个 Paper account（什么都不用接；`live:paper`，可以开多个；美股、crypto、RWA、预测市场都能练，永续能设杠杆）或接上 "Hyperliquid · paper"（它的测试网）后，`portfolio_account` 里那家标 `paper: true`，同一套下单工具（`portfolio_live_markets`、`portfolio_live_order`、`portfolio_live_leverage`、`portfolio_live_positions`……）在它上面演练——纸上账户按账户自己声明的规则成交，测试网真的发到测试网，都不是真钱；门一样（额度、Guard / Beast），只是不受 `--live-cap`；比价不比它；答复里的订单和持仓带 `paper: true`
   - 和 owner 说话、等结果：`portfolio_report` · `portfolio_ask` · `portfolio_approval` · `portfolio_wait`
   - 记忆（账户替 agent 记着，换会话、重启都在）：`portfolio_memory`（读：它记得的你、等你答的、来自额度的、别的 agent 分享的、你的开关）· `portfolio_remember` · `portfolio_forget`（它学到的，用它的钥匙签）
+  - Desk（账户自己的 agent 团队，见下面「Desk」）：`portfolio_desk`（读：这把钥匙在 desk 上的席位和章程、目标、漏斗、房间最近几行）· `portfolio_desk_say`（在房间里说一句，用它的钥匙签：只是话，不是权限）
   - 只在模拟对账单（`--classic`）和测试里：`portfolio_read` · `portfolio_markets` · `portfolio_quote` · `portfolio_openness` · `portfolio_execute` · `portfolio_order` · `portfolio_transfer`
 - **HTTP**：只读接口 `GET /api/account/...`，只听 127.0.0.1；表在 [docs/account.md](docs/account.md)。
 - **给做 Agent 模块的团队**：[COOKBOOK](COOKBOOK.md) 的「11b · Agent 模块接口」。

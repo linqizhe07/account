@@ -108,14 +108,16 @@ describe("who may sign", () => {
     expect(x.engine.state.tombstones).toEqual([]);
   });
 
-  it("the account's own limits: 180 days, four keys", async () => {
+  it("the account's own limits: 180 days, twelve keys (the owner's few, and a desk of eight)", async () => {
     const x = await boot();
     expect(code(await x.authorise(cc, "Claude Code", 181))).toBe("E_ACCOUNT_LIMIT");
-    for (const name of ["a", "b", "c", "d"]) expect(code(await x.authorise(simKey(`agent:${name}`), name))).toBe("account");
-    expect(code(await x.authorise(simKey("agent:e"), "e"))).toBe("E_ACCOUNT_LIMIT");
+    // twelve names that look like nothing else (a one-letter name can look like another's)
+    const names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima"];
+    for (const name of names) expect(code(await x.authorise(simKey(`agent:${name}`), name))).toBe("account");
+    expect(code(await x.authorise(simKey("agent:mike"), "mike"))).toBe("E_ACCOUNT_LIMIT");
     // the same name again replaces the key, and the old one is gone for good
-    expect(code(await x.authorise(simKey("agent:a2"), "a"))).toBe("account");
-    expect(x.engine.state.tombstones).toContain(simKey("agent:a").address);
+    expect(code(await x.authorise(simKey("agent:alpha2"), "alpha"))).toBe("account");
+    expect(x.engine.state.tombstones).toContain(simKey("agent:alpha").address);
   });
 });
 

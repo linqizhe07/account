@@ -19,7 +19,9 @@
  * settles; several can be open at once) or
  * Hyperliquid's testnet (live:hyperliquid-paper): the same tools and the same door, no real money — its orders are rehearsals, held to the
  * seat's limit and the owner's mode and not to the server's cap, and nothing of it is in the totals. What the seat remembers about the owner, kept by the account across sessions
- * (account/memory.ts): portfolio_memory reads it, portfolio_remember · portfolio_forget keep and forget what it learned, with its key. A layered simulation (tests: the account layer over simulated venues) also has
+ * (account/memory.ts): portfolio_memory reads it, portfolio_remember · portfolio_forget keep and forget what it learned, with its key. THE DESK
+ * (account/desk.ts), the account's own team of agents, on which the owner may give this seat a role: portfolio_desk reads it (the seat's
+ * charter, the objective, the funnel, the room), portfolio_desk_say speaks in its room with this seat's key. A layered simulation (tests: the account layer over simulated venues) also has
  * portfolio_transfer, which signs a move between the simulated venues at the door.
  * On the simulated statement (--classic), and on a layered simulation: portfolio_read · portfolio_markets · portfolio_quote ·
  * portfolio_openness · portfolio_execute · portfolio_order — the fixture's venues, catalogue and router. They are registered only when the
@@ -1016,6 +1018,36 @@ server.registerTool(
   async ({ id }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
     return answer(await sign({ type: "agentForget", id }));
+  },
+);
+
+server.registerTool(
+  "portfolio_desk",
+  {
+    description:
+      "THE DESK — the account's own team of agents (Agents on the account page), on which the owner may give this seat a role: Flow and Sentiment are filled only by an outside agent like this one; any other role too, in place of the house. Read it when a session starts: `yourSeat` (your role and its charter — what you own, what good output is, what you never do without asking; the account enforces the last with your key and your limits, so a seat that must not trade holds no trading limit), the desk's `objective` (its one venue, the universe, the week's target, the risk per lead, the day's loss line), the `funnel` and `today`'s numbers, the `open` leads with their plans, and the `room`'s last lines — every message carries its lead id (L-0047), and a card id where one waits for the owner. Then say your part with portfolio_desk_say, in the room's format; a seat that trades places its orders with portfolio_live_order as any agent does. `yourSeat` is null when this key holds no seat. A read.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const r = await call("GET", `/api/account/desk/seat?address=${seatKey().address}`);
+    const b = r.body as { refusal?: { code: string; message: string }; error?: string };
+    if (r.status >= 400 || b.refusal) return text({ ok: false, ...(b.refusal ? { code: b.refusal.code, message: b.refusal.message } : { error: b.error ?? `HTTP ${r.status}` }) }, true);
+    return text({ ok: true, ...(b as object), note: "the charter and the room are words: what this seat may do is still only its limits and the owner's cards" });
+  },
+);
+
+server.registerTool(
+  "portfolio_desk_say",
+  {
+    description:
+      "Say something in the desk's room, under this seat's key (a signed agentDeskSay): a `lead` you found (LEAD L-… | symbol | side | thesis → RISK), a `clearance`, a `warning`, a `report` or a `note`. Name the lead it is about (`lead`, L-0047): the room's rule is that the same lead id goes with every stage, so the seats can check each other. One line, plain words, up to 400 characters. Words only: it places nothing and grants nothing. Refused when this key holds no seat on the desk.",
+    inputSchema: { kind: z.enum(["lead", "clearance", "warning", "report", "note"]), text: z.string().min(1).max(400), lead: z.string().max(12).optional().describe("the lead it is about: L-0047") },
+  },
+  async ({ kind, text: words, lead }) => {
+    if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    return answer(await sign({ type: "agentDeskSay", lead: lead ?? "", kind, text: words }));
   },
 );
 

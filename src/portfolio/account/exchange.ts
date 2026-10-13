@@ -156,6 +156,9 @@ export interface Host {
   /** what the agents remember (account/memory.ts): the conversation the account keeps for them, their notes and the owner's About you
    * (absent: this account keeps no memory) */
   memory?(): MemoryStore | undefined;
+  /** THE DESK (account/desk.ts): the owner's `setDesk` and a seat's `agentDeskSay` land here once the door has checked the signature, the
+   * nonce and the key (absent: this account keeps no desk) */
+  desk?(action: Extract<Action, { type: "setDesk" | "agentDeskSay" }>, who: { signer: string; agent?: AgentKey | undefined }): Promise<Outcome>;
 }
 
 /** one way of connecting a real venue, as the page offers it */
@@ -693,6 +696,15 @@ export class AccountEngine {
       case "forgetMemory":
       case "setMemoryRules":
         return this.ownerMemory(action, signer);
+      case "setDesk":
+      case "agentDeskSay": {
+        // the desk (account/desk.ts): the owner's settings and words, a seat's words in the room — none of it authority
+        if (!this.host.desk) return no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk" });
+        const r = await this.host.desk(action, { signer, agent });
+        if (isRefusal(r)) return r;
+        this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope, outcome: "ok", reason: r.kind === "account" ? r.summary : action.type, ...(agent ? { agent: slug(agent.name) } : {}) });
+        return r;
+      }
       case "agentOrder": {
         const order = parseOrder({ base: action.base, side: action.side, qty: action.qty });
         if (!order) return no("E_ACCOUNT_BAD_ACTION", { message: "not an order: {base: an asset or an event contract, side: buy | sell, qty: more than zero}" });

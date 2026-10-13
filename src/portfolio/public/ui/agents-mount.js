@@ -54,16 +54,39 @@ function drawAgents() {
 /** the Settings sheet: trading on or off (and the cap), the agents' session and leverage, the background, the devices. The mode is the
  * rail's: its seg, and the Mode sheet behind "What changes ›" */
 function openSettings() {
-  openSheet('<section class="sheet-sec"><div class="set"><div><b>Trading</b><span class="note-s" id="set-writes"></span></div></div><div id="dial"></div><div class="set"><div><b>Background</b><span class="note-s">Kept in this browser.</span></div><div id="set-theme"></div></div></section><section class="sheet-sec old" aria-labelledby="set-devices-h"><h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div></section>', { title: "Settings", redraw: drawSettings });
+  openSheet('<section class="sheet-sec"><div class="set"><div><b>Trading</b><span class="note-s" id="set-writes"></span></div><div id="set-cap"></div></div><div id="dial"></div><div class="set"><div><b>Background</b><span class="note-s">Kept in this browser.</span></div><div id="set-theme"></div></div></section><section class="sheet-sec old" aria-labelledby="set-devices-h"><h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div></section>', { title: "Settings", redraw: drawSettings });
   drawSettings();
 }
 function drawSettings() {
   if (!$("set-writes")) return;
   const owner = owns();
-  $("set-writes").textContent = writesOn() ? `On: an order or a move goes through only when you sign it, or inside a limit you gave an agent, and is worth up to ${money(A.connectLive.writes.capUsd)} each (set when the account was started).` : "Off: this server was started read-only, so it places no orders and moves no money.";
+  $("set-writes").textContent = writesOn() ? `On: an order or a move goes through only when you sign it, or inside a limit you gave an agent, and is worth up to ${money(A.connectLive.writes.capUsd)} each. The cap is yours to change: your signature, up or down.` : "Off: this server was started read-only, so it places no orders and moves no money.";
+  // the cap: the owner's to change by signature (setPolicy cap), up or down; a restart brings the signed figure back
+  $("set-cap").innerHTML = writesOn() && owner ? '<button type="button" class="btn btn-sm" id="cap-change">Change the cap</button>' : "";
+  if ($("cap-change")) $("cap-change").addEventListener("click", openCap);
   $("set-theme").innerHTML = seg([["cream", "Cream"], ["black", "Black"]], document.documentElement.dataset.theme || "cream", setTheme, { label: "Background" });
   renderDial(connected(), owner);
   renderDevices(owner);
+}
+
+/** the cap: the most one order or movement may be worth on this server, in dollars — the owner's signature, up or down (the server's
+ * --live-cap is only where it starts; a restart brings the signed figure back) */
+function openCap() {
+  const now = Number((A.connectLive && A.connectLive.writes && A.connectLive.writes.capUsd) || 0);
+  quoteDialog({
+    title: "The most one order or move may be worth",
+    sub: `Now ${esc(money(now))}. Every order and every movement of money on this server — yours, and an agent's inside its limit — is held to this figure. A paper account is not.`,
+    fields: field("Dollars", `<input name="cap" inputmode="decimal" autocomplete="off" value="${esc(String(now))}" />`),
+    go: "Sign the cap",
+    draft(form) {
+      const v = String(new FormData(form).get("cap") || "").trim().replace(/[$,\s]/g, "");
+      if (!/^\d{1,7}(\.\d{1,2})?$/.test(v) || !(Number(v) > 0)) return "A number of dollars, more than zero, to the cent.";
+      if (Number(v) === now) return "That is the cap now.";
+      return { type: "setPolicy", change: "cap", value: v };
+    },
+    show: (p) => `<div class="big"><span>Up to ${esc(money(Number(p.action.value)))} an order or a move</span><span>${Number(p.action.value) > now ? "raised" : "lowered"} from ${esc(money(now))}</span></div><div class="path">Takes effect at once for every order and movement from this server. Agents' limits stay what you signed for them.</div>`,
+    done: (r, p) => `The cap is ${money(Number(p.action.value))} an order or a move.`,
+  });
 }
 
 /** the Mode sheet: the switch itself, one sentence, and — door by door, as the account itself has it (A.modeRules, account/mode-rules.ts) —

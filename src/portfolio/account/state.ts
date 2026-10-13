@@ -28,7 +28,8 @@ import { micro, simKey, ZERO, type Envelope, type Hex, type Jwk, type OwnerActio
 
 const DAY = 86_400_000;
 export const MAX_AGENT_DAYS = 180;
-export const MAX_AGENTS = 4;
+/** agent keys at a time: the owner's own few, and a desk of the account's own (account/desk.ts: up to eight seats) */
+export const MAX_AGENTS = 12;
 export const MAX_BUILDER_FEE = 0.001;
 export const MAX_APPROVALS = 10;
 export const MAX_SIGNERS = 10;
@@ -46,7 +47,8 @@ export const AGENT_TEXT = 280;
 /** what an agent may ask, held in memory only: at most this many waiting, each for a day, one agent's share of them, and so many an hour per key */
 export const MAX_ASKS = 20;
 export const ASK_TTL_MS = DAY;
-export const ASKS_PER_AGENT = MAX_ASKS / MAX_AGENTS;
+/** one agent's asks waiting at once: five, whatever the count of keys (the account holds MAX_ASKS in all, first come) */
+export const ASKS_PER_AGENT = 5;
 export const ASKS_PER_HOUR = 5;
 export const ASK_KINDS = ["letIn", "limit", "venue", "topup", "session", "leverage", "mode"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];

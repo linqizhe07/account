@@ -61,6 +61,8 @@ export interface DialSnapshot {
   ended?: boolean | undefined;
   /** the most leverage an agent may set */
   maxLeverage?: number | undefined;
+  /** the most one order or movement may be worth, as the owner last signed it (setPolicy cap) */
+  capUsd?: number | undefined;
 }
 
 /** a wallet's proof, as kept on the connection's row: the sentence the account wrote and the wallet's signature over it */
@@ -207,6 +209,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   const applied = new Set<string>();
   // the most leverage the owner has signed for agents (1x until then): a dial row says what it was set to, a signature says it may be that much
   let signedLeverage = 1;
+  let signedCap: number | undefined;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
@@ -299,6 +302,8 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
       } else if (action.type === "setPolicy") {
         if (action.change === "mode" && action.value === "open") openedAt = i;
         if (action.change === "maxLeverage" && /^\d{1,3}$/.test(action.value) && Number(action.value) >= 1) signedLeverage = Number(action.value);
+        // the most one order or movement may be worth: the owner's last signed figure stands, whichever way it went
+        if (action.change === "cap" && /^\d{1,7}(\.\d{1,2})?$/.test(action.value) && Number(action.value) > 0) signedCap = Number(action.value);
       } else if (action.type === "connectVenue") {
         const proof = (row.native as { proof?: KeptProof } | undefined)?.proof;
         connections.delete(action.venue);
@@ -353,6 +358,8 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
     dial = { ...dial, mode: "guard" };
     skipped.push("the dial was open, and the owner's signature that opened it is not in the chain: it starts Guard");
   }
+  // the cap comes back only from the owner's signature, never from a snapshot alone
+  if (signedCap !== undefined) dial = { ...(dial ?? { mode: "guard", revoked: [], reach: {} }), capUsd: signedCap };
   // an order the account stopped following (account/live-orders.ts: canceled while its venue was not connected) is not followed again —
   // save one whose owner's cancel waits to be sent again once its venue answers this network
   const unfinishedOrder = (o: LiveOrder) => (!o.unfollowed || o.cancelWanted === true) && (!DONE.has(o.status) || (!!o.walletTxs && !o.ref && o.status === "pending"));

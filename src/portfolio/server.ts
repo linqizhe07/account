@@ -58,6 +58,11 @@
  *   GET  /api/account/quotes?pairs=okx|BTC/USDT,…        fresh prices for up to twelve markets
  *   GET  /api/account/sellable                           everything held that is not a dollar, and what selling it would sign
  *   GET  /api/account/agents                             the agents one by one: keys, limits, cards, orders, payments, wallets, intents
+ *   GET  /api/account/desk                               THE DESK (account/desk.ts): the account's own agents, as the page draws them — the
+ *                                                        objective, the seats and their standing at the door, the session, the equity
+ *                                                        and its curve, the leads, the tape, the room
+ *   GET  /api/account/desk/catalog                       what hiring offers: the roles and their charters, the house seats' keys, the brain
+ *   GET  /api/account/desk/seat?address=                 the desk as one seat reads it (portfolio_desk): its charter, the room's last lines
  *   GET  /api/account/memory                             what each agent remembers about the owner (account/memory.ts), as the owner
  *                                                        reads it: its notes (the waiting ones too), the switches, what its limits say
  *   GET  /api/account/memory/agent?address=&q=           one agent's memory as that agent reads it (portfolio_memory): its notes kept,
@@ -573,6 +578,27 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     answerOf(res, await svc.agents());
   }));
 
+  // THE DESK (account/desk.ts): the account's own agents — the view the page draws (the objective, the seats and their standing, the
+  // session, the equity, the leads, the tape, the room), what hiring offers (the roles and their charters, the house seats' keys, the
+  // brain's standing), and a seat's own read of it (its charter, the objective, the room's last lines: portfolio_desk)
+  app.get("/api/account/desk", wrap(async (_req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    res.json({ ok: true, desk: (await svc.desk.view()) ?? null });
+  }));
+  app.get("/api/account/desk/catalog", wrap(async (_req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    res.json({ ok: true, ...svc.desk.catalog() });
+  }));
+  app.get("/api/account/desk/seat", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    const q = strings(req, res, { address: 42 });
+    if (!q) return;
+    answerOf(res, await svc.desk.forSeat(q.address));
+  }));
+
   // what each agent remembers about the owner: the owner's whole view (Account › Memory), and one agent's (its MCP seat reads its own)
   app.get("/api/account/memory", wrap(async (_req, res) => {
     if (!mounted(res)) return;
@@ -825,6 +851,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // where the owner can connect, kept fresh without anyone asking: the venues' own answers to this network, and their terms matched to where
   // it is (live/availability.ts) — so the page and the agents know before anyone makes a key
   if (!classic && service.account) service.watchVenues();
+  // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
+  if (!classic && service.account) service.watchDesk();
   const stop = () => srv.close().then(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);

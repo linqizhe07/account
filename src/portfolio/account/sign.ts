@@ -143,7 +143,11 @@ export type OwnerAction =
   | { type: "forgetMemory"; scope: string; what: string; nonce: number }
   /** the owner's switches for an agent's memory, each "on" or "off": `learn` it may keep new notes · `ask` what it learns waits for the
    * owner first · `share` the other agents read it too */
-  | { type: "setMemoryRules"; scope: string; learn: string; ask: string; share: string; nonce: number };
+  | { type: "setMemoryRules"; scope: string; learn: string; ask: string; share: string; nonce: number }
+  /** THE DESK (account/desk.ts): the owner hires, steers, pauses, resumes and ends the account's own agents. `desk` names the desk
+   * ("desk"), `change` what is changed (hire · objective · charter · pause · resume · end · cycle · report · seat), `value` the change
+   * itself as JSON text. Words and settings: the authority of each role is still its key and the limit the owner signed for it */
+  | { type: "setDesk"; desk: string; change: string; value: string; nonce: number };
 
 export type AgentAction =
   | { type: "agentSendAsset"; destination: string; sourceDex: string; destinationDex: string; token: string; amount: string; fromSubAccount: string; maxFee: string; nonce: number }
@@ -186,18 +190,21 @@ export type AgentAction =
    * it widens nothing */
   | { type: "agentRemember"; id: string; topic: string; text: string; how: string; nonce: number }
   /** an agent forgets one of its own notes */
-  | { type: "agentForget"; id: string; nonce: number };
+  | { type: "agentForget"; id: string; nonce: number }
+  /** an agent that holds a seat on the desk (account/desk.ts) says something in the desk's room, under its own key: about a lead
+   * (`lead`: its id, L-0047, or ""), of a kind (lead · clearance · note · report), in its words. Words, never authority */
+  | { type: "agentDeskSay"; lead: string; kind: string; text: string; nonce: number };
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules"] as const;
-export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk"] as const;
+export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
 export const MONEY_TYPES: ReadonlySet<string> = new Set(["sendAsset", "swap", "approveCard", "agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "liveMove", "agentLiveMove", "liveOrder", "agentLiveOrder", "liveAmend", "agentLiveAmend", "liveClose", "agentLiveClose", "liveLeverage", "agentLiveLeverage", "liveEarn", "agentLiveEarn"]);
 /** how the owner steers and the agents answer: a watchlist, intents, reports, asks. None moves money and none is read by a limit (state.ts
  * covers, spendFor): they are words between the owner and the agents, and authority still comes only from limits, cards and the cap */
-export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setIntent", "answerAsk", "agentReport", "agentAsk", "setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget"]);
+export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setIntent", "answerAsk", "agentReport", "agentAsk", "setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget", "setDesk", "agentDeskSay"]);
 /** what is kept in memory (account/memory.ts): their words never reach the ledger, so that what is forgotten is gone */
 export const MEMORY_TYPES: ReadonlySet<string> = new Set(["setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget"]);
 export const MONEY_TTL_MS = 10 * 60_000;
@@ -259,6 +266,7 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   setMemory: { primary: "AccountMemory:Keep", fields: [{ name: "scope", type: "string" }, { name: "id", type: "string" }, { name: "topic", type: "string" }, { name: "text", type: "string" }, NONCE] },
   forgetMemory: { primary: "AccountMemory:Forget", fields: [{ name: "scope", type: "string" }, { name: "what", type: "string" }, NONCE] },
   setMemoryRules: { primary: "AccountMemory:Rules", fields: [{ name: "scope", type: "string" }, { name: "learn", type: "string" }, { name: "ask", type: "string" }, { name: "share", type: "string" }, NONCE] },
+  setDesk: { primary: "AccountDesk:Set", fields: [{ name: "desk", type: "string" }, { name: "change", type: "string" }, { name: "value", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };
@@ -310,6 +318,7 @@ const AGENT_TEXT: Partial<Record<AgentAction["type"], string[]>> = {
   agentLiveEarn: ["venue", "kind", "product", "asset", "amount"],
   agentRemember: ["id", "topic", "text", "how"],
   agentForget: ["id"],
+  agentDeskSay: ["lead", "kind", "text"],
 };
 /** text fields an agent request MAY carry (when it does, they are text too, and signed like the rest) */
 const AGENT_OPTIONAL: Partial<Record<AgentAction["type"], string[]>> = {

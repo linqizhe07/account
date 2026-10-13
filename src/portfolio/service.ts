@@ -92,6 +92,9 @@ import { locator, type Locator } from "./live/location.ts";
 import { isStable, realHttp } from "./live/types.ts";
 import { isPlain } from "./account/state.ts";
 import type { AgentAction, Envelope, Hex } from "./account/sign.ts";
+import { Desk, type Brain, type DeskWorld } from "./account/desk.ts";
+import { claudeBrain } from "./account/brain-claude.ts";
+import { openaiBrain } from "./account/brain-openai.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const FIXTURES = join(ROOT, "fixtures", "home", "portfolio");
@@ -146,6 +149,10 @@ export interface ServiceOptions {
   /** the keyless public market data Markets reads beside the connected venues (default: live/public-markets.ts publicSources over the live
    * connection's network and exchange library); stand-ins in tests */
   publicMarkets?: PublicSource[] | undefined;
+  /** THE DESK (account/desk.ts), on a real account: the brain its house seats think with (default: a Claude model through the Anthropic
+   * API, account/brain-claude.ts; a scripted one in tests) and how often its clock ticks (0: only when asked, as in tests) */
+  /** the desk's brains: by default Claude (the Anthropic API) and any OpenAI-format endpoint, each ready when its key is there */
+  desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined } | undefined;
 }
 
 /** one slice of an order (or any step an agent flies): where, what, and the agent's words for it */
@@ -325,6 +332,11 @@ export class PortfolioService {
   /** a real account restarted: what it brought back from its ledgers, and the restore still under way (venues connecting again) */
   restored: RestoreReport | undefined;
   restoring: Promise<void> | undefined;
+  /** the account's own agents (account/desk.ts), on a real account */
+  readonly desk: Desk | undefined;
+  /** the most one order or movement may be worth, in dollars: the server's `--live-cap` to start with, then what the owner last signed
+   * (setPolicy cap), which a restart brings back from the ledger */
+  private capUsd: number;
   /** the venues of a restarted account are being connected again: what they hold is not on the account yet */
   private reconnecting = false;
 
@@ -342,14 +354,17 @@ export class PortfolioService {
     this.openness = parseOpenness(opts.openness ?? loadOpenness());
     // real money starts Guard: every move an agent asks for waits for the owner until the owner signs the dial open
     if (opts.real) this.openness = { ...this.openness, mode: "guard" };
+    this.capUsd = opts.liveWrites?.capUsd ?? 0;
     this.ledger = this.openLedger();
     this.mount();
     this.memory = opts.account !== undefined || opts.venues === "frontline" ? new MemoryStore(join(opts.home, "memory"), () => Date.parse(this.now())) : undefined;
     this.account = opts.account !== undefined || opts.venues === "frontline" ? new AccountEngine(this.host(), opts.account ?? {}) : undefined;
     if (this.account) this.catalog = opts.connectable ?? loadConnectable();
+    // the desk lives on a real account only: its seats are keys at the real door, its leads orders at a venue connected live
+    this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? [claudeBrain({ home: opts.home }), openaiBrain({ home: opts.home })], tickMs: opts.desk?.tickMs }) : undefined;
     // the payees are simulated hosts: a real account has none. A real account pays real ones, from agent wallets (account/pay-real.ts)
     this.payees = this.account && !opts.real ? mountPayees(this.account) : undefined;
-    if (this.account && opts.real && opts.liveWrites) this.account.usePayer(new RealPayer(this.account, { http: opts.payHttp ?? guardedHttp, chain: this.liveDeps().chain, wallet: (name) => agentWalletKey(opts.home, name), clock: () => this.liveDeps().clock(), capUsd: () => opts.liveWrites?.capUsd ?? 0 }));
+    if (this.account && opts.real && opts.liveWrites) this.account.usePayer(new RealPayer(this.account, { http: opts.payHttp ?? guardedHttp, chain: this.liveDeps().chain, wallet: (name) => agentWalletKey(opts.home, name), clock: () => this.liveDeps().clock(), capUsd: () => this.capUsd }));
     if (this.account && !opts.freshLedger) this.rememberNonces(this.account);
   }
 
@@ -438,6 +453,15 @@ export class PortfolioService {
         if (change === "mode" && value === "open") {
           this.setMode("open");
           return { ok: true, summary: "Beast: agents trade and move inside their limits without asking" };
+        }
+        if (change === "cap") {
+          // the most one order or movement may be worth on this server: the owner's to sign, up or down (the server's --live-cap is only
+          // where it starts; a restart brings back the last signed figure). Nothing on a read-only server
+          if (this.opts.liveWrites === undefined) return no("E_ACCOUNT_BAD_ACTION", { message: "this server was started read-only: it places no orders and moves no money, so there is no cap to set" });
+          if (!/^\d{1,7}(\.\d{1,2})?$/.test(value) || !(Number(value) > 0)) return no("E_ACCOUNT_BAD_ACTION", { message: "the cap is a number of dollars, more than zero, to the cent" });
+          this.capUsd = Number(value);
+          this.ledger.append({ kind: "note", venue: "*", reason: `one order or movement may be worth up to $${value}`, detail: this.dialNow() });
+          return { ok: true, summary: `one order or movement may be worth up to ${cents(this.capUsd)}` };
         }
         if (change === "maxLeverage") {
           // the most leverage an agent may set on a perpetual: widening, so it is the owner's to sign
@@ -541,6 +565,7 @@ export class PortfolioService {
       },
       pairingCode: () => this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode,
       memory: () => this.memory,
+      desk: (action, who) => (this.desk ? this.desk.apply(action, who) : Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk: it is the real account's" }))),
       ...(real && this.opts.liveWrites
         ? {
             agentWalletAddress: (name: string) => {
@@ -579,7 +604,7 @@ export class PortfolioService {
   }
 
   private liveWritesView(): { on: boolean; capUsd: number; turnOn: string } {
-    return { on: this.opts.liveWrites !== undefined, capUsd: this.opts.liveWrites?.capUsd ?? 0, turnOn: "npm run account" };
+    return { on: this.opts.liveWrites !== undefined, capUsd: this.capUsd, turnOn: "npm run account" };
   }
 
   /** what a venue connected live trades: a few markets, or the ones matching a query (a minute old at most) */
@@ -1504,6 +1529,28 @@ export class PortfolioService {
     this.venuesKept = { at: deps.clock(), v, sure: placed && !v.some((x) => x.verdict === "no-answer") };
     return v;
   }
+  /** what the desk (account/desk.ts) needs of this service: the account's reads, the door, the seats' nonces, the ledger */
+  private deskWorld(): DeskWorld {
+    return {
+      home: this.opts.home,
+      now: () => this.now(),
+      realNow: () => this.liveDeps().clock(),
+      mode: () => (this.openness.mode === "open" ? "open" : "guard"),
+      page: () => this.accountView(),
+      explore: (o) => this.explore(o),
+      market: (venue, symbol) => this.liveMarket(venue, symbol),
+      positions: (venue) => this.livePositions(venue),
+      exchange: (envelope) => this.exchange(envelope),
+      nonce: () => this.account!.nextNonce(),
+      venueName: (id) => this.nameOf(id),
+      log: (row) => void this.ledger.append(unaddressedRow(row)),
+    };
+  }
+  /** the real server runs the desk's clock (never in tests, which tick it themselves) */
+  watchDesk(): () => void {
+    return this.desk ? this.desk.start() : () => undefined;
+  }
+
   /** the real server keeps the answer fresh without anyone asking: soon after it starts, then every 30 minutes (never in tests) */
   watchVenues(everyMs = 30 * 60_000): () => void {
     const run = () => {
@@ -2079,12 +2126,14 @@ export class PortfolioService {
     // never later than this start would give a new account: a row cannot lengthen the session past what a restart grants anyway
     const session = d.sessionExpiresAt && (!this.openness.sessionExpiresAt || Date.parse(d.sessionExpiresAt) < Date.parse(this.openness.sessionExpiresAt)) ? d.sessionExpiresAt : this.openness.sessionExpiresAt;
     this.openness = { ...this.openness, mode: d.mode, revoked: d.revoked, reach: d.reach as Openness["reach"], ...(session ? { sessionExpiresAt: session } : {}), ...(d.maxLeverage !== undefined ? { maxLeverage: d.maxLeverage } : {}) };
+    // the cap the owner last signed stands again, on a server that moves money; a read-only server has none
+    if (d.capUsd !== undefined && d.capUsd > 0 && this.opts.liveWrites !== undefined) this.capUsd = d.capUsd;
   }
 
   /** the dial now, as the note rows record it after each change: a restart reads the last one */
   private dialNow(): { dial: DialSnapshot } {
     const ended = !!this.openness.sessionExpiresAt && Date.parse(this.openness.sessionExpiresAt) <= Date.parse(this.now());
-    return { dial: { mode: this.openness.mode === "open" ? "open" : "guard", revoked: [...this.openness.revoked], reach: { ...this.openness.reach }, ...(this.openness.sessionExpiresAt ? { sessionExpiresAt: this.openness.sessionExpiresAt } : {}), ...(ended ? { ended: true } : {}), ...(this.openness.maxLeverage !== undefined ? { maxLeverage: this.openness.maxLeverage } : {}) } };
+    return { dial: { mode: this.openness.mode === "open" ? "open" : "guard", revoked: [...this.openness.revoked], reach: { ...this.openness.reach }, ...(this.openness.sessionExpiresAt ? { sessionExpiresAt: this.openness.sessionExpiresAt } : {}), ...(ended ? { ended: true } : {}), ...(this.openness.maxLeverage !== undefined ? { maxLeverage: this.openness.maxLeverage } : {}), ...(this.opts.liveWrites !== undefined ? { capUsd: this.capUsd } : {}) } };
   }
 
   private openLedger(): Ledger {
