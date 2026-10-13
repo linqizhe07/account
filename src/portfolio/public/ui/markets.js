@@ -304,8 +304,10 @@ function mkIssuerWords(item) {
   return i ? [i.issuer ? `Issued by ${i.issuer}` : "", i.eligibility].filter(Boolean).join(" · ") : "";
 }
 
-/* a row's letter tile: its symbol; an event's, the venue's word for what it is about */
-const mkAv = (item, size = "") => avatar(item.kind === "event" ? String(item.category || "Event").slice(0, 4) : item.base || item.name, size);
+/* a row's tile: its logo (live/icons.ts) over its letters — its symbol; an event's, the venue's word for what it is about */
+const mkAv = (item, size = "") => avatar(item.kind === "event" ? String(item.category || "Event").slice(0, 4) : item.base || item.name, size, item.icon || "");
+/* Elbstream's logos ask for a link to elbstream.com wherever one is shown (core logoCredit): under a list, and in the drawer, that shows one */
+const mkCredit = (items) => logoCredit(items.map((x) => x && x.icon), "mk-credit");
 /* what kind of thing a market is, in a few words: its symbol, what it is; a pre-IPO contract says so (the hover card's second line) */
 const mkSub = (item) => (mkIsPreipo(item) ? "Pre-IPO · Perpetual" : item.kind === "perp" ? (/perp/i.test(item.name) ? item.base || "" : `${item.base || ""} · Perpetual`) : item.base && item.base !== item.name ? item.base : MKT_KIND[item.kind] || "");
 /** a market's name, short: an event's market as its venue names it inside its event — the event's title and the market's own words beside
@@ -638,7 +640,7 @@ function renderMarkets(ctx) {
     } else if (failed) body = `<div class="mk-fail"><div class="msg no">Couldn't read the markets: ${esc(mkSaid(failed))}.</div><button type="button" class="btn btn-sm" data-act="retry" data-fk="retry">Try again</button></div>`;
     else body = mkSkel();
   }
-  paint(ctx.el, `<div class="mk">${mkTabs(p, tabsFrom || (MKT.good && MKT.good.body))}${body}${foot}</div>`);
+  paint(ctx.el, `<div class="mk">${mkTabs(p, tabsFrom || (MKT.good && MKT.good.body))}${body}${foot}${mkCredit(MKT.reg)}</div>`);
   mkObserve(ctx.el);
   mkPeekKeep();
   mkStart();
@@ -1460,7 +1462,8 @@ function mkDrawerParts(o) {
     ${iss ? `<div class="box mk-iss-box"><div class="label">${preipoNow ? "What the company says" : "Issuer"}</div>${iss.issuer && !preipoNow ? `<b>${esc(iss.issuer)}</b>` : ""}${iss.eligibility ? `<p class="small">${esc(iss.eligibility)}</p>` : ""}</div>` : ""}
     ${outcomes}
     ${acts.length ? `<div class="mk-d-acts">${acts.join("")}</div>` : ""}
-    ${why}`;
+    ${why}
+    ${mkCredit([it])}`;
   const chart = `<section class="sec" aria-label="Price history"><div class="sec-head"><h2 class="h2">Price</h2>${key || leg ? mkSeg([["5m", "5m"], ["1h", "1h"], ["1d", "1d"]], o.interval, "interval", "Price history by") : ""}</div>${mkChartHtml(o, it, leg, key)}</section>`;
   // a dollar held (a stablecoin, cash) is compared with nothing: a dollar is a dollar
   const across = it.kind === "stable" || it.kind === "cash" ? "" : `<section class="sec" aria-label="Across venues"><h2 class="h2">Across venues</h2>${mkAcrossHtml(o)}</section>`;

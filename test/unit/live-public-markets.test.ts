@@ -347,11 +347,11 @@ const GAMMA_MARKET = (o: Rec = {}): Rec => ({
  * up-or-down (1H) and the day's */
 const tagged = (...labels: string[]): Rec[] => labels.map((label, i) => ({ id: String(1000 + i), label, slug: label.toLowerCase().replace(/[^a-z0-9]+/g, "-") }));
 const SPORTS = GAMMA_EVENT({}, [GAMMA_MARKET()]);
-const BRAZIL = GAMMA_EVENT({ id: "45915", slug: "brazil-presidential-election", title: "Brazil Presidential Election", endDate: "2026-10-05T03:59:00Z", volume24hr: 1_332_667, tags: tagged("Politics", "Macro Election 2", "Main Election") }, [
+const BRAZIL = GAMMA_EVENT({ id: "45915", slug: "brazil-presidential-election", title: "Brazil Presidential Election", icon: "https://polymarket-upload.s3.us-east-2.amazonaws.com/brazil-flag.png", endDate: "2026-10-05T03:59:00Z", volume24hr: 1_332_667, tags: tagged("Politics", "Macro Election 2", "Main Election") }, [
   GAMMA_MARKET({ conditionId: `0x${"ab".repeat(32)}`, slug: "lula-2026", question: "Will Lula win the 2026 Brazilian presidential election?", outcomes: '["Yes","No"]', outcomePrices: '["0.155","0.845"]', bestBid: 0.15, bestAsk: 0.16, oneDayPriceChange: -0.01, volume24hr: 749_955, endDate: "2026-10-05T03:59:00Z" }),
   GAMMA_MARKET({ conditionId: `0x${"ac".repeat(32)}`, slug: "bolsonaro-2026", question: "Will Bolsonaro win the 2026 Brazilian presidential election?", outcomes: '["Yes","No"]', outcomePrices: '["0.3","0.7"]', bestBid: 0.29, bestAsk: 0.31, volume24hr: 100_000, endDate: "2026-10-05T03:59:00Z" }),
 ]);
-const FED = GAMMA_EVENT({ id: "1", slug: "fed-decision-in-october", title: "Fed Decision in October?", endDate: "2026-10-29T00:00:00Z", volume24hr: 880_418, tags: tagged("Fed", "fomc", "Trump", "Economy", "Fed Rates", "Recurring") }, [GAMMA_MARKET({ conditionId: `0x${"01".repeat(32)}`, slug: "fed-decreases-50", question: "Will the Fed decrease interest rates by 50+ bps after the October meeting?", groupItemTitle: "50+ bps decrease", outcomes: '["Yes","No"]', outcomePrices: '["0.02","0.98"]', bestBid: 0.01, bestAsk: 0.02, volume24hr: 254_692, endDate: "2026-10-29T00:00:00Z" })]);
+const FED = GAMMA_EVENT({ id: "1", slug: "fed-decision-in-october", title: "Fed Decision in October?", endDate: "2026-10-29T00:00:00Z", volume24hr: 880_418, tags: tagged("Fed", "fomc", "Trump", "Economy", "Fed Rates", "Recurring") }, [GAMMA_MARKET({ conditionId: `0x${"01".repeat(32)}`, slug: "fed-decreases-50", question: "Will the Fed decrease interest rates by 50+ bps after the October meeting?", groupItemTitle: "50+ bps decrease", icon: "https://polymarket-upload.s3.us-east-2.amazonaws.com/fed-50.png", outcomes: '["Yes","No"]', outcomePrices: '["0.02","0.98"]', bestBid: 0.01, bestAsk: 0.02, volume24hr: 254_692, endDate: "2026-10-29T00:00:00Z" })]);
 const TWEETS = GAMMA_EVENT({ id: "7", slug: "elon-tweets", title: "Elon Musk # tweets September 29 - October 6, 2026?", volume24hr: 613_719, tags: tagged("Culture", "Politics", "Tweet Markets", "Recurring") }, [GAMMA_MARKET({ conditionId: `0x${"02".repeat(32)}`, slug: "elon-200-219", question: "Will Elon Musk post 200-219 tweets?", outcomes: '["Yes","No"]', outcomePrices: '["0.2","0.8"]', volume24hr: 206_938 })]);
 const HOURLY = GAMMA_EVENT({ id: "8", slug: "btc-updown-1pm", title: "Bitcoin Up or Down - October 6, 1PM ET", volume24hr: 25_561, endDate: "2026-10-06T18:00:00Z", tags: tagged("Crypto", "Crypto Prices", "1H", "Up or Down") }, [GAMMA_MARKET({ conditionId: `0x${"03".repeat(32)}`, slug: "btc-updown-1pm", question: "Bitcoin Up or Down - October 6, 1PM ET", outcomes: '["Up","Down"]', outcomePrices: '["0.5","0.5"]', volume24hr: 25_561, endDate: "2026-10-06T18:00:00Z" })]);
 const DAILY = GAMMA_EVENT({ id: "9", slug: "btc-updown-oct5", title: "Bitcoin Up or Down on October 5?", volume24hr: 1_199_135, endDate: "2026-10-05T16:00:00Z", tags: tagged("Crypto", "Crypto Prices", "Recurring", "Hide From New", "Bitcoin", "Up or Down", "Today 🚀", "Daily") }, [GAMMA_MARKET({ conditionId: `0x${"04".repeat(32)}`, slug: "bitcoin-up-or-down-on-october-5", question: "Bitcoin Up or Down on October 5?", outcomes: '["Up","Down"]', outcomePrices: '["0.7","0.3"]', bestBid: 0.69, bestAsk: 0.71, volume24hr: 1_199_135, endDate: "2026-10-05T16:00:00Z" })]);
@@ -370,6 +370,8 @@ describe("Polymarket, keyless, through Gamma", () => {
     expect(got.map((m) => m.symbol)).toEqual(["lula-2026:Yes", "lula-2026:No", "bitcoin-up-or-down-on-october-5:Up", "bitcoin-up-or-down-on-october-5:Down", "fed-decreases-50:Yes", "fed-decreases-50:No"]);
     // a market's own name inside its event (Gamma's groupItemTitle) is carried beside the event's title; one without it is the event's alone
     expect(got[4]?.event).toEqual({ id: "1", title: "Fed Decision in October?", market: "50+ bps decrease" });
+    // and the market's own picture before its event's
+    expect(got[4]?.image).toBe("https://polymarket-upload.s3.us-east-2.amazonaws.com/fed-50.png");
     expect(got[0]).toEqual({
       symbol: "lula-2026:Yes",
       name: "Will Lula win the 2026 Brazilian presidential election? · Yes",
@@ -390,6 +392,8 @@ describe("Polymarket, keyless, through Gamma", () => {
       volumeUsd24h: 749_955,
       eventVolumeUsd24h: 1_332_667,
       event: { id: "45915", title: "Brazil Presidential Election" },
+      // its picture: the market has none of its own, so its event's
+      image: "https://polymarket-upload.s3.us-east-2.amazonaws.com/brazil-flag.png",
     });
     // the second outcome carries only its own price: Gamma's book and change are the first's
     expect(got[1]).toMatchObject({ price: 0.845, bid: undefined, ask: undefined, volumeUsd24h: 749_955, eventVolumeUsd24h: 1_332_667 });

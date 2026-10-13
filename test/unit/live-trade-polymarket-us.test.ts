@@ -64,7 +64,7 @@ function mk(o: Rec & { slug: string; bid?: string | undefined; ask?: string | un
 }
 const LAD = mk({ slug: "tec-mlb-nlchamp-2026-09-27-lad", bid: "0.6020", ask: "0.6030" });
 const BTC = mk({ slug: "cpc-btc-150k-12-31-2026", question: "When will Bitcoin hit $150k?", title: "Before January 2027", category: "crypto", orderPriceMinTickSize: 0.01, minimumTradeQty: 0.01, endDate: "2027-01-15T04:00:00Z", bid: "0.0400", ask: "0.0500" });
-const ANTH = mk({ slug: "ipcc-anthropic-2026-12-31", question: "Anthropic IPO Officially Confirmed By", title: "December 31, 2026", category: "finance", orderPriceMinTickSize: 0.005, endDate: "2027-01-07T05:00:00Z", bid: "0.7200", ask: "0.7300" });
+const ANTH = mk({ slug: "ipcc-anthropic-2026-12-31", question: "Anthropic IPO Officially Confirmed By", title: "December 31, 2026", category: "finance", image: "https://polymarket-upload.s3.us-east-2.amazonaws.com/us-logos/anthropic.png", orderPriceMinTickSize: 0.005, endDate: "2027-01-07T05:00:00Z", bid: "0.7200", ask: "0.7300" });
 const HOUSE = mk({ slug: "paccc-usho-midterms-2026-11-03-dem", question: "U.S House Midterm Winner", title: "Democratic Party", category: "politics", endDate: "2026-11-04T05:00:00Z", bid: "0.8990", ask: "0.9000" });
 const SENATE = mk({ slug: "paccc-usse-midterms-2026-11-03-rep", question: "U.S Senate Midterm Winner", title: "Republican Party", category: "politics", endDate: "2026-11-04T05:00:00Z", bid: "0.4170", ask: "0.4180" });
 const BTC90 = mk({ slug: "cpc-btc-hitprice-high-yr-12-31-2026-90k", question: "How high will Bitcoin get this year?", title: "Above $89,999.99", category: "crypto", orderPriceMinTickSize: 0.01, minimumTradeQty: 0.01, endDate: "2026-10-09T04:00:00Z", bid: "0.6000", ask: "0.6100" });
@@ -734,6 +734,8 @@ describe("Polymarket US's public market data (Markets, before it is connected)",
     const got = (await src.listings({ limit: 3 })) as Listing[];
     expect(got[0]).toEqual({ symbol: `${HOUSE.slug}:YES`, name: "U.S House Midterm Winner — Democratic Party · Yes", kind: "event", base: `${HOUSE.slug}:YES`, quote: "USD", price: 0.8995, bid: 0.899, ask: 0.9, open: true, types: [], group: { id: HOUSE.slug, title: "U.S House Midterm Winner — Democratic Party" }, outcome: "YES", closeTime: "2026-11-04T05:00:00Z", category: "Politics", tags: ["politics"] });
     expect(got.map((l) => l.symbol)).toEqual([`${HOUSE.slug}:YES`, `${HOUSE.slug}:NO`, `${ANTH.slug}:YES`, `${ANTH.slug}:NO`, `${BTC.slug}:YES`, `${BTC.slug}:NO`]);
+    // a market's own picture goes with both its legs (a row's icon, live/icons.ts); one without has none
+    expect(got.filter((l) => l.image).map((l) => [l.symbol, l.image])).toEqual([[`${ANTH.slug}:YES`, "https://polymarket-upload.s3.us-east-2.amazonaws.com/us-logos/anthropic.png"], [`${ANTH.slug}:NO`, "https://polymarket-upload.s3.us-east-2.amazonaws.com/us-logos/anthropic.png"]]);
     expect(k.sent.every((s) => s.method === "GET" && s.host === GW)).toBe(true);
     expect(noKeyHeaders(k)).toBe(true);
     expect(src.notes!({})).toEqual(["Polymarket US: the most traded open markets of politics, finance, crypto, macro, geopolitics and technology, in turn (its lists give no volume figure)."]);

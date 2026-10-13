@@ -314,6 +314,17 @@ function tkReadKinds() {
   }, () => TK_READING.delete(k)))).then(() => paneLater("trade", tkRedraw));
 }
 
+/* a logo's address as a market row carried it (live/icons.ts): https only, of a sane length — anything else is not kept or shown */
+const tkLogoUrl = (u) => typeof u === "string" && u.length <= 500 && /^https:\/\/[^\s"'<>]+$/.test(u);
+/* the market rows read for this page, every kind (TK.got): where a row that is not a market row (a holding, a position, a market picked
+   before) finds its logo — the row with its key, the event row that lists its outcome's symbol, the row with its venue's line */
+const tkLoaded = () => Object.values(TK.got || {}).flatMap((g) => (g && Array.isArray(g.items) ? g.items : []));
+const tkKeyIcon = (key) => (key ? (tkLoaded().find((x) => x.key === key && tkLogoUrl(x.icon)) || {}).icon || "" : "");
+const tkEventIcon = (symbol) => (tkLoaded().find((x) => x.kind === "event" && tkLogoUrl(x.icon) && (x.outcomes || []).some((o) => (o.at || []).some((a) => a.symbol === symbol))) || {}).icon || "";
+const tkPairIcon = (pair) => (tkLoaded().find((x) => tkLogoUrl(x.icon) && (x.at || []).some((a) => `${a.venue}|${a.symbol}` === pair)) || {}).icon || "";
+/* a market picked before: the logo kept with it, else its row's if that row is read now */
+const tkRecentIcon = (r) => (tkLogoUrl(r.icon) ? r.icon : tkKeyIcon(r.key));
+
 /* the picker's rows and ticket openings remember the last markets picked, per kind (this browser; nothing signed) */
 const TK_RECENT = "account.recent";
 function tkRecentAll() {
@@ -327,7 +338,7 @@ function tkRecentAll() {
 const tkRecent = (kind) => tkRecentAll().filter((r) => r.kind === kind).slice(0, 12);
 function tkRecentAdd(e) {
   try {
-    localStorage.setItem(TK_RECENT, JSON.stringify([{ kind: e.kind, key: e.key || "", name: String(e.name || e.symbol).slice(0, 120), base: e.base || "", venue: e.venue, venueName: e.venueName || "", symbol: e.symbol, at: Date.now() }, ...tkRecentAll().filter((r) => !(r.venue === e.venue && r.symbol === e.symbol))].slice(0, 36)));
+    localStorage.setItem(TK_RECENT, JSON.stringify([{ kind: e.kind, key: e.key || "", name: String(e.name || e.symbol).slice(0, 120), base: e.base || "", venue: e.venue, venueName: e.venueName || "", symbol: e.symbol, ...(tkLogoUrl(e.icon) ? { icon: e.icon } : {}), at: Date.now() }, ...tkRecentAll().filter((r) => !(r.venue === e.venue && r.symbol === e.symbol))].slice(0, 36)));
   } catch {
     // storage off: the list lives as long as the page does not
   }
@@ -403,8 +414,9 @@ function tkPickLists(sec, kind, search) {
   if (!items) tkGroup(g("top"), "Most traded", null, "");
   else tkGroup(g("top"), q ? `Results for “${q}”` : "Most traded", items.map((x) => tkItemRow(x, kind)), q ? `Nothing matches “${q}” under ${tkKindSpec(kind).label}.` : `Nothing is listed under ${tkKindSpec(kind).label}${lens.kind === "venue" ? ` at ${lens.name}` : ""} yet.`);
   // the venues that did not answer this read, or do not serve this network, are simply not among a row's "public venues": the ticket lists
-  // what answers from here and says nothing of the rest (Markets' "Why these, and what's not shown" has their words, folded)
-  paint(g("foot"), "");
+  // what answers from here and says nothing of the rest (Markets' "Why these, and what's not shown" has their words, folded). The foot is
+  // the logos' credit, while the lists show one of Elbstream's (tkGroup keeps it so as each list lands)
+  creditFor(sec, g("foot"), "tk-credit");
 }
 /* one list: its name, its rows (each a button), or a skeleton while its rows are being read, or the words for none */
 function tkGroup(el, title, rows, empty) {
@@ -414,6 +426,10 @@ function tkGroup(el, title, rows, empty) {
   // the rows a click opens are the ones last drawn; heard once, on the list itself (its rows are kept in place by their key)
   el.tkRows = rows || [];
   paint(el, body ? `<div class="label tk-pg-h">${esc(title)}</div>${body}` : "");
+  // a list that lands after the others (the positions, read apart) may be the first to show one of Elbstream's logos: its credit follows
+  const sec = el.parentElement;
+  const foot = sec && sec.querySelector(':scope > [data-pg="foot"]');
+  if (foot) creditFor(sec, foot, "tk-credit");
   if (el.tkHeard) return;
   el.tkHeard = true;
   el.addEventListener("click", (e) => {
@@ -433,10 +449,10 @@ function tkItemRow(x, kind) {
   const q = pair ? ` data-q="${esc(pair)}"` : "";
   const imp = kind === "preipo" ? x.implied || ((x.at || []).find((a) => a.implied) || {}).implied : null;
   const right = x.kind === "event" ? `<span class="tab-nums"${q} data-fmt="c">${esc(tkCents(x.price))}</span>${x.closeTime ? `<span class="dim small">${esc(typeof mkLeft === "function" ? mkLeft(Date.parse(x.closeTime) - Date.now()) : nyDay(x.closeTime))}</span>` : ""}` : imp && imp.usd ? `<span class="tab-nums">${esc(tkValuation(imp.usd))} <span class="tag">implied</span></span><span class="dim small tab-nums"${q} data-fmt="usd">${x.price ? `$${esc(px(x.price))}` : ""}</span>` : `<span class="tab-nums"${q} data-fmt="usd">${x.price ? `$${esc(px(x.price))}` : ""}</span>${chg(x.changePct24h)}`;
-  return { fk: `pick:${x.key}`, pairs: tkPairs(x), av: avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm"), name: tkName(x), title: tkTitle(x), sub: [kind === "preipo" ? "Pre-IPO" : x.kind === "event" ? x.category || "" : "", tkWhereWords(x)].filter(Boolean).join(" · "), right, open: () => tkPickOpen(x, kind) };
+  return { fk: `pick:${x.key}`, pairs: tkPairs(x), av: avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm", x.icon || ""), name: tkName(x), title: tkTitle(x), sub: [kind === "preipo" ? "Pre-IPO" : x.kind === "event" ? x.category || "" : "", tkWhereWords(x)].filter(Boolean).join(" · "), right, open: () => tkPickOpen(x, kind) };
 }
 /* a market picked before, from this browser's own list */
-const tkRecentRow = (r, kind) => ({ fk: `recent:${r.venue}:${r.symbol}`, pairs: A.venues.some((v) => v.id === r.venue && v.live) ? [`${r.venue}|${r.symbol}`] : [], av: avatar(r.base || r.name, "sm"), name: r.name, sub: `${r.venueName || nameOf(r.venue)} · ${nyDay(r.at)}`, right: "", open: () => tkOpen({ kind, venue: r.venue, symbol: r.symbol, side: "buy", key: r.key, base: r.base, name: r.name }) });
+const tkRecentRow = (r, kind) => ({ fk: `recent:${r.venue}:${r.symbol}`, pairs: A.venues.some((v) => v.id === r.venue && v.live) ? [`${r.venue}|${r.symbol}`] : [], av: avatar(r.base || r.name, "sm", tkRecentIcon(r)), name: r.name, sub: `${r.venueName || nameOf(r.venue)} · ${nyDay(r.at)}`, right: "", open: () => tkOpen({ kind, venue: r.venue, symbol: r.symbol, side: "buy", key: r.key, base: r.base, name: r.name }) });
 /* a row picked: the ticket on it, at the first of your accounts that trades it (none: the public venues say Connect to trade there) */
 function tkPickOpen(x, kind) {
   const at = (x.at || []).find((a) => a.connected && a.canTrade !== false) || (x.at || []).find((a) => a.connected) || null;
@@ -456,13 +472,14 @@ function tkHoldGroup(el, kind, venues) {
     const by = new Map();
     for (const v of venues) for (const h of v.holdings || []) {
       if (h.class !== cls || h.inTransit || !(h.amount > 0) || (cls === "crypto" && isDollar(h.asset))) continue;
-      const e = by.get(h.asset) || { asset: h.asset, amount: 0, usd: 0, venues: [] };
+      const e = by.get(h.asset) || { asset: h.asset, amount: 0, usd: 0, venues: [], icon: "" };
+      if (!e.icon && typeof h.icon === "string") e.icon = h.icon;
       e.amount += h.amount;
       e.usd += Number(h.usd) || 0;
       if (!e.venues.some((x) => x.id === v.id)) e.venues.push({ id: v.id, name: v.name });
       by.set(h.asset, e);
     }
-    const rows = [...by.values()].sort((a, b) => b.usd - a.usd).slice(0, 6).map((e) => ({ fk: `hold:${e.asset}`, pairs: [], av: avatar(e.asset.split(":")[0], "sm"), name: e.asset, sub: `${qtyOf(e.amount)}${cls === "event" ? " contracts" : ""} · ${e.venues.map((v) => v.name).join(", ")}`, right: `<span class="tab-nums">${money(e.usd)}</span>`, open: () => tkOpen(cls === "event" ? { kind, venue: e.venues[0].id, symbol: e.asset, side: "sell" } : { kind, venue: e.venues[0].id, base: e.asset, side: "buy" }) }));
+    const rows = [...by.values()].sort((a, b) => b.usd - a.usd).slice(0, 6).map((e) => ({ fk: `hold:${e.asset}`, pairs: [], av: avatar(e.asset.split(":")[0], "sm", e.icon || (cls === "event" ? tkEventIcon(e.asset) : "")), name: e.asset, sub: `${qtyOf(e.amount)}${cls === "event" ? " contracts" : ""} · ${e.venues.map((v) => v.name).join(", ")}`, right: `<span class="tab-nums">${money(e.usd)}</span>`, open: () => tkOpen(cls === "event" ? { kind, venue: e.venues[0].id, symbol: e.asset, side: "sell" } : { kind, venue: e.venues[0].id, base: e.asset, side: "buy" }) }));
     return void tkGroup(el, "You hold", rows, "");
   }
   // perpetuals: the positions read (kept ten seconds; another part's forget() drops it)
@@ -471,7 +488,7 @@ function tkHoldGroup(el, kind, venues) {
     if (!el.isConnected || !A) return;
     const prePairs = new Set(((TK.got.preipo && TK.got.preipo.items) || []).flatMap((x) => (x.at || []).map((a) => `${a.venue}|${a.symbol}`)));
     const all = body && body.ok !== false ? body.positions || [] : [];
-    const rows = all.filter((p) => want.has(p.venue) && p.qty > 0 && (p.kind === "perp" || p.kind === "future") && (kind === "preipo") === prePairs.has(`${p.venue}|${p.symbol}`)).slice(0, 6).map((p) => ({ fk: `pos:${p.venue}:${p.symbol}`, pairs: [`${p.venue}|${p.symbol}`], av: avatar(p.name.split(/[\s/]/)[0], "sm"), name: p.name, sub: `${p.side} ${qtyOf(p.qty)}${p.leverage ? ` · ${p.leverage}x` : ""} · ${p.venueName || nameOf(p.venue)}`, right: `<span class="tab-nums">${p.usd !== undefined ? money(p.usd) : ""}</span>${chg(p.unrealizedUsd, "$")}`, open: () => tkOpen({ kind, venue: p.venue, symbol: p.symbol, side: "buy" }) }));
+    const rows = all.filter((p) => want.has(p.venue) && p.qty > 0 && (p.kind === "perp" || p.kind === "future") && (kind === "preipo") === prePairs.has(`${p.venue}|${p.symbol}`)).slice(0, 6).map((p) => ({ fk: `pos:${p.venue}:${p.symbol}`, pairs: [`${p.venue}|${p.symbol}`], av: avatar(p.name.split(/[\s/]/)[0], "sm", p.icon || tkPairIcon(`${p.venue}|${p.symbol}`)), name: p.name, sub: `${p.side} ${qtyOf(p.qty)}${p.leverage ? ` · ${p.leverage}x` : ""} · ${p.venueName || nameOf(p.venue)}`, right: `<span class="tab-nums">${p.usd !== undefined ? money(p.usd) : ""}</span>${chg(p.unrealizedUsd, "$")}`, open: () => tkOpen({ kind, venue: p.venue, symbol: p.symbol, side: "buy" }) }));
     tkGroup(el, "You hold", rows, "");
   });
 }
@@ -618,6 +635,7 @@ function tkTicket(panel, kind0, preset) {
   panel.innerHTML = `${tkHead("Pick a market", kind)}<form class="tk-form" novalidate autocomplete="off">
     <div class="tk-find" data-find data-live><label class="fld">Market<input type="search" name="q" placeholder="${esc(tkKindSpec(kind).hint)}" spellcheck="false" autocomplete="off" /></label><div class="tk-res" data-res></div></div>
     <div class="tk-picked" data-picked hidden></div>
+    <div class="tk-credit-w" data-credit></div>
     <div class="tk-out" data-outcomes hidden></div>
     <div class="tk-where-w" data-where-w hidden><div class="label">Where</div><div class="tk-where" data-where></div></div>
     <div class="tk-kb" data-kb hidden></div>
@@ -708,8 +726,14 @@ function tkTicket(panel, kind0, preset) {
     if (preset.venue) items = [...items.filter((x) => x.at.some((a) => a.venue === preset.venue)), ...items.filter((x) => !x.at.some((a) => a.venue === preset.venue))];
     items = items.slice(0, 8);
     // the count is read out once the search has landed; the list itself is not read out keystroke by keystroke
-    res.innerHTML = `<p class="sr" role="status">${text ? `${plural(items.length, "market")} for ${esc(text)}` : ""}</p>${items.length ? `<ul class="tk-list" role="list">${items.map((x, i) => `<li><button type="button" data-i="${i}"${tkTitle(x) ? ` title="${esc(tkTitle(x))}"` : ""}>${avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm")}<span class="tk-rn"><b>${esc(tkName(x))}</b><span class="dim small">${esc(tkWhereWords(x))}</span></span><span class="tk-rp"><span class="tab-nums">${x.kind === "event" ? esc(tkCents(x.price)) : tkPre(x) && x.implied && x.implied.usd ? esc(tkValuation(x.implied.usd)) : x.price ? `$${esc(px(x.price))}` : ""}</span>${x.kind === "event" || tkPre(x) ? "" : chg(x.changePct24h)}</span></button></li>`).join("")}</ul>` : `<p class="empty">${got.refused ? `${esc(spec().label)} can't be read here yet.` : text ? `Nothing matches “${esc(text)}” under ${esc(spec().label)} at your accounts or the public venues.` : "Type to find a market."}</p>`}`;
+    res.innerHTML = `<p class="sr" role="status">${text ? `${plural(items.length, "market")} for ${esc(text)}` : ""}</p>${items.length ? `<ul class="tk-list" role="list">${items.map((x, i) => `<li><button type="button" data-i="${i}"${tkTitle(x) ? ` title="${esc(tkTitle(x))}"` : ""}>${avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm", x.icon || "")}<span class="tk-rn"><b>${esc(tkName(x))}</b><span class="dim small">${esc(tkWhereWords(x))}</span></span><span class="tk-rp"><span class="tab-nums">${x.kind === "event" ? esc(tkCents(x.price)) : tkPre(x) && x.implied && x.implied.usd ? esc(tkValuation(x.implied.usd)) : x.price ? `$${esc(px(x.price))}` : ""}</span>${x.kind === "event" || tkPre(x) ? "" : chg(x.changePct24h)}</span></button></li>`).join("")}</ul>` : `<p class="empty">${got.refused ? `${esc(spec().label)} can't be read here yet.` : text ? `Nothing matches “${esc(text)}” under ${esc(spec().label)} at your accounts or the public venues.` : "Type to find a market."}</p>`}`;
     for (const b of res.querySelectorAll("button[data-i]")) b.addEventListener("click", () => pick(items[Number(b.dataset.i)]));
+    credit();
+  };
+  /* the logos' credit: under the search's results while they show, under the market picked once it is */
+  const credit = () => {
+    const pk = q("[data-picked]");
+    creditFor(pk && !pk.hidden ? pk : res, q("[data-credit]"), "tk-credit");
   };
   let findTimer = 0;
   form.elements.q.addEventListener("input", () => {
@@ -725,7 +749,7 @@ function tkTicket(panel, kind0, preset) {
     const pk = q("[data-picked]");
     pk.hidden = false;
     const imp = tkPre(x) ? x.implied || ((x.at || []).find((a) => a.implied) || {}).implied : null;
-    pk.innerHTML = `${avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name)}<span class="tk-rn"${tkTitle(x) ? ` title="${esc(tkTitle(x))}"` : ""}><b>${esc(tkName(x))}</b><span class="dim small">${esc([tkPre(x) ? "Pre-IPO" : x.category, x.closeTime ? `closes ${nyDay(x.closeTime)} ${nyTime(x.closeTime)} New York` : "", x.kind === "perp" && !tkPre(x) && x.fundingRate !== undefined ? `funding ${(x.fundingRate * 100).toFixed(4)}%` : ""].filter(Boolean).join(" · "))}</span></span>${x.kind === "event" ? "" : `<span class="tk-rp"><span class="tab-nums">${imp && imp.usd ? `${esc(tkValuation(imp.usd))} implied` : x.price ? `$${esc(px(x.price))}` : ""}</span>${chg(x.changePct24h)}</span>`}<button type="button" class="link" data-change>Change</button>`;
+    pk.innerHTML = `${avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "", x.icon || "")}<span class="tk-rn"${tkTitle(x) ? ` title="${esc(tkTitle(x))}"` : ""}><b>${esc(tkName(x))}</b><span class="dim small">${esc([tkPre(x) ? "Pre-IPO" : x.category, x.closeTime ? `closes ${nyDay(x.closeTime)} ${nyTime(x.closeTime)} New York` : "", x.kind === "perp" && !tkPre(x) && x.fundingRate !== undefined ? `funding ${(x.fundingRate * 100).toFixed(4)}%` : ""].filter(Boolean).join(" · "))}</span></span>${x.kind === "event" ? "" : `<span class="tk-rp"><span class="tab-nums">${imp && imp.usd ? `${esc(tkValuation(imp.usd))} implied` : x.price ? `$${esc(px(x.price))}` : ""}</span>${chg(x.changePct24h)}</span>`}<button type="button" class="link" data-change>Change</button>`;
     pk.querySelector("[data-change]").addEventListener("click", () => {
       tkDraftKeep(null);
       item = null;
@@ -741,6 +765,7 @@ function tkTicket(panel, kind0, preset) {
       form.elements.q.focus();
       search();
     });
+    credit();
     drawOutcomes();
     panelTitle();
     ranked = null;
@@ -888,7 +913,7 @@ function tkTicket(panel, kind0, preset) {
     const band = q("[data-money-band]");
     if (band) band.innerHTML = tkMoneyBand(pickedRow);
     q("[data-body]").hidden = false;
-    tkRecentAdd({ kind, key: item.key, name: item.name, base: item.base, venue: picked.venue, venueName: picked.venueName, symbol: picked.symbol });
+    tkRecentAdd({ kind, key: item.key, name: item.name, base: item.base, venue: picked.venue, venueName: picked.venueName, symbol: picked.symbol, icon: item.icon });
     const want = picked;
     const body = await api(`/api/account/market?${new URLSearchParams({ venue: want.venue, symbol: want.symbol })}`, { ttl: 3_000 });
     if (!live() || picked !== want) return;
