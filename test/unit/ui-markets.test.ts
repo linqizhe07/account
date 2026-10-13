@@ -342,7 +342,7 @@ describe("the Markets pane", () => {
 
   it("draws each market's logo over its letters — the letters stay where a logo does not load — and credits Elbstream wherever one of its logos is shown", async () => {
     const BTC_LOGO = "https://api.elbstream.com/logos/crypto/BTC";
-    const KALSHI_PIC = "https://kalshi-public-docs.s3.amazonaws.com/series-images-webp/KXFEDDECISION.webp";
+    const KALSHI_PIC = "https://assets.kalshi.com/series-images-webp/KXFEDDECISION.webp";
     const withLogos = { ...explore, items: [{ ...fed, icon: KALSHI_PIC }, { ...btc, icon: BTC_LOGO }, doge] };
     const p = page((path) => (path.startsWith("/api/account/explore") ? withLogos : {}));
     p.set("A", account());
@@ -358,7 +358,7 @@ describe("the Markets pane", () => {
     expect(html).toContain(`<span class="av" aria-hidden="true">ECON<img class="av-im" src="${KALSHI_PIC}"`);
     expect(html).toContain('<span class="av" aria-hidden="true">DOGE</span>');
     // Elbstream's logos are shown with a link to it, under the list
-    expect(html).toContain('<p class="mk-credit"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>');
+    expect(html).toContain('<p class="logo-credit mk-credit"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>');
     // a logo that did not load is not asked for again: its letters are the tile, and with no Elbstream logo shown, no credit
     p.run(`ICON_MISS.add(${JSON.stringify(BTC_LOGO)})`);
     p.run("for (const g of MKT.got.values()) g.at = Date.now(); renderMarkets({ el: EL, owner: true, lens: lensNow(), params: {} })");

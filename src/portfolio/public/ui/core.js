@@ -33,7 +33,9 @@
      (an event contract's price, 62.5¢, held to 0–100) · short (an address) · qtyOf (an amount) · plural · nyDay · nyTime (a dash for a
      time that is not one) · typeText (an order's type) · isLive (an order on a book) · byOf (who did it) · readOnlyWords (a venue's words)
      chg(n, unit)                 a change, ▲ up / ▼ down with a word for screen readers, never colour alone; unit "%" · "$" · "¢" · ""
-     avatar(sym, size)            a letter tile where a logo would be ("sm" · "lg")      icon(name, cls)  one of the sprite's stroke icons
+     avatar(sym, size, img)       a letter tile, and over it the logo at `img` where there is one ("sm" · "lg"; live/icons.ts)
+     logoCredit(urls, cls) · creditFor(scope, el, cls)   the link Elbstream's free logos ask for, wherever one is shown
+     icon(name, cls)              one of the sprite's stroke icons
      table(cols, rows, opts)      cols [{ label, r, cls, cell(row, i) }] (cls on the column's head and cells) · opts { empty, rowAttr(row, i), cls }
      seg(items, on, onChange, { label })   a toggle; items [[value, label], …]; onChange(value) when another is pressed
      paint(el, html)              el's HTML written only where it changed: the new HTML is laid over what is there (morphKids) — an element
@@ -311,9 +313,29 @@ document.addEventListener(
     if (!t || !t.classList || !t.classList.contains("av-im")) return;
     ICON_MISS.add(t.getAttribute("src"));
     t.remove();
+    // a credit painted while this logo stood is asked again (creditFor, below: called only once the page is drawn)
+    if (typeof creditsAgain === "function") creditsAgain();
   },
   true,
 );
+/* Elbstream's logos are free with a link to elbstream.com, clearly visible and at 12 points or more, on any page where one is shown
+   (elbstream.com/logos, read again 2026-10-13; live/icons.ts): the link, where any of `urls` is one of its logos not known to have failed */
+const ELBSTREAM_API = "https://api.elbstream.com/";
+const logoCredit = (urls, cls = "") => (urls.some((u) => typeof u === "string" && u.startsWith(ELBSTREAM_API) && !ICON_MISS.has(u)) ? `<p class="logo-credit${cls ? ` ${cls}` : ""}"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>` : "");
+/* the same link painted into `el` while `scope` shows one of Elbstream's logos: for a part drawn a piece at a time (Trade's picker, its ticket).
+   Each is kept by its element, so a logo that fails afterwards takes its credit with it (the error listener above asks again) */
+const CREDITED = new Map();
+function creditFor(scope, el, cls = "") {
+  if (!el) return;
+  CREDITED.set(el, { scope, cls });
+  paint(el, logoCredit(scope ? [...scope.querySelectorAll("img.av-im")].map((i) => i.getAttribute("src")) : [], cls));
+}
+function creditsAgain() {
+  for (const [el, c] of CREDITED) {
+    if (!el.isConnected) CREDITED.delete(el);
+    else creditFor(c.scope, el, c.cls);
+  }
+}
 /** a change, up or down: the glyph, a word for a screen reader, the amount — never the colour alone */
 function chg(n, unit = "%") {
   if (n === undefined || n === null || n === "" || !Number.isFinite(Number(n))) return '<span class="flat">—</span>';

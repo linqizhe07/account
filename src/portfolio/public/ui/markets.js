@@ -306,10 +306,8 @@ function mkIssuerWords(item) {
 
 /* a row's tile: its logo (live/icons.ts) over its letters — its symbol; an event's, the venue's word for what it is about */
 const mkAv = (item, size = "") => avatar(item.kind === "event" ? String(item.category || "Event").slice(0, 4) : item.base || item.name, size, item.icon || "");
-/* Elbstream's logos are free to show with a link to elbstream.com wherever one is (live/icons.ts): said under a list, and in the drawer, that
-   shows one, at 12pt */
-const MK_ELBSTREAM = "https://api.elbstream.com/";
-const mkCredit = (items) => (items.some((x) => x && typeof x.icon === "string" && x.icon.startsWith(MK_ELBSTREAM) && !ICON_MISS.has(x.icon)) ? '<p class="mk-credit"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>' : "");
+/* Elbstream's logos ask for a link to elbstream.com wherever one is shown (core logoCredit): under a list, and in the drawer, that shows one */
+const mkCredit = (items) => logoCredit(items.map((x) => x && x.icon), "mk-credit");
 /* what kind of thing a market is, in a few words: its symbol, what it is; a pre-IPO contract says so (the hover card's second line) */
 const mkSub = (item) => (mkIsPreipo(item) ? "Pre-IPO · Perpetual" : item.kind === "perp" ? (/perp/i.test(item.name) ? item.base || "" : `${item.base || ""} · Perpetual`) : item.base && item.base !== item.name ? item.base : MKT_KIND[item.kind] || "");
 /** a market's name, short: an event's market as its venue names it inside its event — the event's title and the market's own words beside

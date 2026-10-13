@@ -524,6 +524,76 @@ describe("a ticket kept in this browser", () => {
   });
 });
 
+describe("each tile's real logo, as Markets shows it (live/icons.ts), with Elbstream's credit wherever one of its logos is shown", () => {
+  const ELB = "https://api.elbstream.com/logos";
+  const KALSHI_FED = "https://assets.kalshi.com/series-images-webp/KXFEDDECISION.webp";
+  const PM_PIC = "https://polymarket-upload.s3.us-east-2.amazonaws.com/fed-decision.jpg";
+  const BTC = ROW("coin", "BTC", { icon: `${ELB}/crypto/BTC` });
+  const SOL = ROW("perp", "SOL", { icon: `${ELB}/crypto/SOL`, at: [{ venue: "hl", venueName: "Hyperliquid", symbol: "SOL-PERP", connected: true, canTrade: true, public: false }] });
+  const FED = { key: "pm:0xfed", kind: "event", name: "Fed decision in October? · 25 bps cut", category: "Economics", price: 0.4, tabs: [], icon: PM_PIC, at: [{ venue: "polymarket", venueName: "Polymarket", symbol: "fed-decision-in-october:Yes", connected: false, canTrade: false, public: true }], outcomes: [{ label: "Yes", at: [{ venue: "polymarket", symbol: "fed-decision-in-october:Yes" }] }, { label: "No", at: [{ venue: "polymarket", symbol: "fed-decision-in-october:No" }] }] };
+
+  it("a market row's tile carries its logo over its letters; one with none keeps its letters", () => {
+    const p = page();
+    p.set("A", pageOf([EX, PRED, HL]));
+    const tile = p.out<string>(`tkItemRow(${JSON.stringify(BTC)}, "crypto").av`);
+    expect(tile).toContain('<img class="av-im" src="https://api.elbstream.com/logos/crypto/BTC"');
+    expect(tile).toContain('referrerpolicy="no-referrer"');
+    expect(tile).toContain(">BTC<");
+    const bare = p.out<string>(`tkItemRow(${JSON.stringify(ROW("coin", "ZZZ"))}, "crypto").av`);
+    expect(bare).not.toContain("<img");
+    // the ticket's search row and the market picked use the row's own logo too (the same avatar, the row's icon)
+    expect(source("ui/trade.js")).toContain('x.base || x.name, "sm", x.icon || "")}<span class="tk-rn"><b>');
+    expect(source("ui/trade.js")).toContain('x.base || x.name, "", x.icon || "")}<span class="tk-rn"');
+  });
+
+  it("a market picked before keeps the logo it had; an older one finds its row's by its key; nothing but an https address is kept or shown", () => {
+    const p = page();
+    p.set("A", pageOf([EX, PRED, HL]));
+    p.run("var STORE = {}; localStorage.getItem = (k) => (k in STORE ? STORE[k] : null); localStorage.setItem = (k, v) => { STORE[k] = String(v); };");
+    p.run(`tkRecentAdd({ kind: "crypto", key: "coin:ETH", name: "ETH", base: "ETH", venue: "ex", venueName: "Exchange", symbol: "ETH/USDT", icon: "${ELB}/crypto/ETH" })`);
+    p.run(`tkRecentAdd({ kind: "crypto", key: "coin:XRP", name: "XRP", base: "XRP", venue: "ex", venueName: "Exchange", symbol: "XRP/USDT", icon: "javascript:alert(1)" })`);
+    const kept = p.out<Array<{ key: string; icon?: string }>>("tkRecent('crypto')");
+    expect(kept.find((r) => r.key === "coin:ETH")?.icon).toBe(`${ELB}/crypto/ETH`);
+    expect(kept.find((r) => r.key === "coin:XRP")).not.toHaveProperty("icon");
+    expect(p.out<string>("tkRecentRow(tkRecent('crypto').find((r) => r.key === 'coin:ETH'), 'crypto').av")).toContain(`src="${ELB}/crypto/ETH"`);
+    // one kept before logos were (or with an address not kept): its row's logo once that row is read, else its letters
+    const old = { kind: "crypto", key: "coin:BTC", name: "BTC", base: "BTC", venue: "ex", symbol: "BTC/USDT", at: 1 };
+    expect(p.out<string>(`tkRecentRow(${JSON.stringify(old)}, "crypto").av`)).not.toContain("<img");
+    p.set("TK.got", { crypto: { at: Date.now(), items: [BTC] } });
+    expect(p.out<string>(`tkRecentRow(${JSON.stringify(old)}, "crypto").av`)).toContain(`src="${ELB}/crypto/BTC"`);
+    expect(p.out<string>(`tkRecentRow(${JSON.stringify({ ...old, icon: "http://tracker.example/p.png" })}, "crypto").av`)).toContain(`src="${ELB}/crypto/BTC"`);
+  });
+
+  it("a holding or a position that is not a market row finds its logo in the rows read: an event by its outcome's symbol, a position by its venue's line", () => {
+    const p = page();
+    p.set("A", pageOf([EX, PRED, HL]));
+    p.set("TK.got", { perps: { at: Date.now(), items: [SOL] }, predictions: { at: Date.now(), items: [FED] } });
+    // the NO side of the question held at a paper account is the same symbol the public line lists
+    expect(p.out("tkEventIcon('fed-decision-in-october:No')")).toBe(PM_PIC);
+    expect(p.out("tkEventIcon('some-other-market:Yes')")).toBe("");
+    expect(p.out("tkPairIcon('hl|SOL-PERP')")).toBe(`${ELB}/crypto/SOL`);
+    expect(p.out("tkPairIcon('hl|ETH-PERP')")).toBe("");
+    // the holding's own logo, as the account gives it (exchange.ts → live/icons.ts holdingIcon), comes first: the hold rows read h.icon
+    expect(source("ui/trade.js")).toContain('e.icon || (cls === "event" ? tkEventIcon(e.asset) : "")');
+    expect(source("ui/trade.js")).toContain("p.icon || tkPairIcon(`${p.venue}|${p.symbol}`)");
+  });
+
+  it("credits Elbstream wherever one of its logos stands, and only then: a venue's own picture asks for none", () => {
+    const p = page();
+    const credit = '<p class="logo-credit tk-credit"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>';
+    expect(p.out(`logoCredit(["${ELB}/crypto/BTC", "${PM_PIC}"], "tk-credit")`)).toBe(credit);
+    expect(p.out(`logoCredit(["${PM_PIC}", "${KALSHI_FED}", "", null], "tk-credit")`)).toBe("");
+    // a logo that did not load is not one shown
+    p.run(`ICON_MISS.add("${ELB}/crypto/BTC")`);
+    expect(p.out(`logoCredit(["${ELB}/crypto/BTC"], "tk-credit")`)).toBe("");
+    // the picker's foot and the ticket each carry it (painted from what their tiles show)
+    expect(source("ui/trade.js")).toContain('creditFor(sec, g("foot"), "tk-credit")');
+    expect(source("ui/trade.js")).toContain('<div class="tk-credit-w" data-credit></div>');
+    expect(source("ui/trade.css")).toContain(".tk-credit");
+    expect(source("ui/shell.css")).toMatch(/\.logo-credit \{[^}]*font-size: 12pt/);
+  });
+});
+
 describe("a tokenised asset in the ticket", () => {
   it("shows the issuer's words where its issuer closed it or keeps it from being swapped, instead of a button that would only be refused", () => {
     const p = page();

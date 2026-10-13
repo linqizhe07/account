@@ -174,7 +174,7 @@ describe("a row's logo", () => {
     const icon = (key: string) => out.items.find((i) => i.key === key)?.icon;
     expect(icon("coin:BTC")).toBe("https://api.elbstream.com/logos/crypto/BTC");
     expect(icon("stock:AAPL")).toBe("https://api.elbstream.com/logos/symbol/AAPL");
-    expect(icon("kalshi:KXFEDDECISION-26OCT-H0")).toBe("https://kalshi-public-docs.s3.amazonaws.com/series-images-webp/KXFEDDECISION.webp");
+    expect(icon("kalshi:KXFEDDECISION-26OCT-H0")).toBe("https://assets.kalshi.com/series-images-webp/KXFEDDECISION.webp");
     expect(icon(`pm:${COND}`)).toBe(pic);
   });
 });

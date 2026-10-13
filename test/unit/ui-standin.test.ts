@@ -172,6 +172,19 @@ describe("the stand-in account", () => {
     expect(row("earn:ex:flex:USDT")).toMatchObject({ class: "earn", amount: 150, usd: 150 });
     expect(h.money.readyUsd).toBeGreaterThan(5_000);
     expect(h.positions.map((p: { symbol: string }) => p.symbol).sort()).toEqual(["BTC/USDT:USDT", "ETH/USDT:USDT", "SI-FEDCUT-DEC:YES"]);
+    // each venue's holdings carry the logo the page shows beside them (live/icons.ts holdingIcon): the coin's at the exchange; none for the
+    // stand-in event venue's contract, whose ticker only looks like Kalshi's
+    const page = (await get("/api/account")).body as { venues: Array<{ id: string; holdings: Array<{ asset: string; icon?: string }> }> };
+    const held = (venue: string, asset: string) => page.venues.find((v) => v.id === venue)?.holdings.find((x) => x.asset === asset);
+    expect(held("ex", "BTC")?.icon).toBe("https://api.elbstream.com/logos/crypto/BTC");
+    expect(held("predict", "SI-FEDCUT-DEC:YES")).not.toHaveProperty("icon");
+    // and each open position, read for the page, the coin's (positionIcon); the event contract none
+    const pos = (await get("/api/account/positions")).body as { positions: Array<{ symbol: string; icon?: string }> };
+    expect(pos.positions.find((x) => x.symbol === "BTC/USDT:USDT")?.icon).toBe("https://api.elbstream.com/logos/crypto/BTC");
+    expect(pos.positions.find((x) => x.symbol === "ETH/USDT:USDT")?.icon).toBe("https://api.elbstream.com/logos/crypto/ETH");
+    expect(pos.positions.find((x) => x.symbol === "SI-FEDCUT-DEC:YES")).not.toHaveProperty("icon");
+    const one = (await get("/api/account/positions?venue=ex")).body as { positions: Array<{ symbol: string; icon?: string }> };
+    expect(one.positions.find((x) => x.symbol === "BTC/USDT:USDT")?.icon).toBe("https://api.elbstream.com/logos/crypto/BTC");
     // the broker's shares — 3 AAPL and 2 NVDA, whether the owner bought the last of them through the door or the broker held them already —
     // and its $2,000 less what those market buys cost
     expect(row("equity:AAPL")).toMatchObject({ class: "equity", amount: 3, venues: [expect.objectContaining({ venue: "broker", amount: 3 })] });
