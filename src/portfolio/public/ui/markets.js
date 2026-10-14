@@ -74,10 +74,19 @@ function mkEnded(item, oi) {
 /** a stock's session in a few words, from the venue's own stamps (Market.session), never the page's clock: "closes 16:00 New York" while it
  * is in session, "opens Wed 7 Oct, 09:30 New York" while it is not; "" where the venue gave no time */
 function mkSessionWhen(s) {
+  const ph = mkPhase(s);
+  if (ph) {
+    const ends = s.phaseEndsAt && Number.isFinite(Date.parse(s.phaseEndsAt)) ? s.phaseEndsAt : "";
+    return `${MK_PHASES[ph] || ph}${ends ? ` until ${nyTime(ends)} New York${yourTime(ends)}` : ""}${s.extendedHours ? " · a limit order with extended hours trades now" : " · orders wait for the regular session"}`;
+  }
   const at = s ? (s.open ? s.closesAt : s.opensAt) : "";
   if (!at || !Number.isFinite(Date.parse(at))) return "";
-  return s.open ? `closes ${nyTime(at)} New York` : `opens ${nyDay(at)}, ${nyTime(at)} New York`;
+  return s.open ? `closes ${nyTime(at)} New York${yourTime(at)}` : `opens ${nyDay(at)}, ${nyTime(at)} New York${yourTime(at)}`;
 }
+/* the session the venue says is on outside the regular one (pre-market, after-hours, overnight), or "" */
+const mkPhase = (s) => (s && s.phase && s.phase !== "regular" && s.phase !== "closed" ? s.phase : "");
+const MK_PHASES = { pre: "pre-market", after: "after-hours", overnight: "overnight session" };
+const MK_PHASE_TAGS = { pre: "Pre-market", after: "After-hours", overnight: "Overnight" };
 /* the countdown's words once the time has run out: still trading past its end date, or closed (what a countdown still running will say
    the moment it ends, until the next read says what the venue did) */
 const mkEndedWords = (state) => (state.ended && state.trading ? "Past its end date · still trading" : "Closed");
@@ -411,7 +420,8 @@ function mkClosedTag(item) {
   const s = mkSessionOf(item);
   if (!s || s.open) return "";
   const when = mkSessionWhen(s);
-  return `<span class="tag"${when ? ` title="${esc(when.charAt(0).toUpperCase() + when.slice(1))}"` : ""}>Closed</span> `;
+  const ph = mkPhase(s);
+  return `<span class="tag${ph && s.extendedHours ? " up" : ""}"${when ? ` title="${esc(when.charAt(0).toUpperCase() + when.slice(1))}"` : ""}>${esc(ph ? MK_PHASE_TAGS[ph] || ph : "Closed")}</span> `;
 }
 /* the volume cell: dollars, or contracts where the venue counts those */
 const mkVolCell = (item) => (item.volumeUsd24h !== undefined ? mkVol(item.volumeUsd24h) : item.contracts24h !== undefined ? `${mkCount(item.contracts24h)} contracts` : "—");
@@ -1430,7 +1440,7 @@ function mkDrawerParts(o) {
     ...(it.fundingRate !== undefined ? [["Funding", `${Number((it.fundingRate * 100).toFixed(4))}%${it.nextFundingAt ? ` · next ${esc(nyTime(it.nextFundingAt))}` : ""}`]] : []),
     ...(fresh && fresh.maxLeverage ? [["Leverage", `up to ${esc(String(fresh.maxLeverage))}x`]] : []),
     ...(it.closeTime ? [[state.ended ? (state.trading ? "End date" : "Closed") : "Closes", `${esc(nyDay(it.closeTime))} ${esc(nyTime(it.closeTime))} New York${state.ended && state.trading ? " · still trading" : ""}`]] : []),
-    ...(session ? [["Session", `${session.open ? "Open" : "Closed"}${sessionWhen ? ` · ${esc(sessionWhen)}` : ""}`]] : []),
+    ...(session ? [["Session", `${session.open ? "Open" : mkPhase(session) ? "Extended" : "Closed"}${sessionWhen ? ` · ${esc(sessionWhen)}` : ""}`]] : []),
   ].filter((f) => f[2] !== false);
   const outcomes = ev && it.outcomes ? `<div class="mk-outs">${it.outcomes.map((x, oi) => {
     const rr = mkRoute(it, oi);

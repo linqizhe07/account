@@ -3,6 +3,8 @@
  *
  *   live:exchange:<id>   any exchange the unified library covers (binance, okx, bybit, kraken …)      a key file
  *   live:alpaca          a brokerage account                                                          a key file
+ *   live:alpaca-paper    PAPER TRADING: Alpaca's own paper account, the same interface at its paper   a key file
+ *                        host — paper dollars, real quotes, no real money (LiveSource.paper)
  *   live:robinhood       Robinhood's investing accounts, through Robinhood's MCP server               Robinhood's own sign-in
  *   live:robinhood-crypto  a Robinhood crypto account                                                 a key file
  *   live:kalshi          a prediction-market account                                                  a key file
@@ -27,7 +29,7 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import type { LiveOption, LiveOptions } from "../account/exchange.ts";
 import { hyperliquidSource, ondoSource, polymarketSource, walletSource, type AddressRequest } from "./address.ts";
-import { ALPACA_KEY, alpacaSource } from "./alpaca.ts";
+import { ALPACA_KEY, ALPACA_PAPER_KEY, alpacaSource } from "./alpaca.ts";
 import type { ChainReader, ChainSender } from "./chain.ts";
 import { defaultKeyRef, loadKeyFile, type KeyShape } from "./credentials.ts";
 import { EXCHANGE_KEY, exchangeSource, type OpenExchange } from "./exchange.ts";
@@ -131,6 +133,24 @@ const alpaca: Connector = {
     const key = loadKeyFile(deps.home, req.reference, ALPACA_KEY, req.venue);
     if (isRefusal(key)) return key;
     const opened = await alpacaSource({ venue: req.venue, label: req.label, reference: req.reference || defaultKeyRef(req.venue), key, http: deps.http, clock: deps.clock });
+    return isRefusal(opened) ? opened : { ...opened, summary: said(opened.source) };
+  },
+};
+
+/** Alpaca's PAPER account, a paper account (LiveSource.paper): the same Trading API at paper-api.alpaca.markets, with the keys the paper
+ * account's own dashboard makes — nothing of it is counted as money, its orders are rehearsals held to the owner's limits and not to the
+ * server's cap. Open to anyone with an email address (Alpaca's paper-trading page): no terms of a place gate it. Its key file is its own,
+ * under credentials/alpaca-paper/api-key.json */
+const alpacaPaper: Connector = {
+  kind: "alpaca-paper",
+  label: "Alpaca · paper trading on its paper account, API key (no real money)",
+  needs: "key-file",
+  example: ALPACA_PAPER_KEY.example,
+  venues: [],
+  async open(req, deps) {
+    const key = loadKeyFile(deps.home, req.reference, ALPACA_PAPER_KEY, req.venue);
+    if (isRefusal(key)) return key;
+    const opened = await alpacaSource({ venue: req.venue, label: req.label, reference: req.reference || defaultKeyRef(req.venue), key, http: deps.http, clock: deps.clock, paper: true });
     return isRefusal(opened) ? opened : { ...opened, summary: said(opened.source) };
   },
 };
@@ -287,7 +307,7 @@ const metamask: Connector = {
   },
 };
 
-export const CONNECTORS: Connector[] = [paper, exchange, alpaca, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, hyperliquidPaper, polymarket, polymarketTrade, ondo];
+export const CONNECTORS: Connector[] = [paper, exchange, alpaca, alpacaPaper, robinhood, robinhoodCrypto, kalshi, polymarketUs, metamask, wallet, hyperliquid, hyperliquidTrade, hyperliquidPaper, polymarket, polymarketTrade, ondo];
 
 /** register a connector kind (the other sources add themselves here) */
 export function register(c: Connector): void {
@@ -308,7 +328,7 @@ export function liveOptions(home: string): LiveOptions {
 }
 
 /** the key file each kind of connection reads */
-export const KEY_SHAPES: Record<string, KeyShape> = { exchange: EXCHANGE_KEY, alpaca: ALPACA_KEY, kalshi: KALSHI_KEY, "polymarket-us": POLYMARKET_US_KEY, "robinhood-crypto": ROBINHOOD_CRYPTO_KEY, "polymarket-trade": POLYMARKET_TRADE_KEY, "hyperliquid-trade": HYPERLIQUID_TRADE_KEY, "hyperliquid-paper": HYPERLIQUID_PAPER_KEY };
+export const KEY_SHAPES: Record<string, KeyShape> = { exchange: EXCHANGE_KEY, alpaca: ALPACA_KEY, "alpaca-paper": ALPACA_PAPER_KEY, kalshi: KALSHI_KEY, "polymarket-us": POLYMARKET_US_KEY, "robinhood-crypto": ROBINHOOD_CRYPTO_KEY, "polymarket-trade": POLYMARKET_TRADE_KEY, "hyperliquid-trade": HYPERLIQUID_TRADE_KEY, "hyperliquid-paper": HYPERLIQUID_PAPER_KEY };
 
 /** Is a key file ready for a connection? Where it is, whether only its owner can read it, which fields it is missing — the same checks a
  * connection makes, said before connecting so the page can say what to do next. Field NAMES are said; no value ever leaves this process.

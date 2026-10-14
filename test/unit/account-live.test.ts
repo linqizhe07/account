@@ -438,7 +438,8 @@ describe("a brokerage account at Alpaca", () => {
     // a paper account is a different host; a key the broker does not know is the broker's no
     const y = await boot({ http });
     y.keyFile("credentials/alpaca/api-key.json", { keyId: "made-up-id", secret: "s3cret-value-1", paper: "true" });
-    expect(summary(await y.connect("alpaca", "live:alpaca"))).toContain("Alpaca · paper connected live");
+    // a key file that says paper is a paper account: the source says so, and its balance is not money
+    expect(summary(await y.connect("alpaca", "live:alpaca"))).toContain("Alpaca · paper connected · PAPER, no real money");
     const z = await boot({ http });
     z.keyFile("credentials/alpaca/api-key.json", { keyId: "someone-else", secret: "made-up-secret-0003" });
     const no = refusal(await z.connect("alpaca", "live:alpaca"));

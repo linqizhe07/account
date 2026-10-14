@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { byAsset } from "../../src/portfolio/account/holdings.ts";
 import { liveAccount } from "../../src/portfolio/adapters/live.ts";
-import { alpacaSource } from "../../src/portfolio/live/alpaca.ts";
+import { ALPACA_PAPER_KEY, alpacaSource } from "../../src/portfolio/live/alpaca.ts";
+import { CONNECTORS, KEY_SHAPES, keyFileStatus, liveOptions, openLive, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import type { Candle, CandleInterval, LiveTrader, Market, MarketStats, OrderRequest, OrderState } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply, LiveSource } from "../../src/portfolio/live/types.ts";
 
@@ -161,7 +165,7 @@ describe("one market, with a fresh price", () => {
     expect(m).toEqual({ symbol: "AAPL", name: "Apple Inc. Common Stock", kind: "stock", base: "AAPL", quote: "USD", price: 200.5, bid: 200.25, ask: 200.75, qtyStep: 1e-9, priceStep: 0.01, minNotional: 1, open: true, session: { open: true, opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-05T20:00:00.000Z" }, types: ["market", "limit", "stop", "stop_limit"], tifs: ["day", "gtc"] } satisfies Market);
     // Alpaca has no post-only or reduce-only order, and no leverage per position: none is declared
     expect(["postOnly", "reduceOnly", "maxLeverage"].filter((k) => k in m)).toEqual([]);
-    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets/AAPL`, `GET ${LIVE}/v2/clock`, `GET ${DATA}/v2/stocks/AAPL/quotes/latest`, `GET ${DATA}/v2/stocks/AAPL/trades/latest`]);
+    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets/AAPL`, `GET ${LIVE}/v2/clock`, calUrl(Date.parse("2026-10-05T19:53:20.000Z")), `GET ${DATA}/v2/stocks/AAPL/quotes/latest`, `GET ${DATA}/v2/stocks/AAPL/trades/latest`]);
     for (const r of seen) expect(r.headers).toEqual(AUTH);
   });
 
@@ -235,12 +239,14 @@ describe("the markets to choose from", () => {
     const first = ok(await t.markets(""));
     expect(first.length).toBe(20);
     expect(first.slice(0, 5).map((m) => m.symbol)).toEqual(["SPY", "AAPL", "BTC/USD", "ETH/USDT", "PNNY"]);
-    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets?status=active&asset_class=us_equity`, `GET ${LIVE}/v2/assets?status=active&asset_class=crypto`]);
+    // the listing, then the screener (which this key's stand-in does not answer: the list is the listing's own)
+    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets?status=active&asset_class=us_equity`, `GET ${LIVE}/v2/assets?status=active&asset_class=crypto`, `GET ${DATA}/v1beta1/screener/stocks/movers?top=10`, `GET ${DATA}/v1beta1/screener/stocks/most-actives?by=volume&top=25`]);
     expect(ok(await t.markets("eth")).map((m) => m.symbol)).toEqual(["ETH/USDT"]);
     expect(ok(await t.markets("halt"))).toEqual([]);
     const usdt = ok(await t.markets("ETH/USDT"))[0]!;
     expect([usdt.base, usdt.quote, usdt.minQty, usdt.qtyStep, usdt.priceStep]).toEqual(["ETH", "USDT", 0.001, 1e-9, 0.01]);
-    expect(seen.length).toBe(2);
+    // the listing and the screener are kept: a typed query asks nothing more
+    expect(seen.length).toBe(4);
   });
 });
 
@@ -285,7 +291,7 @@ describe("an order", () => {
     expect(calls(reads)).toEqual([`GET ${PAPER}/v2/account`, `GET ${PAPER}/v2/positions`, `GET ${PAPER}/v2/wallets`]);
     ok(await t.market("AAPL"));
     ok(await t.place({ symbol: "AAPL", side: "buy", type: "market", qty: 1, worstPrice: 2.04, clientId: "ord-0007" }));
-    expect(calls(seen)).toEqual([`GET ${PAPER}/v2/assets/AAPL`, `GET ${PAPER}/v2/clock`, `GET ${DATA}/v2/stocks/AAPL/quotes/latest`, `GET ${DATA}/v2/stocks/AAPL/trades/latest`, `POST ${PAPER}/v2/orders`]);
+    expect(calls(seen)).toEqual([`GET ${PAPER}/v2/assets/AAPL`, `GET ${PAPER}/v2/clock`, calUrl(Date.parse("2026-10-05T19:53:20.000Z"), PAPER), `GET ${DATA}/v2/stocks/AAPL/quotes/latest`, `GET ${DATA}/v2/stocks/AAPL/trades/latest`, `POST ${PAPER}/v2/orders`]);
   });
 
   it("the account's id is kept to what Alpaca takes plainly; an order that cannot be right is refused before anything is sent", async () => {
@@ -1032,5 +1038,167 @@ describe("reading the market: price history (bars)", () => {
     expect([size.message, start.message, coin.code, none.message, seen.length]).toEqual(["Alpaca: price history comes in bars of 5m, 1h, 1d, not 1w", "Alpaca: a price history starts at a time, in milliseconds", "E_ACCOUNT_UNPRICED", 'Alpaca lists no market "not a symbol": a stock is its ticker (AAPL), a coin a pair (BTC/USD)', 0]);
     const theirs = refusal(await t.candles!("AAPL", "1d", SINCE));
     expect([theirs.code, theirs.message]).toEqual(["E_VENUE_PERMISSION", "Alpaca: subscription does not permit querying recent SIP data"]);
+  });
+});
+
+// ---- which session is on, and extended hours (Alpaca's 24/5 page, read 2026-10-14) --------------------------------------------------
+
+/** New York's date for an instant, as the connector asks the calendar for it */
+const nyDate = (ms: number): string => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+const DAY_MS = 86_400_000;
+const calUrl = (now: number, host = LIVE): string => `GET ${host}/v2/calendar?start=${nyDate(now - DAY_MS)}&end=${nyDate(now + 8 * DAY_MS)}`;
+/** two trading weeks of October 2026, as GET /v2/calendar gives them — one day in the other spelling of the session's hours */
+const CALENDAR = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"].map((date) => (date === "2026-10-06" ? { date, open: "09:30", close: "16:00", session_open: "04:00", session_close: "20:00", settlement_date: "2026-10-07" } : { date, open: "09:30", close: "16:00", session_open: "0400", session_close: "2000", settlement_date: date }));
+const shut = (timestamp: string, next_open: string, next_close: string) => ({ timestamp, is_open: false, next_open, next_close });
+/** the clock at each moment, New York time (EDT, UTC−4) */
+const MOMENTS = {
+  regular: { now: Date.parse("2026-10-05T10:15:22-04:00"), clock: OPEN },
+  pre: { now: Date.parse("2026-10-06T08:00:00-04:00"), clock: shut("2026-10-06T08:00:00-04:00", "2026-10-06T09:30:00-04:00", "2026-10-06T16:00:00-04:00") },
+  after: { now: Date.parse("2026-10-05T17:00:00-04:00"), clock: shut("2026-10-05T17:00:00-04:00", "2026-10-06T09:30:00-04:00", "2026-10-06T16:00:00-04:00") },
+  overnightEve: { now: Date.parse("2026-10-05T22:00:00-04:00"), clock: shut("2026-10-05T22:00:00-04:00", "2026-10-06T09:30:00-04:00", "2026-10-06T16:00:00-04:00") },
+  overnightMorning: { now: Date.parse("2026-10-06T02:00:00-04:00"), clock: shut("2026-10-06T02:00:00-04:00", "2026-10-06T09:30:00-04:00", "2026-10-06T16:00:00-04:00") },
+  fridayEve: { now: Date.parse("2026-10-09T22:00:00-04:00"), clock: shut("2026-10-09T22:00:00-04:00", "2026-10-12T09:30:00-04:00", "2026-10-12T16:00:00-04:00") },
+  saturday: { now: Date.parse("2026-10-10T10:00:00-04:00"), clock: shut("2026-10-10T10:00:00-04:00", "2026-10-12T09:30:00-04:00", "2026-10-12T16:00:00-04:00") },
+  sundayEve: { now: Date.parse("2026-10-11T21:00:00-04:00"), clock: shut("2026-10-11T21:00:00-04:00", "2026-10-12T09:30:00-04:00", "2026-10-12T16:00:00-04:00") },
+};
+/** a stock's answers at a moment: its asset, the clock, the calendar, the day feed's quote and trade */
+const sessionAnswers = (asset: Record<string, unknown>, m: { now: number; clock: unknown }, extra: Record<string, Answer> = {}): Record<string, Answer> => ({ ...stockAnswers(asset, m.clock, quote(String(asset.symbol), 200, 201), trade(String(asset.symbol), 200.5)), [calUrl(m.now)]: json(CALENDAR), ...extra });
+
+describe("which session is on at Alpaca, and extended hours", () => {
+  it("the clock says the regular session, the calendar the rest: pre-market, after-hours, the overnight session ahead of a trading day — and when each ends", async () => {
+    const at = async (asset: Record<string, unknown>, m: { now: number; clock: unknown }, extra: Record<string, Answer> = {}) => {
+      const { t, seen } = await alpaca(sessionAnswers(asset, m, extra), { clock: m.now });
+      return { m: ok(await t.market(String(asset.symbol))), seen };
+    };
+    const regular = await at(AAPL, MOMENTS.regular);
+    expect(regular.m.session).toEqual({ open: true, opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-05T20:00:00.000Z", phase: "regular", phaseEndsAt: "2026-10-05T20:00:00.000Z", extendedHours: false });
+    expect(regular.m.types).toEqual(["market", "limit", "stop", "stop_limit"]);
+    expect(regular.m.note).toBeUndefined();
+    // the calendar is asked once with the market, then kept
+    expect(calls(regular.seen).filter((c) => c.includes("/v2/calendar"))).toEqual([calUrl(MOMENTS.regular.now)]);
+    const pre = await at(AAPL, MOMENTS.pre);
+    expect(pre.m.session).toMatchObject({ open: false, phase: "pre", phaseEndsAt: "2026-10-06T13:30:00.000Z", extendedHours: true });
+    expect(pre.m.types).toEqual(["limit", "stop", "stop_limit"]);
+    expect(pre.m.note).toBe("the regular session is closed — pre-market trading is on until 2026-10-06 09:30 New York time: a limit order sent with extended hours fills in this session; one without, and any market, stop or stop-limit order, Alpaca holds for the regular session (2026-10-06 09:30 New York time)");
+    const after = await at(AAPL, MOMENTS.after);
+    expect(after.m.session).toMatchObject({ open: false, phase: "after", phaseEndsAt: "2026-10-06T00:00:00.000Z", extendedHours: true });
+    expect(after.m.note).toContain("after-hours trading is on until 2026-10-05 20:00 New York time");
+    // Monday evening: the overnight session ahead of Tuesday, on Blue Ocean, for a stock Alpaca marks overnight_tradable
+    const eve = await at(AAPL, MOMENTS.overnightEve);
+    expect(eve.m.session).toMatchObject({ open: false, phase: "overnight", phaseEndsAt: "2026-10-06T08:00:00.000Z", extendedHours: true });
+    expect(eve.m.note).toBe("the overnight session is on until 2026-10-06 04:00 New York time (Blue Ocean ATS, through Alpaca): a limit order sent with extended hours trades now; one without, and any market, stop or stop-limit order, Alpaca holds for the regular session (2026-10-06 09:30 New York time)");
+    const morning = await at(AAPL, MOMENTS.overnightMorning);
+    expect(morning.m.session).toMatchObject({ phase: "overnight", phaseEndsAt: "2026-10-06T08:00:00.000Z", extendedHours: true });
+    // a stock Alpaca does not trade overnight: the session is on, the stock waits
+    const penny = await at(PNNY, MOMENTS.overnightEve);
+    expect(penny.m.session).toMatchObject({ phase: "overnight", extendedHours: false });
+    expect(penny.m.note).toBe("the overnight session is on until 2026-10-06 04:00 New York time, but Alpaca does not trade PNNY overnight: an order waits for pre-market (04:00 New York time) or the regular session (2026-10-06 09:30 New York time)");
+    // one halted overnight neither
+    const halted = await at({ ...AAPL, symbol: "HOVN", attributes: ["overnight_tradable", "overnight_halted"] }, MOMENTS.overnightEve);
+    expect(halted.m.session).toMatchObject({ phase: "overnight", extendedHours: false });
+    // Friday evening there is no session ahead of Saturday; Saturday nothing; Sunday evening the overnight ahead of Monday
+    const fri = await at(AAPL, MOMENTS.fridayEve);
+    expect(fri.m.session).toMatchObject({ open: false, phase: "closed", phaseEndsAt: "2026-10-12T13:30:00.000Z", extendedHours: false });
+    expect(fri.m.note).toContain("the US stock market is closed: Alpaca holds an order and sends it when the market opens (2026-10-12 09:30 New York time)");
+    expect((await at(AAPL, MOMENTS.saturday)).m.session).toMatchObject({ phase: "closed", extendedHours: false });
+    expect((await at(AAPL, MOMENTS.sundayEve)).m.session).toMatchObject({ phase: "overnight", phaseEndsAt: "2026-10-12T08:00:00.000Z", extendedHours: true });
+    // no calendar: the regular session alone is known, no phase said, and the stock is as it was before
+    const { t: noCal } = await alpaca(stockAnswers(AAPL, MOMENTS.overnightEve.clock, quote("AAPL", 200, 201), trade("AAPL", 200.5)), { clock: MOMENTS.overnightEve.now });
+    const m0 = ok(await noCal.market("AAPL"));
+    expect(m0.session).toEqual({ open: false, opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-06T20:00:00.000Z" });
+    expect(m0.types).toEqual(["limit", "stop", "stop_limit"]);
+  });
+
+  it("in the overnight session the quote and the trade are asked again on the overnight feed, kept when they carry a price; the day feed's stay otherwise", async () => {
+    const m = MOMENTS.overnightEve;
+    const night = { [`GET ${DATA}/v2/stocks/AAPL/quotes/latest?feed=overnight`]: json(quote("AAPL", 203, 204)), [`GET ${DATA}/v2/stocks/AAPL/trades/latest?feed=overnight`]: json(trade("AAPL", 203.5)) };
+    const { t, seen } = await alpaca(sessionAnswers(AAPL, m, night), { clock: m.now });
+    const mk = ok(await t.market("AAPL"));
+    expect([mk.bid, mk.ask, mk.price]).toEqual([203, 204, 203.5]);
+    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets/AAPL`, `GET ${LIVE}/v2/clock`, calUrl(m.now), `GET ${DATA}/v2/stocks/AAPL/quotes/latest`, `GET ${DATA}/v2/stocks/AAPL/trades/latest`, `GET ${DATA}/v2/stocks/AAPL/quotes/latest?feed=overnight`, `GET ${DATA}/v2/stocks/AAPL/trades/latest?feed=overnight`]);
+    // the overnight feed with no quote up (0 is no quote), or refused: the day feed's last stands
+    const empty = { [`GET ${DATA}/v2/stocks/AAPL/quotes/latest?feed=overnight`]: json({ symbol: "AAPL", quote: { ap: 0, as: 0, bp: 0, bs: 0, t: "2026-10-06T02:00:00Z" } }), [`GET ${DATA}/v2/stocks/AAPL/trades/latest?feed=overnight`]: json({ message: "feed not permitted" }, 403) };
+    const { t: t2 } = await alpaca(sessionAnswers(AAPL, m, empty), { clock: m.now });
+    const mk2 = ok(await t2.market("AAPL"));
+    expect([mk2.bid, mk2.ask, mk2.price]).toEqual([200, 201, 200.5]);
+    // in the regular session the overnight feed is not asked
+    const { seen: day } = await alpaca(sessionAnswers(AAPL, MOMENTS.regular), { clock: MOMENTS.regular.now });
+    expect(calls(day).some((c) => c.includes("feed=overnight"))).toBe(false);
+  });
+
+  it("an order with extended hours: a stock's limit, day or gtc, sent with extended_hours; anything else with the flag is refused in words, never sent without it", async () => {
+    const { t, seen } = await alpaca({ [`POST ${LIVE}/v2/orders`]: json(order({ extended_hours: true, limit_price: "205", time_in_force: "gtc", status: "new" })) });
+    const s = ok(await t.place({ symbol: "AAPL", side: "buy", type: "limit", qty: 1, limitPrice: 205, extendedHours: true, clientId: "ord-0101" }));
+    expect(s.status).toBe("open");
+    expect(posted(seen)[0]).toEqual({ symbol: "AAPL", qty: "1", side: "buy", type: "limit", limit_price: "205", time_in_force: "gtc", client_order_id: "ord-0101", extended_hours: true });
+    seen.length = 0;
+    const day = ok(await t.place({ symbol: "AAPL", side: "sell", type: "limit", qty: 0.5, limitPrice: 205, tif: "day", extendedHours: true, clientId: "ord-0102" }));
+    expect(day.ref).toBe(ID);
+    expect(posted(seen)[0]).toMatchObject({ qty: "0.5", time_in_force: "day", extended_hours: true });
+    seen.length = 0;
+    const market = refusal(await t.place({ symbol: "AAPL", side: "buy", type: "market", qty: 1, worstPrice: 205, extendedHours: true, clientId: "ord-0103" }));
+    expect([market.code, market.message]).toEqual(["E_VENUE_ORDER_INVALID", "Alpaca: Alpaca takes a limit order in extended hours, not a market order"]);
+    const stop = refusal(await t.place({ symbol: "AAPL", side: "sell", type: "stop", qty: 1, stopPrice: 190, worstPrice: 186, extendedHours: true, clientId: "ord-0104" }));
+    expect(stop.message).toContain("not a stop order");
+    const pair = refusal(await t.place({ symbol: "BTC/USD", side: "buy", type: "limit", qty: 0.01, limitPrice: 60000, extendedHours: true, clientId: "ord-0105" }));
+    expect(pair.message).toBe("Alpaca: extended hours are a stock's: a coin pair trades around the clock");
+    expect(seen).toHaveLength(0);
+    // without the flag nothing changes: no extended_hours field goes
+    const { t: t2, seen: seen2 } = await alpaca({ [`POST ${LIVE}/v2/orders`]: json(order(LIMIT_150)) });
+    ok(await t2.place({ symbol: "AAPL", side: "buy", type: "limit", qty: 2, limitPrice: 150.25, clientId: "ord-0106" }));
+    expect(posted(seen2)[0]).not.toHaveProperty("extended_hours");
+  });
+
+  it("nothing typed: the well-known markets first, then what Alpaca's screener says moves today (as listed); a query asks no screener", async () => {
+    const ZZZ = { ...AAPL, id: "00000000-0000-4000-8000-000000000009", symbol: "ZZZ", name: "Zed Corp" };
+    const { t, seen } = await alpaca({
+      [`GET ${LIVE}/v2/assets?status=active&asset_class=us_equity`]: json([PNNY, AAPL, ZZZ, { ...AAPL, symbol: "SPY", name: "SPDR S&P 500 ETF Trust" }]),
+      [`GET ${LIVE}/v2/assets?status=active&asset_class=crypto`]: json([BTC]),
+      [`GET ${DATA}/v1beta1/screener/stocks/movers?top=10`]: json({ gainers: [{ symbol: "ZZZ", percent_change: 12.5, change: 1.2, price: 10.8 }], losers: [{ symbol: "PNNY", percent_change: -8.1, change: -0.09, price: 1.02 }], last_updated: "2026-10-05T14:09:00Z", market_type: "stocks" }),
+      [`GET ${DATA}/v1beta1/screener/stocks/most-actives?by=volume&top=25`]: json({ most_actives: [{ symbol: "AAPL", volume: 60_000_000, trade_count: 400_000 }, { symbol: "NOPE", volume: 1, trade_count: 1 }], last_updated: "2026-10-05T14:09:00Z" }),
+    });
+    const start = ok(await t.markets(""));
+    expect(start.map((m) => m.symbol)).toEqual(["SPY", "AAPL", "BTC/USD", "ZZZ", "PNNY"]);
+    expect(calls(seen)).toEqual([`GET ${LIVE}/v2/assets?status=active&asset_class=us_equity`, `GET ${LIVE}/v2/assets?status=active&asset_class=crypto`, `GET ${DATA}/v1beta1/screener/stocks/movers?top=10`, `GET ${DATA}/v1beta1/screener/stocks/most-actives?by=volume&top=25`]);
+    seen.length = 0;
+    expect(ok(await t.markets("PN")).map((m) => m.symbol)).toEqual(["PNNY"]);
+    expect(seen).toHaveLength(0);
+    // a screener that does not answer: the well-known markets alone
+    const { t: t2 } = await alpaca({ [`GET ${LIVE}/v2/assets?status=active&asset_class=us_equity`]: json([AAPL]), [`GET ${LIVE}/v2/assets?status=active&asset_class=crypto`]: json([BTC]) });
+    expect(ok(await t2.markets("")).map((m) => m.symbol)).toEqual(["AAPL", "BTC/USD"]);
+  });
+});
+
+describe("Alpaca's paper account is a connection of its own", () => {
+  const home = mkdtempSync(join(tmpdir(), "alpaca-paper-"));
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  it("live:alpaca-paper: its key file under credentials/alpaca-paper, the paper host whatever the file says, a source that is paper — a balance that is not money", async () => {
+    expect(CONNECTORS.map((c) => c.kind)).toContain("alpaca-paper");
+    expect(KEY_SHAPES["alpaca-paper"]).toBe(ALPACA_PAPER_KEY);
+    expect(ALPACA_PAPER_KEY.example).toContain("PAPER account");
+    expect(liveOptions(home).options.find((o) => o.kind === "alpaca-paper")).toMatchObject({ connector: "live:alpaca-paper", needs: "key-file", venues: [] });
+    expect(keyFileStatus(home, "alpaca-paper", "alpaca-paper", "")).toMatchObject({ ready: false, path: join(home, "credentials/alpaca-paper/api-key.json"), fields: ["keyId", "secret"] });
+    mkdirSync(join(home, "credentials/alpaca-paper"), { recursive: true });
+    const file = join(home, "credentials/alpaca-paper/api-key.json");
+    writeFileSync(file, JSON.stringify({ keyId: KEY_ID, secret: SECRET }));
+    chmodSync(file, 0o600);
+    const seen: string[] = [];
+    const http: Http = async (url, init = {}) => {
+      seen.push(`${init.method ?? "GET"} ${url}`);
+      if (url === `${PAPER}/v2/account`) return json({ status: "ACTIVE", cash: "100000", equity: "100000", buying_power: "200000" });
+      if (url === `${PAPER}/v2/positions`) return json([]);
+      return json({ message: "not here" }, 404);
+    };
+    const opened = await openLive({ venue: "alpaca-paper", connector: "live:alpaca-paper", label: "", reference: "" }, { home, http, clock: () => MOMENTS.regular.now } as unknown as LiveDeps);
+    if (isRefusal(opened)) throw new Error(opened.message);
+    expect(opened.source.paper).toBe(true);
+    expect(opened.source.name).toBe("Alpaca · paper");
+    expect(opened.source.via).toBe("Alpaca Trading API · paper");
+    expect(opened.source.reference).toBe("credentials/alpaca-paper/api-key.json");
+    expect(opened.source.trader?.can).toBe(true);
+    expect(opened.first).toEqual([{ asset: "USD", amount: 100000, usd: 100000, where: "cash", class: "cash" }]);
+    expect(seen).toEqual([`GET ${PAPER}/v2/account`, `GET ${PAPER}/v2/positions`, `GET ${PAPER}/v2/wallets`]);
+    expect(JSON.stringify(opened)).not.toContain(SECRET);
   });
 });

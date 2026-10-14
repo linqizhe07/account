@@ -49,7 +49,7 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
 | 类 | 场所 | 能做 |
 |---|---|---|
 | 交易所 | OKX、Kraken、Coinbase、Binance、Bybit、KuCoin 等统一接口库（ccxt）里用 API 钥匙接的 93 家，Binance.US、OKX US 这样的美国版也在里面；钥匙文件 | 读；现货和 U 本位永续；提到自己的地方、划转、稳定币互换；OKX、Kraken、KuCoin、Binance 的 earn |
-| 券商 | Alpaca（钥匙文件）、Robinhood（它的 Trading MCP，OAuth 登录）、Robinhood Crypto | 读、下单；现金只在券商自己那边进出 |
+| 券商 | Alpaca（钥匙文件；它的 paper 账户也能接："Alpaca · paper"，纸上的钱、真实报价，盘前 / 盘后 / 隔夜都能下带 extended hours 的限价单——隔夜时段就是香港、新加坡的白天）、Robinhood（它的 Trading MCP，OAuth 登录）、Robinhood Crypto | 读、下单；现金只在券商自己那边进出 |
 | 预测市场 | Kalshi（钥匙文件）、Polymarket US（钥匙文件：Key ID 和 Secret Key）、Polymarket（钥匙文件，或只填地址看） | 读、事件合约下单 |
 | 钱包 | 浏览器钱包（OKX Wallet、MetaMask 等，签一句话证明地址）、MetaMask Agent Wallet（本机 `mm`） | 换币、跨链、代币化股票（RWA）；`mm` 还有永续、预测、earn，写操作要 `PORTFOLIO_MM_WRITES=1` |
 | 永续 DEX | Hyperliquid：API 钱包（钥匙文件；只能交易，不能提币） | 永续、现货、HIP-3（含 pre-IPO）；每单之前按它条款 §1.6 查你此刻所在的地方 |

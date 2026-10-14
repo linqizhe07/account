@@ -122,10 +122,21 @@ export interface Market {
 
 /** a venue's trading session (Market.session): in session now, and when it next opens and next closes, ISO 8601 — each where the venue or
  * the calendar says it */
+/** which of a stock market's sessions is on: the regular one, or one the venue trades outside it */
+export type SessionPhase = "pre" | "regular" | "after" | "overnight" | "closed";
 export interface MarketSession {
+  /** the regular session is on */
   open: boolean;
   opensAt?: string | undefined;
   closesAt?: string | undefined;
+  /** which session is on now, where the venue trades outside the regular one (Alpaca: pre-market 04:00 to the open, after-hours from the
+   * close to 20:00, overnight 20:00 to 04:00 New York time, before a trading day); absent where the venue said only open or closed */
+  phase?: SessionPhase | undefined;
+  /** when this phase ends (ISO 8601), where known */
+  phaseEndsAt?: string | undefined;
+  /** a limit order may be sent for THIS session now (Alpaca's extended_hours): the venue trades this market in the session that is on. An
+   * order sent without the flag waits for the regular session */
+  extendedHours?: boolean | undefined;
 }
 
 /** a market's last 24 hours, as the venue reports it */
@@ -168,6 +179,9 @@ export interface OrderRequest {
   postOnly?: boolean | undefined;
   /** only where the market says `reduceOnly` */
   reduceOnly?: boolean | undefined;
+  /** a limit order for the extended session that is on (pre-market, after-hours, overnight): only where the market's session says
+   * `extendedHours`, and only a limit order (Alpaca takes nothing else there) */
+  extendedHours?: boolean | undefined;
 }
 
 /** an open order changed in place: what changes, as the venue would take it (the rest stays) */

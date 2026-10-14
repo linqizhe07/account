@@ -582,8 +582,9 @@ const liveOrderFields = {
   tif: z.enum(["gtc", "ioc", "fok", "day"]).optional().describe("time in force, only where the market lists it; default the venue's own"),
   postOnly: z.boolean().optional().describe("a limit order that only rests on the book (maker), where the market takes it"),
   reduceOnly: z.boolean().optional().describe("an order that can only shrink a position, where the market takes it"),
+  extendedHours: z.boolean().optional().describe("a limit order for the extended session that is on — pre-market, after-hours, overnight — where the market's session says it takes one now (portfolio_live_market: session.extendedHours); otherwise the venue holds the order for the regular session"),
 };
-type LiveOrderLeg = { venue: string; symbol: string; side: "buy" | "sell"; orderType?: "market" | "limit" | "stop" | "stop_limit" | undefined; qty?: number | undefined; usd?: number | undefined; limitPrice?: number | undefined; stopPrice?: number | undefined; tif?: "gtc" | "ioc" | "fok" | "day" | undefined; postOnly?: boolean | undefined; reduceOnly?: boolean | undefined };
+type LiveOrderLeg = { venue: string; symbol: string; side: "buy" | "sell"; orderType?: "market" | "limit" | "stop" | "stop_limit" | undefined; qty?: number | undefined; usd?: number | undefined; limitPrice?: number | undefined; stopPrice?: number | undefined; tif?: "gtc" | "ioc" | "fok" | "day" | undefined; postOnly?: boolean | undefined; reduceOnly?: boolean | undefined; extendedHours?: boolean | undefined };
 
 /** `paper` as a venue id, in any trading tool: the owner's one paper account (live:paper, the account's own book), so a seat can rehearse
  * without knowing its id — the same order, at paper. Several open: name one; none: ask the owner for one (portfolio_ask kind venue, venue
@@ -607,7 +608,7 @@ function liveOrderAction(o: LiveOrderLeg): Extract<Unsigned, { type: "agentLiveO
   const stopped = type === "stop" || type === "stop_limit";
   if (limited && o.limitPrice === undefined) return `a ${type} order needs limitPrice`;
   if (stopped && o.stopPrice === undefined) return `a ${type} order needs stopPrice`;
-  return { type: "agentLiveOrder", venue: o.venue, symbol: o.symbol, side: o.side, orderType: type, qty: o.qty !== undefined ? String(o.qty) : "", usd: o.usd !== undefined ? String(o.usd) : "", limitPrice: limited ? String(o.limitPrice) : "", ...(stopped ? { stopPrice: String(o.stopPrice) } : {}), ...(o.tif ? { tif: o.tif } : {}), ...(o.postOnly ? { postOnly: "true" } : {}), ...(o.reduceOnly ? { reduceOnly: "true" } : {}) };
+  return { type: "agentLiveOrder", venue: o.venue, symbol: o.symbol, side: o.side, orderType: type, qty: o.qty !== undefined ? String(o.qty) : "", usd: o.usd !== undefined ? String(o.usd) : "", limitPrice: limited ? String(o.limitPrice) : "", ...(stopped ? { stopPrice: String(o.stopPrice) } : {}), ...(o.tif ? { tif: o.tif } : {}), ...(o.postOnly ? { postOnly: "true" } : {}), ...(o.reduceOnly ? { reduceOnly: "true" } : {}), ...(o.extendedHours ? { extendedHours: "true" } : {}) };
 }
 
 server.registerTool(

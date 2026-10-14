@@ -155,6 +155,24 @@ const ny = (iso, opts) => {
 };
 const nyDay = (iso) => ny(iso, { weekday: "short", day: "numeric", month: "short" }).replace(",", "");
 const nyTime = (iso) => ny(iso, { hour: "2-digit", minute: "2-digit", hour12: false });
+/* the same instant on the viewer's own clock, when that is not New York's: " (21:30 your time)" — with the weekday when it falls on another
+   day there (a session that opens Wednesday morning in New York is Wednesday night in Hong Kong, or Thursday). "" in New York's zone */
+const YOUR_ZONE = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+})();
+const yourTime = (iso, zone = YOUR_ZONE) => {
+  const ms = typeof iso === "number" ? iso : Date.parse(String(iso ?? ""));
+  if (!Number.isFinite(ms) || !zone || zone === "America/New_York") return "";
+  const k = `your:${zone}`;
+  let f = NY_FORMATS.get(k);
+  if (!f) NY_FORMATS.set(k, (f = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })));
+  const [wd, hm] = f.format(new Date(ms)).replace(",", "").split(" ");
+  return ` (${wd === ny(ms, { weekday: "short" }) ? hm : `${wd} ${hm}`} your time)`;
+};
 const ZERO = "0x0000000000000000000000000000000000000000";
 const DAY = 86_400_000;
 /* what the money is in, by class: its name, and its colour on the allocation bar (tokens.css) */

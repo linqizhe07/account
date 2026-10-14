@@ -73,6 +73,8 @@ export interface LiveOrder {
   tif?: TimeInForce | undefined;
   postOnly?: boolean | undefined;
   reduceOnly?: boolean | undefined;
+  /** sent for the extended session that was on (pre-market, after-hours, overnight) */
+  extendedHours?: boolean | undefined;
   /** a contract is this much base */
   contractSize?: number | undefined;
   /** the price it was valued at when it was placed, and what it was worth then in dollars (the most it may cost, for a market buy) */
@@ -141,6 +143,8 @@ interface Fields {
   tif: string;
   postOnly: string;
   reduceOnly: string;
+  /** "true": a limit order for the extended session that is on, where the market's session takes one */
+  extendedHours: string;
 }
 
 interface Plan {
@@ -160,6 +164,7 @@ interface Plan {
   tif?: TimeInForce | undefined;
   postOnly?: boolean | undefined;
   reduceOnly?: boolean | undefined;
+  extendedHours?: boolean | undefined;
   /** what it is counted at: what it may cost at worst (a buy), what it is worth now (a sell) */
   maxUsd: number;
 }
@@ -282,7 +287,7 @@ export class LiveOrders {
   /** Everything that does not depend on who signed: the switch, the venue, the market, the size, the price, the cap. `uncapped`: the cap is
    * not judged here — only a close's quote asks so, to say what the close is worth and whether that is over the cap before it is signed */
   private async plan(raw: Fields, uncapped = false): Promise<Plan | Refusal> {
-    const f: Fields = { venue: text(raw.venue), symbol: text(raw.symbol), side: text(raw.side), orderType: text(raw.orderType), qty: text(raw.qty), usd: text(raw.usd), limitPrice: text(raw.limitPrice), stopPrice: text(raw.stopPrice), tif: text(raw.tif), postOnly: text(raw.postOnly), reduceOnly: text(raw.reduceOnly) };
+    const f: Fields = { venue: text(raw.venue), symbol: text(raw.symbol), side: text(raw.side), orderType: text(raw.orderType), qty: text(raw.qty), usd: text(raw.usd), limitPrice: text(raw.limitPrice), stopPrice: text(raw.stopPrice), tif: text(raw.tif), postOnly: text(raw.postOnly), reduceOnly: text(raw.reduceOnly), extendedHours: text(raw.extendedHours) };
     const m = this.money();
     if (!m) return no("E_ACCOUNT_BAD_ACTION", { message: "this account has no venues connected live" });
     const w = m.writes();
@@ -309,6 +314,8 @@ export class LiveOrders {
     if (f.tif.trim() !== "" && !(TIFS as readonly string[]).includes(f.tif.trim())) return no("E_ACCOUNT_BAD_ACTION", { message: `a time in force is ${TIFS.join(", ")}, or left to the venue` });
     if (![f.postOnly, f.reduceOnly].every((x) => x === "" || x === "true")) return no("E_ACCOUNT_BAD_ACTION", { message: 'post-only and reduce-only are "true", or left out' });
     if (f.postOnly === "true" && type !== "limit") return no("E_ACCOUNT_BAD_ACTION", { message: "post-only is for a limit order: it rests on the book as a maker, or is refused" });
+    if (f.extendedHours !== "" && f.extendedHours !== "true") return no("E_ACCOUNT_BAD_ACTION", { message: 'extended hours is "true", or left out' });
+    if (f.extendedHours === "true" && type !== "limit") return no("E_ACCOUNT_BAD_ACTION", { message: "extended hours are for a limit order: a venue that trades outside its regular session takes a limit there and nothing else" });
     if (!f.symbol.trim()) return no("E_ACCOUNT_BAD_ACTION", { message: "an order names its market" });
 
     const mk = await this.asked(v.id, v.name, () => trader.market(f.symbol.trim()));
@@ -323,6 +330,10 @@ export class LiveOrders {
     if (tif !== undefined && forType && !forType.includes(tif)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: forType.length ? `${v.name} takes ${forType.join(", ")} for a ${type.replace("_", "-")} order in ${mk.name}, not ${tif}` : `${v.name} takes no time-in-force choice for a ${type.replace("_", "-")} order in ${mk.name}` });
     if (f.postOnly === "true" && !mk.postOnly) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name} takes no post-only orders in ${mk.name}` });
     if (f.reduceOnly === "true" && !mk.reduceOnly) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name} takes no reduce-only orders in ${mk.name}` });
+    // extended hours: the market's session says whether a limit order may go for the session that is on (a stock at Alpaca in pre-market,
+    // after-hours or, where Alpaca trades it overnight, the overnight session); in the regular session, or where the venue keeps no such
+    // session, there is none to ask for
+    if (f.extendedHours === "true" && !mk.session?.extendedHours) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name} takes no extended-hours order in ${mk.name} now${mk.session?.phase ? ` (${mk.session.phase === "regular" ? "the regular session is on" : mk.session.phase === "closed" ? "no session is on" : `${mk.session.phase} session`})` : ""}${mk.note ? `: ${mk.note}` : ""}` });
     const limitPrice = limited ? Number(f.limitPrice) : undefined;
     const stopPrice = stopped ? Number(f.stopPrice) : undefined;
     for (const x of [limitPrice, stopPrice]) if (x !== undefined && !onStep(x, mk.priceStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a price in ${mk.name} moves in steps of ${plain(mk.priceStep!)}`, detail: { priceStep: mk.priceStep } });
@@ -347,7 +358,7 @@ export class LiveOrders {
     const maxUsd = side === "buy" && worstPrice !== undefined ? notionalOf(mk, qty, worstPrice) : notional;
     // the server's cap bounds real money: a paper account holds none, so an order there is bounded by the owner's limits alone
     if (!uncapped && !v.paper && maxUsd > w.capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: v.id, message: `${usd(maxUsd)} is more than the most one order may be on this server (${usd(w.capUsd)}). It is set when the server starts: --live-cap`, detail: { capUsd: w.capUsd, orderUsd: maxUsd } });
-    return { f, v: v as Plan["v"], m: mk, side, type, qty, limitPrice, price, notional, ...(worstPrice !== undefined ? { worstPrice } : {}), ...(stopPrice !== undefined ? { stopPrice } : {}), ...(tif ? { tif } : {}), ...(f.postOnly === "true" ? { postOnly: true } : {}), ...(f.reduceOnly === "true" ? { reduceOnly: true } : {}), maxUsd };
+    return { f, v: v as Plan["v"], m: mk, side, type, qty, limitPrice, price, notional, ...(worstPrice !== undefined ? { worstPrice } : {}), ...(stopPrice !== undefined ? { stopPrice } : {}), ...(tif ? { tif } : {}), ...(f.extendedHours === "true" ? { extendedHours: true } : {}), ...(f.postOnly === "true" ? { postOnly: true } : {}), ...(f.reduceOnly === "true" ? { reduceOnly: true } : {}), maxUsd };
   }
 
   /** Held to what was agreed — the owner's signature or the card: the same market, and a price that has not moved past what was agreed. A
@@ -448,7 +459,7 @@ export class LiveOrders {
 
   /** what the owner is shown and signs: the exact size, the price, what it is worth, ten minutes */
   async prepare(draft: Record<string, unknown>): Promise<{ action: Omit<LiveOrderAction, "nonce">; quote: OrderQuote } | Refusal> {
-    const f: Fields = { venue: String(draft.venue ?? ""), symbol: String(draft.symbol ?? ""), side: String(draft.side ?? ""), orderType: String(draft.orderType ?? "market"), qty: String(draft.qty ?? ""), usd: String(draft.usd ?? ""), limitPrice: String(draft.limitPrice ?? ""), stopPrice: String(draft.stopPrice ?? ""), tif: String(draft.tif ?? ""), postOnly: draft.postOnly === true || draft.postOnly === "true" ? "true" : "", reduceOnly: draft.reduceOnly === true || draft.reduceOnly === "true" ? "true" : "" };
+    const f: Fields = { venue: String(draft.venue ?? ""), symbol: String(draft.symbol ?? ""), side: String(draft.side ?? ""), orderType: String(draft.orderType ?? "market"), qty: String(draft.qty ?? ""), usd: String(draft.usd ?? ""), limitPrice: String(draft.limitPrice ?? ""), stopPrice: String(draft.stopPrice ?? ""), tif: String(draft.tif ?? ""), postOnly: draft.postOnly === true || draft.postOnly === "true" ? "true" : "", reduceOnly: draft.reduceOnly === true || draft.reduceOnly === "true" ? "true" : "", extendedHours: draft.extendedHours === true || draft.extendedHours === "true" ? "true" : "" };
     const p = await this.plan(f);
     if (isRefusal(p)) return p;
     const line = await this.placeRule(p.v, p.side, p.reduceOnly, p.m.symbol);
@@ -456,7 +467,7 @@ export class LiveOrders {
     // a buy signs the most it may cost; a sell signs what it is worth now, and a market sell may then fetch at most 2% less
     const worth = (p.side === "buy" ? cents(p.maxUsd) : Math.floor(p.notional * 100 + 1e-6) / 100).toFixed(2);
     return {
-      action: { type: "liveOrder", venue: p.v.id, symbol: p.m.symbol, side: p.side, orderType: p.type, qty: plain(p.qty), limitPrice: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stopPrice: p.stopPrice !== undefined ? plain(p.stopPrice) : "", tif: p.tif ?? "", postOnly: p.postOnly ? "true" : "", reduceOnly: p.reduceOnly ? "true" : "", maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS },
+      action: { type: "liveOrder", venue: p.v.id, symbol: p.m.symbol, side: p.side, orderType: p.type, qty: plain(p.qty), limitPrice: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stopPrice: p.stopPrice !== undefined ? plain(p.stopPrice) : "", tif: p.tif ?? "", postOnly: p.postOnly ? "true" : "", reduceOnly: p.reduceOnly ? "true" : "", extendedHours: p.extendedHours ? "true" : "", maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS },
       quote: { words: this.words(p), name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.m.note ? { note: p.m.note } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) },
     };
   }
@@ -679,7 +690,7 @@ export class LiveOrders {
 
   private words(p: Plan): string {
     const how = p.type === "limit" ? `limit ${plain(p.limitPrice!)}` : p.type === "stop" ? `stop at ${plain(p.stopPrice!)}` : p.type === "stop_limit" ? `stop at ${plain(p.stopPrice!)}, limit ${plain(p.limitPrice!)}` : "market";
-    const flags = [p.tif ? p.tif.toUpperCase() : "", p.postOnly ? "post-only" : "", p.reduceOnly ? "reduce-only" : ""].filter(Boolean).join(", ");
+    const flags = [p.tif ? p.tif.toUpperCase() : "", p.postOnly ? "post-only" : "", p.reduceOnly ? "reduce-only" : "", p.extendedHours ? `extended hours${p.m.session?.phase && p.m.session.phase !== "regular" && p.m.session.phase !== "closed" ? ` · ${p.m.session.phase === "pre" ? "pre-market" : p.m.session.phase === "after" ? "after-hours" : "overnight"}` : ""}` : ""].filter(Boolean).join(", ");
     return `${p.v.paper ? "PAPER · " : ""}${p.side} ${qtyText(p.qty)} ${p.m.base} at ${p.v.name} · ${how}${flags ? ` (${flags})` : ""} · about ${usd(p.notional)}`;
   }
 
@@ -723,7 +734,7 @@ export class LiveOrders {
       ...(p.stopPrice !== undefined ? { stopPrice: p.stopPrice } : {}),
       ...(p.tif ? { tif: p.tif } : {}),
       ...(p.postOnly ? { postOnly: true } : {}),
-      ...(p.reduceOnly ? { reduceOnly: true } : {}),
+      ...(p.reduceOnly ? { reduceOnly: true } : {}), ...(p.extendedHours ? { extendedHours: true } : {}),
       ...(p.m.contractSize !== undefined ? { contractSize: p.m.contractSize } : {}),
       ...(p.v.paper ? { paper: true as const } : {}),
       price: p.price,
@@ -908,7 +919,7 @@ export class LiveOrders {
     if (given(a.stopPrice) && o.type !== "stop" && o.type !== "stop_limit") return no("E_ACCOUNT_BAD_ACTION", { message: `${o.id} is a ${o.type} order: it has no stop price to change` });
     const qty = given(a.qty) ? a.qty.trim() : plain(o.qty);
     if (DEC.test(qty) && Number(qty) < o.filledQty - 1e-12) return no("E_ACCOUNT_BAD_ACTION", { message: `${o.id} has ${qtyText(o.filledQty)} filled already: it cannot be made smaller than that` });
-    const f: Fields = { venue: o.venue, symbol: o.symbol, side: o.side, orderType: o.type, qty, usd: "", limitPrice: given(a.limitPrice) ? a.limitPrice.trim() : o.limitPrice !== undefined ? plain(o.limitPrice) : "", stopPrice: given(a.stopPrice) ? a.stopPrice.trim() : o.stopPrice !== undefined ? plain(o.stopPrice) : "", tif: o.tif ?? "", postOnly: o.postOnly ? "true" : "", reduceOnly: o.reduceOnly ? "true" : "" };
+    const f: Fields = { venue: o.venue, symbol: o.symbol, side: o.side, orderType: o.type, qty, usd: "", limitPrice: given(a.limitPrice) ? a.limitPrice.trim() : o.limitPrice !== undefined ? plain(o.limitPrice) : "", stopPrice: given(a.stopPrice) ? a.stopPrice.trim() : o.stopPrice !== undefined ? plain(o.stopPrice) : "", tif: o.tif ?? "", postOnly: o.postOnly ? "true" : "", reduceOnly: o.reduceOnly ? "true" : "", extendedHours: o.extendedHours ? "true" : "" };
     const planned = await this.plan(f);
     if (isRefusal(planned)) return planned;
     // a stop's worst price is never pulled in by a change: a venue that holds a stop as a stop-limit at its worst price (Alpaca) keeps the
@@ -1134,7 +1145,7 @@ export class LiveOrders {
     if (mk && isRefusal(mk)) return mk;
     const plainSell = !!mk && !mk.reduceOnly && !!mk.sellsReduce && pos.side === "long";
     if (mk && !mk.reduceOnly && !plainSell) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name} takes no reduce-only order in ${mk.name}, and has no close of its own: close it at the venue, so that nothing opens the other way` });
-    const p = await this.plan({ venue: v.id, symbol: pos.symbol, side: pos.side === "long" ? "sell" : "buy", orderType: "market", qty: plain(qty), usd: "", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: native || plainSell ? "" : "true" }, uncapped);
+    const p = await this.plan({ venue: v.id, symbol: pos.symbol, side: pos.side === "long" ? "sell" : "buy", orderType: "market", qty: plain(qty), usd: "", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: native || plainSell ? "" : "true", extendedHours: "" }, uncapped);
     if (isRefusal(p)) return p;
     return { pos, qty, native, plainSell, p };
   }
@@ -1458,16 +1469,16 @@ function perOrder(spend: SpendApproval, maxUsd: number): Refusal | null {
 }
 
 /** an order's fields as the door reads them, from an owner's or an agent's instruction (the agent's optional ones absent = "") */
-function fieldsOf(a: { venue: string; symbol: string; side: string; orderType: string; qty: string; usd?: string | undefined; limitPrice: string; stopPrice?: string | undefined; tif?: string | undefined; postOnly?: string | undefined; reduceOnly?: string | undefined }): Fields {
-  return { venue: text(a.venue), symbol: text(a.symbol), side: text(a.side), orderType: text(a.orderType), qty: text(a.qty), usd: text(a.usd), limitPrice: text(a.limitPrice), stopPrice: text(a.stopPrice), tif: text(a.tif), postOnly: text(a.postOnly), reduceOnly: text(a.reduceOnly) };
+function fieldsOf(a: { venue: string; symbol: string; side: string; orderType: string; qty: string; usd?: string | undefined; limitPrice: string; stopPrice?: string | undefined; tif?: string | undefined; postOnly?: string | undefined; reduceOnly?: string | undefined; extendedHours?: string | undefined }): Fields {
+  return { venue: text(a.venue), symbol: text(a.symbol), side: text(a.side), orderType: text(a.orderType), qty: text(a.qty), usd: text(a.usd), limitPrice: text(a.limitPrice), stopPrice: text(a.stopPrice), tif: text(a.tif), postOnly: text(a.postOnly), reduceOnly: text(a.reduceOnly), extendedHours: text(a.extendedHours) };
 }
 
 /** what the venue is sent for a plan */
 function requestOf(p: Plan, clientId: string): OrderRequest {
-  return { symbol: p.m.symbol, side: p.side, type: p.type, qty: p.qty, ...(p.limitPrice !== undefined ? { limitPrice: p.limitPrice } : {}), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.stopPrice !== undefined ? { stopPrice: p.stopPrice } : {}), ...(p.tif ? { tif: p.tif } : {}), ...(p.postOnly ? { postOnly: true } : {}), ...(p.reduceOnly ? { reduceOnly: true } : {}), clientId };
+  return { symbol: p.m.symbol, side: p.side, type: p.type, qty: p.qty, ...(p.limitPrice !== undefined ? { limitPrice: p.limitPrice } : {}), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.stopPrice !== undefined ? { stopPrice: p.stopPrice } : {}), ...(p.tif ? { tif: p.tif } : {}), ...(p.postOnly ? { postOnly: true } : {}), ...(p.reduceOnly ? { reduceOnly: true } : {}), ...(p.extendedHours ? { extendedHours: true } : {}), clientId };
 }
 
 /** an order as it was placed, for a venue asked to change or rebuild it */
 function requestOfOrder(o: LiveOrder): OrderRequest {
-  return { symbol: o.symbol, side: o.side, type: o.type, qty: o.qty, ...(o.limitPrice !== undefined ? { limitPrice: o.limitPrice } : {}), ...(o.worstPrice !== undefined ? { worstPrice: o.worstPrice } : {}), ...(o.stopPrice !== undefined ? { stopPrice: o.stopPrice } : {}), ...(o.tif ? { tif: o.tif } : {}), ...(o.postOnly ? { postOnly: true } : {}), ...(o.reduceOnly ? { reduceOnly: true } : {}), clientId: o.clientId };
+  return { symbol: o.symbol, side: o.side, type: o.type, qty: o.qty, ...(o.limitPrice !== undefined ? { limitPrice: o.limitPrice } : {}), ...(o.worstPrice !== undefined ? { worstPrice: o.worstPrice } : {}), ...(o.stopPrice !== undefined ? { stopPrice: o.stopPrice } : {}), ...(o.tif ? { tif: o.tif } : {}), ...(o.postOnly ? { postOnly: true } : {}), ...(o.reduceOnly ? { reduceOnly: true } : {}), ...(o.extendedHours ? { extendedHours: true } : {}), clientId: o.clientId };
 }
