@@ -165,6 +165,10 @@
 @keyframes mk-peek-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .mk-peek:not([hidden]) { animation: none; } }
 
+/* the logos' credit under the list and in the drawer (markets.js mkCredit; its face is shell.css .logo-credit) */
+.mk-credit { margin: -14px 0 0; text-align: right; }
+.mk-d .mk-credit { margin: 0; text-align: left; }
+
 /* ---- connecting an account (ui/connect.js): what it is, as tiles that are cards, then one short form ------------------------------ */
 .pick .tile { border-radius: var(--radius-m); padding: 14px; gap: 4px; }
 .pick.wide .tile { padding: 14px 16px; }

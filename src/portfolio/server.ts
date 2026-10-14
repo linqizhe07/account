@@ -108,6 +108,7 @@ import { AgentSession, PRESETS } from "./agent.ts";
 import { BRIDGE_CHAINS } from "./live/bridge.ts";
 import { STABLECOINS } from "./live/chain.ts";
 import { exchangeList } from "./live/exchange.ts";
+import { positionIcon } from "./live/icons.ts";
 import { STABLES } from "./live/types.ts";
 import { parseEventSymbol } from "./events.ts";
 import type { OrderPlan } from "./router.ts";
@@ -498,14 +499,19 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (!svc.account) return void res.status(404).json({ ok: false, error: "the account layer is not mounted" });
     const q = strings(req, res, { venue: 40 });
     if (!q) return;
+    // each position with the logo the page shows beside it, by its contract's symbol (live/icons.ts positionIcon): the page's, not the seat's
+    const withIcon = <P extends { symbol: string; kind?: string | undefined }>(p: P): P & { icon?: string } => {
+      const logo = positionIcon(p);
+      return logo ? { ...p, icon: logo } : p;
+    };
     if (!q.venue) {
       const all = await svc.allPositions();
-      return void res.status(isRefusal(all) ? 409 : 200).json(isRefusal(all) ? { ok: false, refusal: all } : { ok: true, ...all });
+      return void res.status(isRefusal(all) ? 409 : 200).json(isRefusal(all) ? { ok: false, refusal: all } : { ok: true, ...all, positions: all.positions.map(withIcon) });
     }
     const r = await svc.livePositions(q.venue);
     // a paper account's positions say so here too, as the read across every venue says it
     const paper = svc.paperVenue(q.venue);
-    res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, positions: paper ? r.map((p) => ({ ...p, paper: true as const })) : r });
+    res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, positions: r.map((p) => withIcon(paper ? { ...p, paper: true as const } : p)) });
   }));
 
   // ---- the wallet's reads: Portfolio · Markets · Trade, and the agents one by one. None of them orders, moves or signs anything ----

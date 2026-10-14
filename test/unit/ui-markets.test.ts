@@ -340,6 +340,39 @@ describe("the Markets pane", () => {
     expect(() => p.run("mkPeekKeep(); mkPeekHide()")).not.toThrow();
   });
 
+  it("draws each market's logo over its letters — the letters stay where a logo does not load — and credits Elbstream wherever one of its logos is shown", async () => {
+    const BTC_LOGO = "https://api.elbstream.com/logos/crypto/BTC";
+    const KALSHI_PIC = "https://assets.kalshi.com/series-images-webp/KXFEDDECISION.webp";
+    const withLogos = { ...explore, items: [{ ...fed, icon: KALSHI_PIC }, { ...btc, icon: BTC_LOGO }, doge] };
+    const p = page((path) => (path.startsWith("/api/account/explore") ? withLogos : {}));
+    p.set("A", account());
+    // the tile: the letters, and the logo over them, with no referrer; none named, the letters alone, as before
+    expect(p.run<string>(`avatar("BTC", "", ${JSON.stringify(BTC_LOGO)})`)).toBe(`<span class="av" aria-hidden="true">BTC<img class="av-im" src="${BTC_LOGO}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"></span>`);
+    expect(p.run<string>('avatar("DOGE", "lg")')).toBe('<span class="av lg" aria-hidden="true">DOGE</span>');
+    p.run(`ROUTE.tab = "markets"; ${PANE}`);
+    p.run("renderMarkets({ el: EL, owner: true, lens: lensNow(), params: {} })");
+    await settle();
+    await settle();
+    const html = p.run<string>("EL.innerHTML");
+    expect(html).toContain(`<span class="av" aria-hidden="true">BTC<img class="av-im" src="${BTC_LOGO}"`);
+    expect(html).toContain(`<span class="av" aria-hidden="true">ECON<img class="av-im" src="${KALSHI_PIC}"`);
+    expect(html).toContain('<span class="av" aria-hidden="true">DOGE</span>');
+    // Elbstream's logos are shown with a link to it, under the list
+    expect(html).toContain('<p class="logo-credit mk-credit"><a href="https://elbstream.com" target="_blank" rel="noopener noreferrer">Logos by Elbstream</a></p>');
+    // a logo that did not load is not asked for again: its letters are the tile, and with no Elbstream logo shown, no credit
+    p.run(`ICON_MISS.add(${JSON.stringify(BTC_LOGO)})`);
+    p.run("for (const g of MKT.got.values()) g.at = Date.now(); renderMarkets({ el: EL, owner: true, lens: lensNow(), params: {} })");
+    const again = p.run<string>("EL.innerHTML");
+    expect(again).toContain('<span class="av" aria-hidden="true">BTC</span>');
+    expect(again).toContain(`src="${KALSHI_PIC}"`);
+    expect(again).not.toContain("Logos by Elbstream");
+    // the drawer credits it where its head shows one
+    p.run("ICON_MISS.clear()");
+    p.set("ITEMS", { btc: { ...btc, icon: BTC_LOGO }, fed: { ...fed, icon: KALSHI_PIC } });
+    expect(p.run<string>('mkDrawerHtml({ item: ITEMS.btc, interval: "1h", ipo: [] })')).toContain("Logos by Elbstream");
+    expect(p.run<string>('mkDrawerHtml({ item: ITEMS.fed, interval: "1h", ipo: [] })')).not.toContain("Logos by Elbstream");
+  });
+
   it("names each venue that did not answer in its own words, a location rule as the venue's rule and nothing more", () => {
     const p = page(() => ({}));
     const line = p.run<string>(`mkMissingLine(${JSON.stringify([...explore.missing, { venue: "kraken", venueName: "Kraken <b>", why: "no answer in 4 s", connected: true }, { venue: "ex", venueName: "X", why: "far from the others", symbol: "BTC/USD", connected: true }])})`);

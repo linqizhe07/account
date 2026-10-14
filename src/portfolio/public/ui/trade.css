@@ -183,3 +183,9 @@ button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 @media (max-width: 900px) {
   .tk-panel { max-height: none; overflow: visible; }
 }
+
+/* the logos' credit (core logoCredit): Elbstream's free logos ask for a link to it, clearly visible at 12pt, wherever one is shown — under
+   the picker's lists, and in the ticket under the search's results or the market picked */
+.tk-credit { margin: 6px 0 0; text-align: right; }
+.tk-credit-w:empty { display: none; }
+.tk-credit-w .tk-credit { margin: 0; }
