@@ -61,7 +61,7 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     kind: o.side,
     account: o.venue,
     accountName: o.venueName,
-    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${plain(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${plain(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${plain(o.stopPrice ?? 0)}, limit ${plain(o.limitPrice ?? 0)}` : "market"}${o.avgPrice ? ` · at ${plain(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}`,
+    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${plain(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${plain(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${plain(o.stopPrice ?? 0)}, limit ${plain(o.limitPrice ?? 0)}` : o.type === "trailing_stop" ? `trailing stop ${o.trailPercent !== undefined ? `${plain(o.trailPercent)}%` : plain(o.trailPrice ?? 0)}` : "market"}${o.exitOf ? ` · ${o.exitOf.kind} of ${o.exitOf.order}` : ""}${o.takeProfit !== undefined || o.stopLoss !== undefined ? ` · exits ${[o.takeProfit !== undefined ? `take-profit ${plain(o.takeProfit)}` : "", o.stopLoss !== undefined ? `stop-loss ${plain(o.stopLoss)}` : ""].filter(Boolean).join(", ")}` : ""}${o.avgPrice ? ` · at ${plain(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}`,
     amountUsd: Number((sign * filled).toFixed(2)) || 0,
     worthUsd: Number(notionalOf(o, o.qty, o.limitPrice ?? o.price).toFixed(2)),
     ...(o.feeUsd !== undefined ? { feeUsd: o.feeUsd } : {}),
@@ -99,6 +99,32 @@ export function paymentLine(p: Payment, run: string, name: (venue: string) => st
     by: p.authority === "agent" ? `${agentName(p.agent ?? "")}, ${p.card ? "approved by you" : "inside its limit"}` : "You",
     ...(p.authority === "agent" && p.agent ? { agent: p.agent, agentName: agentName(p.agent) } : {}),
     ...(p.live?.txHash ? { ref: p.live.txHash } : leg?.ref ? { ref: leg.ref } : {}),
+  };
+}
+
+/** A fill a paper account the account keeps itself made with no order of the account's (live/paper.ts) — a liquidation, an event contract's
+ * settlement — as one line: it went through no door, so it is read from the book */
+export function paperFillLine(f: { venue: string; venueName: string; ref: string; clientId: string; symbol: string; name: string; base: string; side: "buy" | "sell"; type: string; qty: number; avgPrice: number; feeUsd: number; at: string; filledAt: string; note?: string | undefined }): StatementLine {
+  const sign = f.side === "buy" ? -1 : 1;
+  const amount = f.qty * f.avgPrice;
+  const what = f.clientId.startsWith("liquidation-") ? "liquidated" : f.clientId.startsWith("settlement-") ? "settled" : f.type;
+  return {
+    key: `paper:${f.venue}:${f.ref}`,
+    id: f.ref,
+    at: f.filledAt,
+    updatedAt: f.filledAt,
+    type: "trade",
+    kind: f.side,
+    account: f.venue,
+    accountName: f.venueName,
+    description: `${cap(f.side)} ${qty(f.qty)} ${f.base}${f.name && f.name !== f.base ? ` · ${f.name}` : ""} · ${what} · at ${plain(Number(f.avgPrice.toPrecision(10)))}${f.note ? ` · ${f.note}` : ""}`,
+    amountUsd: Number((sign * amount).toFixed(2)) || 0,
+    worthUsd: Number(amount.toFixed(2)),
+    feeUsd: f.feeUsd,
+    status: "filled",
+    by: "The paper account",
+    ref: f.ref,
+    paper: true,
   };
 }
 

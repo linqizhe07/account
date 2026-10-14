@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { liveOptions, openLive, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import { PAPER_DEFAULT_CASH, paperBookPath, paperSource, parsePaperCash, type PaperBook } from "../../src/portfolio/live/paper.ts";
@@ -85,7 +85,7 @@ describe("a paper account: opened with paper money, its book in the home", () =>
     const h = home();
     const { source, first } = await open(h);
     expect(source.paper).toBe(true);
-    expect(source.name).toBe("Paper account · paper");
+    expect(source.name).toBe("Paper account");
     expect(source.via).toContain("the account's own book");
     expect(source.probe.note).toContain("a paper account: fills at the public quote by the account's own rule");
     expect(source.readOnlyBecause).toContain("paper money");
@@ -117,7 +117,7 @@ describe("a paper account: opened with paper money, its book in the home", () =>
     expect(all.find((m) => m.symbol === "BTC/USD")!.price).toBe(60000);
     expect(ok(await t.markets("BTC")).map((m) => m.symbol)).toEqual(["BTC/USD", "BTC-PERP"]);
     const btc = ok(await t.market("BTC/USD"));
-    expect(btc).toMatchObject({ kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59988, ask: 60012, open: true, minNotional: 1, qtyStep: 0.000001, types: ["market", "limit"], tifs: ["gtc", "ioc"], postOnly: false, sellsReduce: true });
+    expect(btc).toMatchObject({ kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59988, ask: 60012, open: true, minNotional: 1, qtyStep: 0.000001, types: ["market", "limit", "stop", "stop_limit", "trailing_stop"], tifs: ["gtc", "ioc", "fok"], tifsByType: { market: ["ioc", "fok"] }, postOnly: false, sellsReduce: true, brackets: true });
     expect(btc.note).toContain("a paper account");
     expect(ok(await t.market("BTC-PERP"))).toMatchObject({ kind: "perp", reduceOnly: true, maxLeverage: 1, contractSize: 1, fundingRate: 0.0000125 });
     expect(ok(await t.market("KXFED-25DEC-T4.00:YES"))).toMatchObject({ kind: "event", minQty: 1, qtyStep: 1, priceStep: 0.01, bid: 0.61, ask: 0.63, outcome: "YES" });
@@ -168,8 +168,9 @@ describe("fills by the account's own rule", () => {
     const ioc = ok(await t.place(order({ side: "sell", type: "limit", limitPrice: 70000, qty: 0.1, tif: "ioc" })));
     expect(ioc.status).toBe("canceled");
     expect(book(h).holdings["BTC/USD"]!.qty).toBe(0.1);
+    // a limit that crosses when it is placed takes the quote, where that is better than its limit
     const crossing = ok(await t.place(order({ side: "sell", type: "limit", limitPrice: 58000, qty: 0.05 })));
-    expect(crossing).toMatchObject({ status: "filled", avgPrice: 58000 });
+    expect(crossing).toMatchObject({ status: "filled", avgPrice: 58968.204 });
     const open2 = ok(await t.place(order({ type: "limit", limitPrice: 50000, qty: 0.1 })));
     expect(ok(await t.cancel(open2.ref, "BTC/USD")).status).toBe("canceled");
     expect(refusal(await t.cancel("p99", "BTC/USD")).code).toBe("E_ACCOUNT_ORDER_UNKNOWN");
@@ -183,12 +184,14 @@ describe("fills by the account's own rule", () => {
     expect((judged.native as { note: string }).note).toContain("not enough paper money");
   });
 
-  it("refuses what it does not take, in words, before anything moves: stops, post-only, fill-or-kill, reduce-only on spot, a size off the step, a market no source prices", async () => {
+  it("refuses what it does not take, in words, before anything moves: a stop on an event contract, post-only, a day order on a coin, a trail on a plain order, reduce-only on spot, a size off the step, a market no source prices", async () => {
     const h = home();
     const { t } = await open(h);
-    expect(refusal(await t.place(order({ type: "stop", stopPrice: 50000 }))).code).toBe("E_VENUE_ORDER_INVALID");
+    expect(refusal(await t.place(order({ symbol: "KXFED-25DEC-T4.00:YES", qty: 1, type: "stop", stopPrice: 0.5 }))).code).toBe("E_VENUE_ORDER_INVALID");
     expect(refusal(await t.place(order({ type: "limit", limitPrice: 50000, postOnly: true }))).message).toContain("post-only");
-    expect(refusal(await t.place(order({ tif: "fok" }))).message).toContain("gtc and ioc");
+    expect(refusal(await t.place(order({ type: "limit", limitPrice: 50000, tif: "day" }))).message).toContain("not day");
+    expect(refusal(await t.place(order({ trailPercent: 2 }))).message).toContain("a trail belongs to a trailing stop");
+    expect(refusal(await t.place(order({ type: "trailing_stop", side: "sell" }))).message).toContain("one of the two");
     expect(refusal(await t.place(order({ reduceOnly: true }))).message).toContain("reduce-only is for a perpetual");
     expect(refusal(await t.place(order({ symbol: "KXFED-25DEC-T4.00:YES", qty: 1.5 }))).message).toContain("steps of 1");
     expect(refusal(await t.place(order({ symbol: "XYZ/USD" }))).code).toBe("E_VENUE_REJECTED");
@@ -281,6 +284,8 @@ describe("the book", () => {
 import { fromEt } from "../../src/portfolio/account/calendar.ts";
 import { liquidationPriceOf } from "../../src/portfolio/live/paper.ts";
 import { usSession } from "../../src/portfolio/live/public-stocks.ts";
+import { usClock, usSessionFull } from "../../src/portfolio/account/calendar.ts";
+import type { MarketSession, SessionClock } from "../../src/portfolio/live/trade.ts";
 
 /** a Cboe-like stocks source (its id is what the paper account's window rule looks for), its session from the calendar at the clock */
 function cboeLike(rows: Row[]) {
@@ -292,8 +297,8 @@ function cboeLike(rows: Row[]) {
   return s;
 }
 
-describe("US stocks: Cboe's delayed quote, only inside the delayed window", () => {
-  it("a market order fills inside the window (09:45–16:15 New York) at the quote and is held as shares; out of it no market order is taken, a limit order rests and is judged when the window opens", async () => {
+describe("US stocks: the old delayed line (no quote time), only inside its delayed window", () => {
+  it("a market order fills inside the window (09:45–16:15 New York) at the quote and is held as shares; out of it a market order is queued for the session and a limit order rests, both judged when the window opens", async () => {
     now = fromEt(2026, 10, 7, 11, 0);
     try {
       const h = home();
@@ -301,36 +306,165 @@ describe("US stocks: Cboe's delayed quote, only inside the delayed window", () =
       const { t, source: src } = await open(h, "paper-1", { all: [cboe] });
       expect(src.trader!.kinds).toContain("stock");
       const m = ok(await t.market("AAPL"));
-      expect(m).toMatchObject({ kind: "stock", base: "AAPL", quote: "USD", types: ["market", "limit"], session: { open: true }, sellsReduce: true, qtyStep: 0.000001 });
-      expect(m.note).toContain("a US stock at Cboe's delayed quote");
+      expect(m).toMatchObject({ kind: "stock", base: "AAPL", quote: "USD", types: ["market", "limit", "stop", "stop_limit", "trailing_stop"], tifs: ["day", "gtc", "ioc", "fok"], session: { open: true }, sellsReduce: true, qtyStep: 0.000001 });
+      expect(m.note).toContain("a stock only at a quote from inside its session");
       const bought = ok(await t.place(order({ symbol: "AAPL", qty: 2 })));
-      expect(bought).toMatchObject({ status: "filled", avgPrice: 340.068, filledQty: 2 });
+      // a US share: no commission
+      expect(bought).toMatchObject({ status: "filled", avgPrice: 340.068, filledQty: 2, feeUsd: 0 });
       const line = (await src.read()).find((b) => b.asset === "AAPL")!;
       expect(line).toMatchObject({ amount: 2, usd: 680, class: "equity", where: "paper · AAPL from Cboe · 15 min delayed" });
       expect(refusal(await t.place(order({ symbol: "AAPL", side: "sell", qty: 5 }))).message).toContain("sells only what the paper account holds");
-      // after the close: the session is over, the quote is the close, no market order
+      // after the close: the session is over, the quote is the close; a market order is queued for the session, a limit rests
       now = fromEt(2026, 10, 7, 16, 20);
       const closed = ok(await t.market("AAPL"));
-      expect(closed.types).toEqual(["limit"]);
       expect(closed.session).toMatchObject({ open: false });
-      expect(closed.note).toContain("no market order now");
-      const refused = refusal(await t.place(order({ symbol: "AAPL", qty: 1 })));
-      expect([refused.code, refused.message]).toEqual(["E_VENUE_MARKET_CLOSED", expect.stringContaining("only from 09:45 to 16:15 New York")]);
-      // a limit above the ask rests all the same: it is judged only inside the window, and fills then at its limit
+      expect(closed.note).toContain("a market order waits for it (queued for the open)");
+      const queued = ok(await t.place(order({ symbol: "AAPL", qty: 1 })));
+      expect(queued.status).toBe("open");
+      expect((queued.native as { note?: string }).note).toContain("queued for the open");
+      // a DAY order — a stock's default for a market order — ends with the session it is for: the next one's close
+      expect((queued.native as { expiresAt?: string }).expiresAt).toBe(new Date(fromEt(2026, 10, 8, 16, 0)).toISOString());
       const resting = ok(await t.place(order({ symbol: "AAPL", type: "limit", limitPrice: 345, qty: 1 })));
       expect(resting.status).toBe("open");
-      expect((resting.native as { note?: string }).note).toContain("resting until 09:45 New York");
+      expect((resting.native as { note?: string }).note).toContain("resting until");
       now = fromEt(2026, 10, 8, 9, 40);
       expect(ok(await t.status(resting.ref, "AAPL")).status).toBe("open");
+      expect(ok(await t.status(queued.ref, "AAPL")).status).toBe("open");
       now = fromEt(2026, 10, 8, 9, 50);
       expect(ok(await t.status(resting.ref, "AAPL"))).toMatchObject({ status: "filled", avgPrice: 345 });
-      expect(book(h).holdings["AAPL"]).toMatchObject({ qty: 3 });
-      // an IOC limit out of the window fills nothing
+      expect(ok(await t.status(queued.ref, "AAPL"))).toMatchObject({ status: "filled", avgPrice: 340.068 });
+      expect(book(h).holdings["AAPL"]).toMatchObject({ qty: 4 });
+      // an IOC order out of the window fills nothing
       now = fromEt(2026, 10, 10, 12, 0);
       expect(ok(await t.place(order({ symbol: "AAPL", type: "limit", limitPrice: 345, qty: 1, tif: "ioc" }))).status).toBe("canceled");
+      expect(ok(await t.place(order({ symbol: "AAPL", qty: 1, tif: "ioc" }))).status).toBe("canceled");
     } finally {
       now = NOW;
     }
+  });
+});
+
+/** a stock source that stamps each quote with its own time and its delay, and keeps the market's clock (the real US line's shape): the test
+ * moves the quote's time with the price */
+function stamped(id: string, rows: Row[], clockOf: SessionClock, o: { delayMs?: number; session?: (ms: number) => MarketSession } = {}) {
+  const s = source(id, id, "stocks", rows, { sessions: clockOf });
+  const stamp = new Map<string, number>();
+  s.listings = async (q) => {
+    const Q = (q.q ?? "").trim().toUpperCase();
+    return (Q ? s.rows.filter((m) => m.symbol.toUpperCase().includes(Q)) : s.rows).slice(0, q.limit).map((m) => ({ ...m, quoteAt: new Date(stamp.get(m.symbol) ?? clock()).toISOString(), delayMs: o.delayMs ?? 0, quoteFrom: `${id} · test`, session: o.session ? o.session(clock()) : usSessionFull(clock(), false) }));
+  };
+  return Object.assign(s, { stamp });
+}
+
+describe("stocks by their quote's own time: the regular session, extended hours, a quote that stopped moving", () => {
+  it("fills only at a quote stamped inside a session the order trades in; an extended-hours limit trades pre-market and after-hours; a stale quote fills nothing", async () => {
+    now = fromEt(2026, 10, 14, 11, 0);
+    try {
+      const h = home();
+      const us = stamped("us-test", [row("NVDA", "stock", "NVDA", "USD", 200)], usClock);
+      const { t } = await open(h, "paper-1", { all: [us] });
+      expect(ok(await t.place(order({ symbol: "NVDA", qty: 1 })))).toMatchObject({ status: "filled", avgPrice: 200.04 });
+      // a quote that stopped moving: stamped 11:00, read at 11:20 — past its delay and the grace — fills nothing (a market order waits)
+      us.stamp.set("NVDA", fromEt(2026, 10, 14, 11, 0));
+      now = fromEt(2026, 10, 14, 11, 20);
+      const waits = ok(await t.place(order({ symbol: "NVDA", qty: 1 })));
+      expect(waits.status).toBe("open");
+      us.stamp.delete("NVDA");
+      now += 10_000;
+      expect(ok(await t.status(waits.ref, "NVDA")).status).toBe("filled");
+      // after-hours: a plain limit rests; one sent for extended hours trades now
+      now = fromEt(2026, 10, 14, 17, 0);
+      const m = ok(await t.market("NVDA"));
+      expect(m.session).toMatchObject({ phase: "after", extendedHours: true });
+      const plainLimit = ok(await t.place(order({ symbol: "NVDA", type: "limit", limitPrice: 201, qty: 1 })));
+      expect(plainLimit.status).toBe("open");
+      const eh = ok(await t.place(order({ symbol: "NVDA", type: "limit", limitPrice: 201, qty: 1, extendedHours: true, tif: "day" })));
+      expect(eh).toMatchObject({ status: "filled", avgPrice: 200.04 });
+      expect(refusal(await t.place(order({ symbol: "NVDA", qty: 1, extendedHours: true }))).message).toContain("limit order only");
+      // a day order for extended hours ends with the after-hours session
+      const ehRest = ok(await t.place(order({ symbol: "NVDA", type: "limit", limitPrice: 150, qty: 1, extendedHours: true, tif: "day" })));
+      expect((ehRest.native as { expiresAt?: string }).expiresAt).toBe(new Date(fromEt(2026, 10, 14, 20, 0)).toISOString());
+      now = fromEt(2026, 10, 14, 20, 1);
+      expect(ok(await t.status(ehRest.ref, "NVDA")).status).toBe("expired");
+      // stops are watched in the regular session only
+      now = fromEt(2026, 10, 15, 8, 0);
+      const stop = ok(await t.place(order({ symbol: "NVDA", side: "sell", type: "stop", stopPrice: 210, qty: 1, tif: "gtc" })));
+      expect(ok(await t.status(stop.ref, "NVDA")).status).toBe("open");
+      now = fromEt(2026, 10, 15, 9, 31);
+      expect(ok(await t.status(stop.ref, "NVDA"))).toMatchObject({ status: "filled", avgPrice: 199.96 });
+    } finally {
+      now = NOW;
+    }
+  });
+});
+
+describe("stops, trailing stops and brackets", () => {
+  // these move the clock: each starts at NOW and leaves it there
+  beforeEach(() => {
+    now = NOW;
+  });
+  afterEach(() => {
+    now = NOW;
+  });
+  it("a stop triggers when the bid (a sell) or the ask (a buy) reaches it and fills at the quote; a stop-limit becomes its limit", async () => {
+    const h = home();
+    const { t, s } = await open(h);
+    ok(await t.place(order({ qty: 0.16 })));
+    const stop = ok(await t.place(order({ side: "sell", type: "stop", stopPrice: 59000, qty: 0.1 })));
+    expect(stop.status).toBe("open");
+    reprice(s.kraken, "BTC/USD", 59500);
+    now += 10_000;
+    expect(ok(await t.status(stop.ref, "BTC/USD")).status).toBe("open");
+    reprice(s.kraken, "BTC/USD", 58900);
+    now += 10_000;
+    expect(ok(await t.status(stop.ref, "BTC/USD"))).toMatchObject({ status: "filled", avgPrice: 58888.22 });
+    const sl = ok(await t.place(order({ side: "sell", type: "stop_limit", stopPrice: 58000, limitPrice: 57900, qty: 0.06 })));
+    reprice(s.kraken, "BTC/USD", 57950);
+    now += 10_000;
+    const fired = ok(await t.status(sl.ref, "BTC/USD"));
+    // triggered (the bid reached 58000), and its limit 57900 crossed: filled at its limit
+    expect(fired).toMatchObject({ status: "filled", avgPrice: 57900 });
+    expect((fired.native as { triggeredAt?: string }).triggeredAt).toBeTruthy();
+  });
+
+  it("a trailing stop follows the best price since it was placed and triggers its trail behind it", async () => {
+    const h = home();
+    const { t, s } = await open(h);
+    ok(await t.place(order({ qty: 0.1 })));
+    const trail = ok(await t.place(order({ side: "sell", type: "trailing_stop", trailPercent: 5, qty: 0.1 })));
+    // from the bid now (59988): its stop 5% under it
+    expect((trail.native as { stopPrice: number }).stopPrice).toBeCloseTo(59988 * 0.95, 6);
+    reprice(s.kraken, "BTC/USD", 70000);
+    now += 10_000;
+    const up = ok(await t.status(trail.ref, "BTC/USD"));
+    expect(up.status).toBe("open");
+    expect((up.native as { stopPrice: number }).stopPrice).toBeCloseTo(69986 * 0.95, 6);
+    // a fall that stays above the moved stop does nothing; one through it sells at the bid
+    reprice(s.kraken, "BTC/USD", 67000);
+    now += 10_000;
+    expect(ok(await t.status(trail.ref, "BTC/USD")).status).toBe("open");
+    reprice(s.kraken, "BTC/USD", 66000);
+    now += 10_000;
+    expect(ok(await t.status(trail.ref, "BTC/USD"))).toMatchObject({ status: "filled", avgPrice: 65986.8 });
+  });
+
+  it("a bracket: its exits go on the book when the entry fills, the one that fills cancels the other; refused the wrong way round", async () => {
+    const h = home();
+    const { t, s } = await open(h);
+    expect(refusal(await t.place(order({ takeProfit: 59000, stopLoss: 55000 }))).message).toContain("take-profit");
+    const entry = ok(await t.place(order({ qty: 0.1, takeProfit: 66000, stopLoss: 57000 })));
+    expect(entry.status).toBe("filled");
+    const legs = (entry.native as { legs: Array<{ ref: string; type: string; side: string; status: string }> }).legs;
+    expect(legs.map((l) => [l.type, l.side, l.status])).toEqual([["limit", "sell", "open"], ["stop", "sell", "open"]]);
+    reprice(s.kraken, "BTC/USD", 67000);
+    now += 10_000;
+    const after = ok(await t.status(entry.ref, "BTC/USD"));
+    expect((after.native as { legs: Array<{ status: string; avgPrice?: number }> }).legs.map((l) => l.status)).toEqual(["filled", "canceled"]);
+    expect(book(h).holdings["BTC/USD"]).toBeUndefined();
+    // a perpetual's exits are reduce-only
+    const perp = ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1, stopLoss: 50000 })));
+    const leg = book(h).orders[(perp.native as { legs: Array<{ ref: string }> }).legs[0]!.ref]!;
+    expect(leg).toMatchObject({ type: "stop", side: "sell", reduceOnly: true, stopPrice: 50000, parent: perp.ref });
   });
 });
 

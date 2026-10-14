@@ -1,0 +1,70 @@
+/* The order book and the latest trades (ui/book.js), in the Trade terminal's middle panel (terminal.css .tt-book). A trading screen's
+   density in the account's own tokens (ui/tokens.css), so Cream and Black alike: two underlined tabs, small dim column heads, rows of a
+   fixed height in tabular figures — the offers' prices in the down colour over their depth bar tinted --down-fill, the bids' in the up
+   colour over --up-fill — and a spread row between them. The ladder's two halves share the panel's height, the offers held to its foot so
+   the best ask sits by the spread row and the bids from its head, each cut where the panel ends: rows arriving never move the panel. Every
+   row is one line; at 320 px the three columns still fit. Motion: a bar's width only, 120 ms, none under prefers-reduced-motion. */
+
+/* the panel fills its place without its rows pushing it taller (a flex basis of 0): book.js works out how many whole rows a side (--bk-n)
+   that place holds, so the rows follow the place, never the data */
+.bk { --bk-row: 20px; --bk-n: 9; display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; font-family: var(--font-sans); font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---- the head: the two tabs, the grouping on the right -------------------------------------------------------------------------- */
+.bk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; height: 37px; padding: 0 10px 0 6px; border-bottom: 1px solid var(--border); flex: none; min-width: 0; }
+.bk-tabs { display: flex; gap: 2px; min-width: 0; }
+.bk-tab { flex: none; min-height: 36px; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--dim); font: 600 13px var(--font-sans); cursor: pointer; white-space: nowrap; }
+.bk-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--text); }
+.bk-tab:focus-visible, .bk-group:focus-visible, .bk-row:focus-visible { outline: 2px solid var(--rule); outline-offset: -2px; }
+.bk-gw { flex: none; display: inline-flex; }
+.bk-gw[hidden] { display: none; }
+.bk-group { appearance: none; -webkit-appearance: none; min-height: 28px; padding: 0 20px 0 8px; border: 1px solid var(--border); border-radius: var(--radius-s); background-color: var(--bg); color: var(--text); font: 600 12px var(--font-sans); cursor: pointer; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 11px) 52%, calc(100% - 7px) 52%; background-size: 4px 4px; background-repeat: no-repeat; }
+
+/* ---- the panes: the book's, the trades' --------------------------------------------------------------------------------------- */
+.bk-pane { display: flex; flex-direction: column; flex: none; min-width: 0; }
+.bk-pane[hidden] { display: none; }
+/* the column heads, and every row: price · size · total (time, for a trade), the price on the left and the figures on the right */
+.bk-cols, .bk-row, .bk-trow { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 0 12px; min-width: 0; }
+.bk-cols { flex: none; height: 26px; color: var(--dim); font-size: 11px; font-weight: 600; }
+.bk-cols > span, .bk-row > span:not(.bk-bar), .bk-trow > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-cols > span:not(:first-child), .bk-row .bk-s, .bk-row .bk-t, .bk-trow .bk-s, .bk-trow .bk-t { text-align: right; }
+
+/* the two halves of the ladder, each --bk-n whole rows high: the offers kept to the foot of theirs (the best ask by the spread row), the
+   bids from the head of theirs; the trades as high as both and the spread row */
+.bk-asks, .bk-bids, .bk-tape { display: flex; flex-direction: column; flex: none; height: calc(var(--bk-row) * var(--bk-n)); overflow: hidden; }
+.bk-asks { justify-content: flex-end; }
+.bk-tape { justify-content: flex-start; height: calc(var(--bk-row) * (var(--bk-n) * 2 + 1)); }
+
+/* a row: one line of a fixed height; its bar behind it, from the right, as wide as its running total's share */
+.bk-row, .bk-trow { position: relative; flex: none; height: var(--bk-row); line-height: var(--bk-row); }
+.bk-row { cursor: pointer; }
+.bk-row:hover { background: var(--hover); }
+.bk-row > span:not(.bk-bar) { position: relative; }
+.bk-bar { position: absolute; inset: 0; transform-origin: right center; pointer-events: none; transition: transform 120ms linear; }
+.bk-ask .bk-bar { background: var(--down-fill); }
+.bk-bid .bk-bar { background: var(--up-fill); }
+.bk-ask .bk-p, .bk-trow .bk-sell { color: var(--down); font-weight: 600; }
+.bk-bid .bk-p, .bk-trow .bk-buy { color: var(--up); font-weight: 600; }
+.bk-row .bk-t, .bk-trow .bk-t { color: var(--dim); }
+/* a group only part of whose range was read (the far end of a side that goes on): its figures "at least", said dim, its bar lighter */
+.bk-part .bk-s { color: var(--dim); }
+.bk-part .bk-bar { opacity: 0.55; }
+
+/* the spread row between the halves, and the words in place of a book (waiting, nothing on it, a refusal) */
+.bk-mid { flex: none; display: flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 28px; padding: 3px 12px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg); color: var(--dim); font-size: 12px; font-weight: 600; text-align: center; min-width: 0; }
+.bk-spread, .bk-wait { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk-wait { color: var(--dim); font-weight: 500; }
+p.bk-wait, p.bk-no { margin: 0; padding: 14px 12px; text-align: center; font-size: 12px; }
+.bk-no { color: var(--warn-text); font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
+/* a source's own fact (it publishes no book, no trades), said quietly and whole */
+.bk-wait[role="status"] { white-space: normal; overflow-wrap: anywhere; }
+/* the quiet line under a book of its best bid and ask only: whose quote it is, why that is all, and how old it is */
+.bk-note { flex: none; margin: 0; padding: 6px 12px 2px; color: var(--dim); font-size: 11px; line-height: 1.35; }
+.bk-note:empty { display: none; }
+
+@media (max-width: 360px) {
+  .bk-cols, .bk-row, .bk-trow { padding: 0 8px; column-gap: 6px; }
+  .bk-tab { padding: 0 6px; font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bk-bar { transition: none; }
+}

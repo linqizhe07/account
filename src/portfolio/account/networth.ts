@@ -52,6 +52,9 @@ export function bucketFor(range: NetWorthRange, spanMs: number): NetWorthBucket 
 }
 
 export const networthPath = (home: string): string => join(home, "portfolio", "networth.jsonl");
+/** the PAPER accounts' own log, kept apart: paper money is never on the net worth curve, and its points and connections are written here
+ * (account/paper-equity.ts reads it venue by venue) */
+export const paperNetworthPath = (home: string): string => join(home, "portfolio", "networth-paper.jsonl");
 
 /** what the account was worth at one moment, as the service reads it off the account page */
 export interface NetWorthSnapshot {
@@ -69,7 +72,7 @@ export interface NetWorthSnapshot {
    * what it grew by added back. Absent: not known, and nothing is added back */
   paidOutUsd?: number | undefined;
   /** a venue connected or disconnected just now: the snapshot is the account as it is after it */
-  event?: { kind: "connect" | "disconnect"; venue: string; name?: string | undefined } | undefined;
+  event?: { kind: "connect" | "disconnect"; venue: string; name?: string | undefined; /** a paper account's: written on the paper accounts' log (service.ts snapshot), never on the net worth's */ paper?: boolean | undefined } | undefined;
 }
 
 interface PointRow {
@@ -279,8 +282,25 @@ export class NetWorthLog {
     return { written: true, at };
   }
 
-  /** The curve over `range`, as of `now`. A range that is not one of 1d, 1w, 1m, all is a refusal */
-  read(range: string, now: number = this.now()): NetWorthHistory | Refusal {
+  /** Every point from `fromMs` on — and the last one before it, which stands for the start — venue by venue, and every connection and
+   * disconnection from then, oldest first: for a reader that tells the log account by account (the paper accounts' curve,
+   * account/paper-equity.ts) */
+  rowsSince(fromMs: number): { points: Array<{ at: number; usd: number; byVenue: Record<string, number>; stale: string[] }>; events: NetWorthEvent[] } {
+    this.sync();
+    const all = this.points.map((p, i) => ({ p, ms: Date.parse(p.at), i })).sort((a, b) => a.ms - b.ms || a.i - b.i);
+    const before = all.filter((x) => x.ms < fromMs).pop();
+    const used = [...(before ? [before] : []), ...all.filter((x) => x.ms >= fromMs)];
+    const events = this.events
+      .map((e, i) => ({ e, ms: Date.parse(e.at), i }))
+      .filter((x) => x.ms >= fromMs)
+      .sort((a, b) => a.ms - b.ms || a.i - b.i)
+      .map(({ e }): NetWorthEvent => ({ at: e.at, ...e.event }));
+    return { points: used.map(({ p, ms }) => ({ at: ms, usd: p.usd, byVenue: { ...p.byVenue }, stale: [...(p.stale ?? [])] })), events };
+  }
+
+  /** The curve over `range`, as of `now`. A range that is not one of 1d, 1w, 1m, all is a refusal. `hide`: connections not to be marked on
+   * this curve (a paper account's, written before paper accounts had a log of their own) */
+  read(range: string, now: number = this.now(), hide?: (venue: string) => boolean): NetWorthHistory | Refusal {
     if (!(NETWORTH_RANGES as readonly string[]).includes(range)) return no("E_ACCOUNT_BAD_ACTION", { message: `a net worth range is one of ${NETWORTH_RANGES.join(", ")}: not "${range}"`, detail: { ranges: NETWORTH_RANGES } });
     const r = range as NetWorthRange;
     this.sync();
@@ -323,7 +343,7 @@ export class NetWorthLog {
     const base = used.length ? used[0]!.p.usd + came : 0;
     const events = this.events
       .map((e, i) => ({ e, ms: Date.parse(e.at), i }))
-      .filter((x) => x.ms >= startMs && x.ms <= now)
+      .filter((x) => x.ms >= startMs && x.ms <= now && !hide?.(x.e.event.venue))
       .sort((a, b) => a.ms - b.ms || a.i - b.i)
       .map(({ e }): NetWorthEvent => ({ at: e.at, ...e.event }));
     const two = used.length >= 2;

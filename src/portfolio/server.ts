@@ -69,6 +69,9 @@
  *                                                        the ones waiting for the owner, its limits in words, and what other agents share
  *   GET  /api/account/candles?venue=&symbol=&interval=   one market's price history (5m · 1h · 1d): a connected venue's own, or a venue not
  *                                                        connected from its public data, without a key; kept a minute
+ *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
+ *                                                        bid and ask only, depth "top"); kept a second and a half
+ *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds
  *   GET  /api/account/earn?venue=&asset=                 Earn: the products the connected venues offer (the MetaMask Agent Wallet's
  *                                                        vaults through mm, OKX Simple Earn, Kraken Earn), what is in them, and the venues
  *                                                        that could not be read (money in or out is a signed liveEarn / agentLiveEarn)
@@ -537,12 +540,14 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     answerOf(res, await svc.holdings({ cost: q.cost === "1", paper: q.paper === "1" }));
   }));
 
-  // the net worth curve: range 1d · 1w · 1m · all
+  // the net worth curve: range 1d · 1w · 1m · all. paper=1: the paper accounts' own curve instead (never the net worth's), all of them or
+  // the one `venue`
   app.get("/api/account/history", wrap(async (req, res) => {
     if (!mounted(res)) return;
-    const q = strings(req, res, { range: 10 });
+    const q = strings(req, res, { range: 10, paper: 5, venue: 64 });
     if (!q) return;
-    answerOf(res, svc.history(q.range || "1d"));
+    if (q.venue && q.paper !== "1") return void bad(res, "a venue's own curve is a paper account's: ask with paper=1");
+    answerOf(res, q.paper === "1" ? await svc.paperHistory(q.range || "1d", q.venue || undefined) : svc.history(q.range || "1d"));
   }));
 
   // where to send an asset on a network so that it lands at a venue: the exchange's own deposit address, or a proven wallet's own
@@ -624,6 +629,23 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const q = strings(req, res, { venue: 60, symbol: 200, interval: 4 });
     if (!q) return;
     answerOf(res, await svc.candles(q.venue, q.symbol, q.interval || "1h"));
+  }));
+
+  // one market's order book (best first, `depth` levels a side, 1 to 50) and its latest trades (newest first, `limit`, 1 to 100): a connected
+  // venue's own, or a public source's without a key; a market whose source has no book, its best bid and ask only (service.ts marketBook)
+  app.get("/api/account/book", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { venue: 60, symbol: 200, depth: 4 });
+    if (!q) return;
+    if (q.depth && !/^\d{1,2}$/.test(q.depth)) return void bad(res, "depth is a count of levels a side, 1 to 50, in digits");
+    answerOf(res, await svc.marketBook(q.venue, q.symbol, q.depth ? Number(q.depth) : 20));
+  }));
+  app.get("/api/account/trades", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { venue: 60, symbol: 200, limit: 5 });
+    if (!q) return;
+    if (q.limit && !/^\d{1,3}$/.test(q.limit)) return void bad(res, "limit is a count of trades, 1 to 100, in digits");
+    answerOf(res, await svc.marketTrades(q.venue, q.symbol, q.limit ? Number(q.limit) : 30));
   }));
 
   // EARN: the products the venues connected live offer, in one asset when asked, and what is in them (each venue not read is in `missing`)
@@ -857,6 +879,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // where the owner can connect, kept fresh without anyone asking: the venues' own answers to this network, and their terms matched to where
   // it is (live/availability.ts) — so the page and the agents know before anyone makes a key
   if (!classic && service.account) service.watchVenues();
+  // the paper accounts' own clock: their resting orders, stops, days and funding looked at every few seconds (service.ts watchPaper)
+  if (!classic && service.account) service.watchPaper();
   // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
   if (!classic && service.account) service.watchDesk();
   const stop = () => srv.close().then(() => process.exit(0));

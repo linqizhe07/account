@@ -267,7 +267,7 @@ const paper: Connector = {
   kind: "paper",
   label: "Paper account · paper money, the public markets (US stocks, coins, perpetuals, tokenised shares, event contracts), the account's own book",
   needs: "none",
-  example: `Nothing to connect: the account opens a paper account of its own — ${PAPER_DEFAULT_CASH.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} of paper money unless another sum in dollars is given — trading every market the public sources list (US stocks at Cboe's delayed quotes, coins, perpetuals with leverage, tokenised shares, Kalshi and Polymarket event contracts), filled at the public quote by the account's own rule and settled when their venues settle. No real money anywhere. Several can be open at once, each with its own name.`,
+  example: `Nothing to connect: the account opens a paper account of its own — ${PAPER_DEFAULT_CASH.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} of paper money unless another sum in dollars is given — trading every market the public sources list (US stocks at real-time public quotes in every session they cover — pre-market, regular, after-hours, overnight — coins, perpetuals with leverage, tokenised shares, Kalshi and Polymarket event contracts) with market, limit, stop, trailing-stop and bracket orders, filled at the public quote by the account's own rule and settled when their venues settle. No real money anywhere. Several can be open at once, each with its own name.`,
   venues: [],
   async open(req, deps) {
     const cash = parsePaperCash(req.reference, req.venue);

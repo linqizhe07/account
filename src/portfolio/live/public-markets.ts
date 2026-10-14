@@ -151,7 +151,38 @@
  *                       a HIP-3 market by its dex-prefixed coin ("io:ANTH" answers its bars; the bare "ANTH" HTTP 500, live 2026-10-08)
  *   Stock Tokens        none: Robinhood publishes no history for them
  *
- * A request goes only to those fixed hosts, as a GET over https (Hyperliquid's info endpoint: a POST of one of five bodies, each built
+ * ORDER BOOKS (`book`) AND THE LATEST TRADES (`trades`), keyless, each read checked live without a key on 2026-10-14. A book is the source's
+ * own levels, best first — the highest bid, the lowest ask — whatever order the source sent them in, at most fifty a side; the trades
+ * newest first, at most a hundred; a trade's side only where the source says which side took. A side that came back as long as it was asked
+ * for, or as long as its source ever sends, or longer than the depth asked, is marked as one that may go on (OrderBook.more), so a page
+ * that groups prices knows its last group may be only part of its range. Each kept 1.5 seconds (a book) or three (the trades) by market, so
+ * a page asking every two seconds asks the venue about once:
+ *   the exchanges       the library's fetchOrderBook and fetchTrades, for a pair the exchange lists (asked for 20 or 100 levels, which every
+ *                       one of the five takes, and cut to the depth asked). A trade's side is the TAKER's at Kraken, OKX ("Trade side of
+ *                       taker"), Binance (its isBuyerMaker, which the library turns into the taker's side) and Bybit ("Side of taker"); a
+ *                       Coinbase trade's side is left unsaid: its docs do not say whose side it is
+ *   Kalshi              GET /trade-api/v2/markets/{ticker}/orderbook?depth= — {orderbook_fp: {yes_dollars: [[price, contracts]], no_dollars}}:
+ *                       "yes bids and no bids only (no asks are returned)", and "a YES bid at 7¢ is equivalent to a NO ask at 93¢" (its
+ *                       docs): a YES leg's bids are the YES bids, its asks the NO bids at 1 − their price; the NO leg the other way. Its docs
+ *                       say "best to worst"; live it sends them worst first, so they are put in order here. GET /markets/trades?ticker=
+ *                       &limit= — count_fp contracts at yes_price_dollars (no_price_dollars for the NO leg), taker_outcome_side the outcome
+ *                       the taker bought (a YES leg's buy when it is yes)
+ *   Polymarket          the CLOB's GET clob.polymarket.com/book?token_id= for the outcome's own token ({bids, asks: [{price, size}],
+ *                       timestamp}, each side sent worst first). Its trades are not on the CLOB without a key (GET /trades: "Unauthorized");
+ *                       Polymarket's Data API has them keyless — GET data-api.polymarket.com/trades?market=<condition id>&takerOnly=true,
+ *                       both outcomes', each the taker's fill with its side. The CLOB's book is one book for both (a NO token's /book is
+ *                       its YES token's mirrored, live), so the other outcome's fills are this one's at 1 − their price and the other
+ *                       side; kept as price, size, side and time: the wallet, the name and the picture each carries are never kept
+ *   Polymarket US       GET gateway.polymarket.us/v1/markets/{slug}/book — {marketData: {bids, offers: [{px: {value}, qty}], transactTime}},
+ *                       best first, the YES contract's: the NO leg's bids are its offers at 1 − their price, its asks its bids so. No trades:
+ *                       the gateway publishes none
+ *   Hyperliquid         POST /info {"type":"l2Book","coin"} — {levels: [bids, asks], time}, twenty a side, each {px, sz, n} — and
+ *                       {"type":"recentTrades","coin"}: its last ten trades, newest first, side B or A (live, B prints at the best ask and A at
+ *                       the best bid: B is a buyer taking, A a seller). A HIP-3 market by its dex-prefixed coin, as its bars are asked
+ *   no book             US stocks (a public quote's best bid and ask only: the service says so as that), Stock Tokens, xStocks, Ondo and the
+ *                       eight exchanges' pre-IPO contracts (Hyperliquid's HIP-3 ones have its book and trades, as above)
+ *
+ * A request goes only to those fixed hosts, as a GET over https (Hyperliquid's info endpoint: a POST of one of seven bodies, each built
  * here from its fields, through its own guard), with a time limit (the exchange library's clients go only to their own exchange's hosts).
  * An answer is kept ninety seconds (the Stock Token list ten minutes, a token's price one), so a page that asks every few
  * seconds does not ask the venue every time, and the price of a public market is as old as that. A refusal is kept only when it says the
@@ -170,7 +201,7 @@ import { keylessExchange, PUBLIC_EXCHANGES } from "./prices.ts";
 import { ondoStocksPublic, xstocksPublic } from "./public-rwa.ts";
 import { usStocksPublic } from "./public-stocks.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS, stockTokens } from "./robinhood.ts";
-import { CANDLE_INTERVALS, inDollars, type Candle, type CandleInterval, type Market, type MarketStats } from "./trade.ts";
+import { CANDLE_INTERVALS, inDollars, type Candle, type CandleInterval, type Market, type MarketStats, type OrderBook, type PublicTrade, type SessionClock } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeWords, isStable, notTheApi, notTheApiWords, rateLimitedNo, realHttp, redirectedNo, REGION, unreachable, type Http, type HttpReply } from "./types.ts";
 
 /** a market as a public source lists it: the shared shape, and what only a listing carries */
@@ -214,7 +245,7 @@ export type Settlement = { settled: false; closed?: boolean | undefined } | { se
 export interface PublicSource {
   id: string;
   name: string;
-  /** an exchange's coins, event contracts, tokens that stand for shares, or US stocks (Cboe's delayed quotes) */
+  /** an exchange's coins, event contracts, tokens that stand for shares, or US stocks (public-stocks.ts) */
   kind: "exchange" | "events" | "tokens" | "stocks";
   /** the venue on the account this is the public side of, as the owner would connect it to trade (`okx`), and the connection that does
    * (`live:exchange:okx`) */
@@ -229,14 +260,23 @@ export interface PublicSource {
   events?(o: EventsQuery): Promise<Listing[] | Refusal>;
   /** one market's price history since `sinceMs`, oldest first: `symbol` as its listing names it */
   candles?(symbol: string, interval: CandleInterval, sinceMs: number): Promise<Candle[] | Refusal>;
+  /** one market's order book, `depth` levels a side at most (1 to 50), best first: `symbol` as its listing names it (see the top of this
+   * file). A source that publishes no book has none */
+  book?(symbol: string, depth: number): Promise<OrderBook | Refusal>;
+  /** one market's latest trades, newest first, `limit` at most (1 to 100) */
+  trades?(symbol: string, limit: number): Promise<PublicTrade[] | Refusal>;
   /** its price history comes from another host than its listings (Polymarket's CLOB, beside Gamma): a refusal of the history holds back
-   * the history alone, and the listings are still asked. A source without it answers both from one host, and one refusal holds back both */
+   * the history alone, and the listings are still asked. A source without it answers both from one host, and one refusal holds back both.
+   * Its book and trades are read apart from its listings too (the CLOB, and Polymarket's Data API) */
   historyApart?: true | undefined;
   /** an event market's settlement, asked of the venue keyless (see the top of this file): `symbol` as its listing names it */
   settlement?(symbol: string): Promise<Settlement | Refusal>;
   /** let go of the refusals it holds (its place rule, its edge's page, a wait), so the next ask asks the venue: called when a forced re-check
    * found the venue answering this network (service.ts) */
   reset?(): void;
+  /** a stock market's clock (trade.ts SessionClock), where the source keeps one: a paper account judges a quote's own time by it and ends a
+   * DAY order at its close */
+  sessions?: SessionClock | undefined;
   /** what the owner should know about the listing asked with `q`, each a plain sentence under 160 characters, read after `listings` has
    * answered: what the list is made of, how much of the venue it shows when nothing is searched for ("40 of 194 shown · search for the
    * rest"). The service may answer a listing from what it kept without asking the source again, so the sentences never depend on which
@@ -256,12 +296,15 @@ export interface PublicDeps {
 
 /** the only hosts a public source's own GETs go to (Hyperliquid's info endpoint, a POST, has its own guard: hyperliquidInfo): the event
  * venues, Robinhood's, Cboe's delayed-quote CDN, xStocks' and LI.FI's (public-stocks.ts, public-rwa.ts), then the eight pre-IPO perpetuals'
- * venues (Binance's USDⓈ-M futures host and Bybit's v5 host the last two; Gate's host serves the xStocks tickers too). Polymarket US's
- * public gateway is its keyless market data only: its signed API (api.polymarket.us) is never asked from here */
-export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "cdn-api.cboe.com", "api.xstocks.fi", "li.quest", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
+ * venues (Binance's USDⓈ-M futures host and Bybit's v5 host the last two; Gate's host serves the xStocks tickers too), then the US stocks'
+ * real-time quotes and charts (Nasdaq's, us-quotes.ts). Polymarket's Data API (beside its CLOB) is asked for its latest trades only, keyless.
+ * Polymarket US's public gateway is its keyless market data only: its signed API (api.polymarket.us) is never asked from here */
+export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "data-api.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "api.nasdaq.com", "cdn-api.cboe.com", "api.xstocks.fi", "li.quest", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
 const KALSHI = "https://external-api.kalshi.com/trade-api/v2";
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
+/** Polymarket's Data API: its latest trades, keyless (the CLOB's own need a key) */
+const DATA_API = "https://data-api.polymarket.com";
 /** how long a list is kept: a public market's price is as old as this */
 export const KEEP_MS = 90_000;
 const PRICE_MS = 60_000;
@@ -341,7 +384,7 @@ export function fixedHosts(http: Http, hosts: readonly string[], timeoutMs: numb
       throw new Error("not a URL: not asked");
     }
     if (u.protocol !== "https:" || u.username || u.password || u.port || !hosts.includes(u.hostname) || (init.method ?? "GET") !== "GET" || init.body !== undefined) throw new Error(`${u.protocol}//${u.host} is not asked: a public market is read with a GET from ${hosts.join(", ")} only`);
-    return http(url, { method: "GET", headers: { accept: "application/json", ...(init.headers ?? {}) }, timeoutMs: Math.min(init.timeoutMs ?? timeoutMs, timeoutMs) });
+    return http(url, { method: "GET", headers: { accept: "application/json", ...(init.headers ?? {}) }, timeoutMs: Math.min(init.timeoutMs ?? timeoutMs, timeoutMs), ...(init.charset ? { charset: init.charset } : {}), ...(init.full ? { full: true } : {}) });
   };
 }
 
@@ -484,6 +527,68 @@ function foldPoints(points: Array<{ t: number; p: number }>, step: number): Cand
   return [...bars.values()];
 }
 
+// ---- order books and the latest trades: what every source's `book` and `trades` share ------------------------------------------------
+
+/** how long a book is kept (a page asks every two seconds: the venue is asked about once in that time), and the latest trades */
+export const BOOK_MS = 1_500;
+export const TRADES_MS = 3_000;
+/** the most levels a side of a book is read to, and the most trades one read gives */
+export const BOOK_DEPTH_MAX = 50;
+export const TRADES_MAX = 100;
+/** a depth or a count as asked, held to 1…max: a whole number, else `fallback` */
+export const countOf = (n: unknown, max: number, fallback: number): number => {
+  const v = typeof n === "number" && Number.isFinite(n) ? Math.floor(n) : NaN;
+  return v >= 1 ? Math.min(max, v) : Math.min(max, fallback);
+};
+/** a level as a source writes it: [price, size] in a list, or the two named */
+type Level = readonly [unknown, unknown];
+const pairOf = (row: unknown): Level => {
+  const a = list(row);
+  return [a[0], a[1]];
+};
+
+/** One side of a book from a source's levels: each level's price (read by `price`: an event contract's must lie strictly between 0 and 1,
+ * or be turned to the other outcome's) and the size resting there, as the source wrote them — a level with no price or nothing resting is
+ * not a level — best first, the highest bid and the lowest ask, whatever order the source sent them in; at most `depth` */
+export function sideOf(rows: readonly Level[], side: "bids" | "asks", depth: number, price: (v: unknown) => number | undefined = pos): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const [p, s] of rows) {
+    const at = price(p);
+    const size = pos(s);
+    if (at !== undefined && size !== undefined) out.push([at, size]);
+  }
+  out.sort((a, b) => (side === "bids" ? b[0] - a[0] : a[0] - b[0]));
+  return out.slice(0, depth);
+}
+/** Whether a side of a book may go on past its last level shown (OrderBook.more): more levels came than the depth asked, and the rest were
+ * cut off here; or the source sent as many rows as it was asked for or ever sends (`sentMost`: Kalshi's depth asked, the library's 20 or
+ * 100, Hyperliquid's twenty), so it may hold more than it sent. Otherwise the source sent every level it holds */
+export function goesOn(rows: readonly Level[], depth: number, price: (v: unknown) => number | undefined = pos, sentMost?: number): boolean {
+  if (sentMost !== undefined && rows.length >= sentMost) return true;
+  let n = 0;
+  for (const [p, s] of rows) if (price(p) !== undefined && pos(s) !== undefined) n++;
+  return n > depth;
+}
+/** an event contract's price read as the OTHER outcome's (a YES bid at 0.07 is a NO ask at 0.93): 1 − it, to six places */
+const otherSide = (v: unknown): number | undefined => {
+  const p = px(v);
+  return p === undefined ? undefined : round(1 - p, 6);
+};
+/** a moment as ISO 8601: the source's own stamp (ms, or seconds `inSeconds`, or a time written), else `fallback` */
+const stampOf = (v: unknown, fallback: number, inSeconds = false): string => {
+  if (typeof v === "string" && !/^\d+$/.test(v.trim())) {
+    const t = Date.parse(v);
+    if (Number.isFinite(t)) return new Date(t).toISOString();
+  }
+  return isoAt(v, inSeconds) ?? new Date(fallback).toISOString();
+};
+/** trades newest first: by their time, and among trades of one moment in the reverse of the order the source listed them (oldest first) */
+const newestFirst = (rows: Array<PublicTrade & { i: number }>, limit: number): PublicTrade[] =>
+  rows
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.i - a.i)
+    .slice(0, limit)
+    .map(({ i: _i, ...t }) => t);
+
 // ---- exchanges, through the unified library's keyless client ---------------------------------------------------
 
 /** what the exchange's own ticker says, field by field (see the top of this file) */
@@ -602,8 +707,18 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
   const clock = deps.clock ?? Date.now;
   const keep = keeper<Listing[]>(clock, KEEP_MS);
   const history = keeper<Candle[]>(clock, HISTORY_MS);
+  const books = keeper<OrderBook>(clock, BOOK_MS);
+  const tape = keeper<PublicTrade[]>(clock, TRADES_MS);
   // the library keeps a failed load of the markets and answers it again: after a failure they are loaded afresh
   let reload = false;
+  // a book or trades read that failed may have met a market list gone stale (a pair delisted since): the list is loaded afresh then — but
+  // at most once in KEEP_MS, since the page asks for a book every two seconds and a whole list is large (Binance's, Kraken's: megabytes)
+  let forcedAt = Number.NEGATIVE_INFINITY;
+  const staleMaybe = (): void => {
+    if (clock() - forcedAt < KEEP_MS) return;
+    forcedAt = clock();
+    reload = true;
+  };
   // the refusal that holds the exchange back, and until when (the service's read cache does the same by venue). A hold is only ever
   // lengthened: two reads in flight at once answer in any order, and a late timeout must not cut a ban's or a place rule's hold to 20 s
   let held: { until: number; r: Refusal } | undefined;
@@ -670,6 +785,8 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
     reset: () => {
       keep.clear();
       history.clear();
+      books.clear();
+      tape.clear();
       held = undefined;
     },
     kind: "exchange",
@@ -717,7 +834,88 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
         }
       });
     },
+    /** fetchOrderBook, keyless: only for a pair the exchange lists, asked for 20 or 100 levels (every one of the five takes either; Binance
+     * takes no 50, KuCoin only 20 or 100) and cut to the depth asked, best first; the sizes in the coin */
+    book: (symbol, depth) => {
+      const d = countOf(depth, BOOK_DEPTH_MAX, 20);
+      const back = heldBack();
+      return back ? Promise.resolve(back) : books(`${symbol}|${d}`, async () => {
+        try {
+          const x = await pairAt(symbol);
+          if (isRefusal(x)) return x;
+          if (!can(x, "fetchOrderBook")) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} has no order book the library can read` });
+          const asked = d <= 20 ? 20 : 100;
+          const raw = rec(await x.fetchOrderBook!(symbol, asked));
+          const bids = list(raw.bids).map(pairOf);
+          const asks = list(raw.asks).map(pairOf);
+          return { bids: sideOf(bids, "bids", d), asks: sideOf(asks, "asks", d), at: stampOf(raw.timestamp, clock()), from: name, depth: "full", more: { bids: goesOn(bids, d, pos, asked), asks: goesOn(asks, d, pos, asked) } };
+        } catch (err) {
+          staleMaybe();
+          return hold(exchangeNo(id, name, err));
+        }
+      });
+    },
+    /** fetchTrades, keyless: the latest trades of a pair the exchange lists, newest first, the size in the coin; the side only where the
+     * exchange says it is the taker's (TAKER_SIDE) */
+    trades: (symbol, limit) => {
+      const n = countOf(limit, TRADES_MAX, 30);
+      const back = heldBack();
+      return back ? Promise.resolve(back) : tape(`${symbol}|${n}`, async () => {
+        try {
+          const x = await pairAt(symbol);
+          if (isRefusal(x)) return x;
+          if (!can(x, "fetchTrades")) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} has no trades the library can read` });
+          // Bybit's spot trades come sixty at a time at most (v5 Get Public Recent Trading History: limit 1–60 for spot)
+          const rows = await x.fetchTrades!(symbol, undefined, id === "bybit" ? Math.min(n, 60) : n);
+          return newestFirst(tradesOf(rows, TAKER_SIDE.has(id), clock()), n);
+        } catch (err) {
+          staleMaybe();
+          return hold(exchangeNo(id, name, err));
+        }
+      });
+    },
   };
+  /** the keyless client, with its markets loaded, for a pair it lists priced in dollars; or why not. A load of the markets that fails is
+   * loaded afresh next time (the library would answer the failure again) */
+  async function pairAt(symbol: string): Promise<BookClient | Refusal> {
+    const x = (await keylessSpot(id, open)) as BookClient | undefined;
+    if (!x) return no("E_WALLET_UNKNOWN_VENUE", { venue: id, message: `the exchange library knows no exchange called "${id}"` });
+    try {
+      await x.loadMarkets?.(reload);
+    } catch (err) {
+      reload = true;
+      throw err;
+    }
+    reload = false;
+    const m = x.markets?.[symbol] as CcxtMarket | undefined;
+    if (!m || m.spot === false || !inDollars(str(m.quote) ?? "")) return no("E_VENUE_REJECTED", { venue: id, message: `${name} lists no market ${symbol.slice(0, 40)} priced in dollars` });
+    return x;
+  }
+}
+
+/** what reads a book and trades through the library, beyond what exchange.ts names: the book as {bids, asks: [[price, amount, …]],
+ * timestamp}, the trades as [{timestamp, price, amount, side}], oldest first */
+type BookClient = ExchangeClient & {
+  fetchOrderBook?(symbol: string, limit?: number, params?: Record<string, unknown>): Promise<unknown>;
+  fetchTrades?(symbol: string, since?: number, limit?: number, params?: Record<string, unknown>): Promise<unknown[]>;
+};
+/** the client has the call, and the library says the exchange has it */
+const can = (x: BookClient, m: "fetchOrderBook" | "fetchTrades"): boolean => typeof x[m] === "function" && (x.has === undefined || Boolean(x.has[m]));
+/** the exchanges whose trade side is the TAKER's, by their own docs (see the top of this file): Coinbase's is not said */
+const TAKER_SIDE = new Set(["kraken", "okx", "binance", "bybit"]);
+/** the library's trades as the account's: a price and a size above nothing and a time, the side where `sided` */
+export function tradesOf(rows: unknown, sided: boolean, now: number): Array<PublicTrade & { i: number }> {
+  const out: Array<PublicTrade & { i: number }> = [];
+  list(rows).forEach((r, i) => {
+    const t = rec(r);
+    const price = pos(t.price);
+    const size = pos(t.amount);
+    const ms = pos(t.timestamp);
+    if (price === undefined || size === undefined || ms === undefined) return;
+    const side = sided && (t.side === "buy" || t.side === "sell") ? t.side : undefined;
+    out.push({ price, size, ...(side ? { side } : {}), at: stampOf(ms, now), i });
+  });
+  return out;
 }
 
 // ---- Kalshi ---------------------------------------------------------------------------------------------------
@@ -796,6 +994,8 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
   const name = "Kalshi";
   const clock = deps.clock ?? Date.now;
   const get = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock);
+  const bookGet = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, BOOK_MS);
+  const tapeGet = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, TRADES_MS);
   /** every series' open events with their markets, from the kept bodies: one small request a series, kept KEEP_MS. A series that refuses
    * is left out while the others answer; only when every one refuses is the refusal the answer */
   const load = async (): Promise<{ events: KalshiOpenEvent[]; refused?: Refusal | undefined }> => {
@@ -843,12 +1043,59 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
     name,
     reset: () => {
       get.clear();
+      bookGet.clear();
+      tapeGet.clear();
     },
     kind: "events",
     connectTo: "kalshi",
     connector: "live:kalshi",
     listings: (o) => read(o),
     events: (o) => read(o),
+    /** a leg's book, keyless (see the top of this file): Kalshi's book holds bids only — the YES bids and the NO bids — and a bid on one
+     * outcome is an offer of the other at 1 − its price. So a YES leg's bids are the YES bids and its asks the NO bids at 1 − their price;
+     * a NO leg's bids are the NO bids and its asks the YES bids so. The sizes are contracts */
+    async book(symbol, depth) {
+      const k = /^([A-Za-z0-9][A-Za-z0-9._-]{0,80}):(YES|NO)$/i.exec(symbol.trim());
+      if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Kalshi market here is <ticker>:YES or <ticker>:NO, not "${symbol.slice(0, 40)}"` });
+      const ticker = k[1]!.toUpperCase();
+      const yes = k[2]!.toUpperCase() === "YES";
+      const d = countOf(depth, BOOK_DEPTH_MAX, 20);
+      const body = await bookGet(`${KALSHI}/markets/${encodeURIComponent(ticker)}/orderbook?depth=${d}`);
+      if (isRefusal(body)) return body;
+      const ob = rec(body).orderbook_fp;
+      if (!isRec(ob)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} answered without a book for ${ticker}` });
+      const yesBids = list(ob.yes_dollars).map(pairOf);
+      const noBids = list(ob.no_dollars).map(pairOf);
+      const [own, other] = yes ? [yesBids, noBids] : [noBids, yesBids];
+      // `depth` levels a side were asked for: a side that came back that long may go on
+      return { bids: sideOf(own, "bids", d, px), asks: sideOf(other, "asks", d, otherSide), at: new Date(clock()).toISOString(), from: name, depth: "full", more: { bids: goesOn(own, d, px, d), asks: goesOn(other, d, otherSide, d) } };
+    },
+    /** a leg's latest trades, keyless: each trade is a YES and a NO at prices that make a dollar — the YES leg's at yes_price_dollars, the NO
+     * leg's at no_price_dollars — in contracts (count_fp); a buy of this leg when the taker bought this outcome (taker_outcome_side, which
+     * Kalshi names in place of taker_side) */
+    async trades(symbol, limit) {
+      const k = /^([A-Za-z0-9][A-Za-z0-9._-]{0,80}):(YES|NO)$/i.exec(symbol.trim());
+      if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Kalshi market here is <ticker>:YES or <ticker>:NO, not "${symbol.slice(0, 40)}"` });
+      const ticker = k[1]!.toUpperCase();
+      const yes = k[2]!.toUpperCase() === "YES";
+      const n = countOf(limit, TRADES_MAX, 30);
+      const body = await tapeGet(`${KALSHI}/markets/trades?ticker=${encodeURIComponent(ticker)}&limit=${n}`);
+      if (isRefusal(body)) return body;
+      const out: Array<PublicTrade & { i: number }> = [];
+      list(rec(body).trades).forEach((r, i) => {
+        const t = rec(r);
+        if (str(t.ticker) !== undefined && str(t.ticker)!.toUpperCase() !== ticker) return;
+        const price = yes ? px(t.yes_price_dollars) : (px(t.no_price_dollars) ?? otherSide(t.yes_price_dollars));
+        const size = pos(t.count_fp);
+        const when = Date.parse(str(t.created_time) ?? "");
+        if (price === undefined || size === undefined || !Number.isFinite(when)) return;
+        const took = (str(t.taker_outcome_side) ?? str(t.taker_side))?.toLowerCase();
+        const side = took === "yes" ? (yes ? "buy" : "sell") : took === "no" ? (yes ? "sell" : "buy") : undefined;
+        out.push({ price, size, ...(side ? { side } : {}), at: new Date(when).toISOString(), i: -i });
+      });
+      // Kalshi lists the newest first: among trades of one moment, its own order stands
+      return newestFirst(out, n);
+    },
     /** whether a market has settled, keyless (see the top of this file): GET /markets/{ticker} — a market with a result (yes | no) pays
      * $1 a contract to that side and nothing to the other, whatever its status word; one closed without a result is closed */
     async settlement(symbol) {
@@ -1003,6 +1250,26 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
   const clock = deps.clock ?? Date.now;
   const get = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock);
   const clob = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, HISTORY_MS);
+  const clobBook = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, BOOK_MS);
+  const tape = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, TRADES_MS);
+  /** an outcome's own token on the CLOB, the other outcome's (a market of two), and its market's condition id, from Gamma's market by slug
+   * (kept KEEP_MS): `<slug>:<outcome>` as the listing names it, or why not */
+  const tokenOf = async (symbol: string): Promise<{ token: string; other?: string | undefined; conditionId: string } | Refusal> => {
+    const i = symbol.indexOf(":");
+    const slug = i > 0 ? symbol.slice(0, i).trim() : "";
+    const outcome = i > 0 ? symbol.slice(i + 1).trim() : "";
+    if (!/^[a-z0-9][a-z0-9-]{0,200}$/.test(slug) || !outcome || outcome.length > 80) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Polymarket market here is <slug>:<outcome>, not "${symbol.slice(0, 40)}"` });
+    const m = await get(`${GAMMA}/markets/slug/${encodeURIComponent(slug)}`);
+    if (isRefusal(m)) return m;
+    const names = list(rec(m).outcomes).map((x) => String(x));
+    const tokens = list(rec(m).clobTokenIds).map((x) => String(x));
+    const at = names.findIndex((n) => n.toLowerCase() === outcome.toLowerCase());
+    const token = at >= 0 ? tokens[at] : undefined;
+    const conditionId = str(rec(m).conditionId) ?? "";
+    if (!token || !/^\d{1,90}$/.test(token)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no outcome "${outcome.slice(0, 40)}" in ${slug.slice(0, 60)}` });
+    const other = tokens.length === 2 && names.length === 2 ? tokens[1 - at] : undefined;
+    return { token, ...(other && /^\d{1,90}$/.test(other) ? { other } : {}), conditionId };
+  };
   /** the events of one Gamma answer that may be shown: not filed under an excluded word, not an hourly up-or-down, with an open market */
   const parse = (body: unknown): GammaEvent[] | Refusal => {
     if (isRefusal(body)) return body;
@@ -1073,10 +1340,59 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
     reset: () => {
       get.clear();
       clob.clear();
+      clobBook.clear();
+      tape.clear();
     },
     kind: "events",
     connectTo: "polymarket",
     connector: "live:polymarket-trade",
+    /** an outcome's own book on the CLOB, keyless (see the top of this file): its token's bids and asks, which the CLOB sends worst first,
+     * put best first; the sizes in shares */
+    async book(symbol, depth) {
+      const d = countOf(depth, BOOK_DEPTH_MAX, 20);
+      const t = await tokenOf(symbol);
+      if (isRefusal(t)) return t;
+      const body = await clobBook(`${CLOB}/book?token_id=${t.token}`);
+      if (isRefusal(body)) return body;
+      const b = rec(body);
+      const level = (l: unknown): Level => [rec(l).price, rec(l).size];
+      if (!Array.isArray(b.bids) && !Array.isArray(b.asks)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} answered without a book for ${symbol.slice(0, 60)}` });
+      const bids = list(b.bids).map(level);
+      const asks = list(b.asks).map(level);
+      // the CLOB sends the whole book: a side goes on only where it was cut to the depth here
+      return { bids: sideOf(bids, "bids", d, px), asks: sideOf(asks, "asks", d, px), at: stampOf(b.timestamp, clock()), from: name, depth: "full", more: { bids: goesOn(bids, d, px), asks: goesOn(asks, d, px) } };
+    },
+    /** an outcome's latest trades, keyless, from Polymarket's Data API (see the top of this file): its market's latest taker fills — price,
+     * size in shares, the taker's side, the time — and nothing of who made them. The CLOB's book is one book for both outcomes (live
+     * 2026-10-14: a NO token's /book is its YES token's, mirrored, level for level), so a fill on the other outcome's token is a trade on this
+     * one's too: at 1 − its price, the other side (a taker buying YES at 0.68 sells NO at 0.32), as a NO leg reads Kalshi's. Each taker's
+     * fill is listed once, under the token it named: none is counted twice */
+    async trades(symbol, limit) {
+      const n = countOf(limit, TRADES_MAX, 30);
+      const t = await tokenOf(symbol);
+      if (isRefusal(t)) return t;
+      if (!/^0x[0-9a-fA-F]{64}$/.test(t.conditionId)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} gave no market id for ${symbol.slice(0, 60)}` });
+      const body = await tape(`${DATA_API}/trades?market=${t.conditionId}&limit=${n}&takerOnly=true`);
+      if (isRefusal(body)) return body;
+      if (!Array.isArray(body)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} answered without its trades` });
+      const out: Array<PublicTrade & { i: number }> = [];
+      body.forEach((r, i) => {
+        const x = rec(r);
+        const asset = String(x.asset ?? "");
+        const mine = asset === t.token;
+        if (!mine && (t.other === undefined || asset !== t.other)) return;
+        const p = px(x.price);
+        const size = pos(x.size);
+        const at = pos(x.timestamp);
+        if (p === undefined || size === undefined || at === undefined) return;
+        // the other outcome's price to ten places: its fills' prices run to ten (0.3004458835), and none is rounded past what it says
+        const price = mine ? p : round(1 - p, 10);
+        const took = x.side === "BUY" ? "buy" : x.side === "SELL" ? "sell" : undefined;
+        const side = took && !mine ? (took === "buy" ? "sell" : "buy") : took;
+        out.push({ price, size, ...(side ? { side } : {}), at: new Date(at * 1000).toISOString(), i: -i });
+      });
+      return newestFirst(out, n);
+    },
     // the history is the CLOB's (clob.polymarket.com), the listings Gamma's: an edge refusing the one says nothing of the other
     historyApart: true,
     listings: (o) => read(o),
@@ -1144,6 +1460,7 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
   const clock = deps.clock ?? Date.now;
   const get = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock);
   const history = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, HISTORY_MS);
+  const books = getter(fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS), id, name, clock, BOOK_MS);
   const gw: PmusGet = (path) => get(`${PMUS_GATEWAY}${path}`);
   /** a market's two legs as a listing: the shared shape with no order types (nothing is ordered through a listing), its category word kept */
   const legs = (m: Rec): Listing[] => {
@@ -1174,12 +1491,31 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
     reset: () => {
       get.clear();
       history.clear();
+      books.clear();
     },
     kind: "events",
     connectTo: "polymarket-us",
     connector: "live:polymarket-us",
     listings: (o) => read(o),
     events: (o) => read(o),
+    /** a leg's book, keyless (see the top of this file): the gateway's book is the YES contract's, best first. Only YES trades there; NO is
+     * the other side of it, so a NO leg's bids are the YES offers at 1 − their price and its asks the YES bids so. The sizes are contracts */
+    async book(symbol, depth) {
+      const k = /^([a-z0-9][a-z0-9-]{0,200}):(YES|NO)$/i.exec(symbol.trim());
+      if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Polymarket US market here is <slug>:YES or <slug>:NO, not "${symbol.slice(0, 40)}"` });
+      const yes = k[2]!.toUpperCase() === "YES";
+      const d = countOf(depth, BOOK_DEPTH_MAX, 20);
+      const body = await books(`${PMUS_GATEWAY}/v1/markets/${encodeURIComponent(k[1]!)}/book`);
+      if (isRefusal(body)) return body;
+      const md = rec(body).marketData;
+      if (!isRec(md)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} answered without a book for ${k[1]!.slice(0, 60)}` });
+      const level = (l: unknown): Level => [rec(rec(l).px).value, rec(l).qty];
+      const bids = list(md.bids).map(level);
+      const offers = list(md.offers).map(level);
+      // the gateway sends the whole book (live 2026-10-14: 22 levels on a side, no cap at twenty): a side goes on only where cut here
+      const more = yes ? { bids: goesOn(bids, d, px), asks: goesOn(offers, d, px) } : { bids: goesOn(offers, d, otherSide), asks: goesOn(bids, d, otherSide) };
+      return { bids: yes ? sideOf(bids, "bids", d, px) : sideOf(offers, "bids", d, otherSide), asks: yes ? sideOf(offers, "asks", d, px) : sideOf(bids, "asks", d, otherSide), at: stampOf(md.transactTime, clock()), from: name, depth: "full", more };
+    },
     /** whether a market has settled, keyless (polymarket-us.ts: GET /v1/markets/{slug}/settlement answers 1 when YES won and 0 when NO did,
      * and HTTP 404 "Settlement not found" until the market settles) */
     async settlement(symbol) {
@@ -1201,7 +1537,8 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
 
 /** Hyperliquid's info endpoint takes a POST with a JSON `type` (hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint,
  * "No API key or authentication is required", read 2026-10-06; its perpetuals page read 2026-10-08; the account's own Hyperliquid connector
- * reads the same host). Five questions are asked here and nothing else: `metaAndAssetCtxs`, every perpetual of a dex with its day — of the
+ * reads the same host). Seven questions are asked here and nothing else — the five below, and one coin's book (`l2Book`) and last trades
+ * (`recentTrades`), live 2026-10-14 keyless: `metaAndAssetCtxs`, every perpetual of a dex with its day — of the
  * first dex when no `dex` is named, live 2026-10-06 234 of them in 72 KB, 400 ms: [{universe: [{name, szDecimals, maxLeverage,
  * isDelisted?}], collateralToken?}, [{markPx, midPx, prevDayPx, dayNtlVlm, funding, openInterest, impactPxs}]], the two lists in step;
  * `perpDexs`, the HIP-3 dexes ([null, {name, fullName, deployer, …}, …], the first dex as null); `perpCategories`, Hyperliquid's category
@@ -1212,7 +1549,11 @@ type HyperliquidAsk =
   | { type: "metaAndAssetCtxs"; dex?: string | undefined }
   | { type: "perpDexs" }
   | { type: "perpCategories" }
-  | { type: "candleSnapshot"; req: { coin: string; interval: CandleInterval; startTime: number; endTime: number } };
+  | { type: "candleSnapshot"; req: { coin: string; interval: CandleInterval; startTime: number; endTime: number } }
+  /** one coin's book, {coin, time, levels: [bids, asks]}, twenty a side of {px, sz, n}, best first; and its last trades, [{side, px, sz,
+   * time, …}] newest first (see the top of this file) */
+  | { type: "l2Book"; coin: string }
+  | { type: "recentTrades"; coin: string };
 
 /** a HIP-3 dex's name as Hyperliquid writes it (xyz, io, vntl, para, mkts): letters and digits */
 const HL_DEX = /^[A-Za-z][A-Za-z0-9]{0,15}$/;
@@ -1226,6 +1567,9 @@ export function hyperliquidInfo(http: Http, timeoutMs: number): (ask: Hyperliqui
     else if (ask.type === "metaAndAssetCtxs") {
       if (ask.dex !== undefined && !HL_DEX.test(ask.dex)) throw new Error(`the dex "${String(ask.dex).slice(0, 20)}" is not asked: a HIP-3 dex is named in letters and digits`);
       body = ask.dex === undefined ? { type: "metaAndAssetCtxs" } : { type: "metaAndAssetCtxs", dex: ask.dex };
+    } else if (ask.type === "l2Book" || ask.type === "recentTrades") {
+      if (!HL_COIN.test(ask.coin)) throw new Error(`the coin "${String(ask.coin).slice(0, 20)}" is not asked: a coin is named in letters, digits and a dex's prefix`);
+      body = { type: ask.type === "l2Book" ? "l2Book" : "recentTrades", coin: ask.coin };
     } else body = { type: ask.type === "perpDexs" ? "perpDexs" : "perpCategories" };
     return http(HL_INFO, { method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body), timeoutMs });
   };
@@ -1273,6 +1617,75 @@ function hyperliquidBars(info: ReturnType<typeof hyperliquidInfo>, id: string, n
       return [...bars.values()].sort((a, b) => a.t - b.t);
     });
   return Object.assign(ask, { clear: history.clear });
+}
+
+/** the most levels a side Hyperliquid's l2Book sends (live 2026-10-14: twenty, whatever depth is wanted) */
+const HL_BOOK_MOST = 20;
+/** one Hyperliquid perpetual's book and last trades, keyless (see the top of this file): its listing's `<COIN>-PERP` (a HIP-3 market's coin
+ * carries its dex), the book twenty levels a side at most and kept BOOK_MS, the trades its last ten kept TRADES_MS, the sizes in the coin. A
+ * trade's side is Hyperliquid's B (a buyer took an offer) or A (a seller took a bid). A coin Hyperliquid does not trade answers `null` —
+ * the book under HTTP 200, the trades under HTTP 500 — which is "no such perpetual", not Hyperliquid failing. `form`: the coins this
+ * source lists */
+function hyperliquidDepth(info: ReturnType<typeof hyperliquidInfo>, id: string, name: string, clock: () => number, form: { test: (coin: string) => boolean; example: string }): { book: NonNullable<PublicSource["book"]>; trades: NonNullable<PublicSource["trades"]>; clear(): void } {
+  const books = keeper<OrderBook>(clock, BOOK_MS);
+  const tape = keeper<PublicTrade[]>(clock, TRADES_MS);
+  const coinOf = (symbol: string): string | Refusal => {
+    const coin = /^(.+)-PERP$/i.exec(symbol.trim())?.[1];
+    return coin && HL_COIN.test(coin) && form.test(coin) ? coin : no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a ${name} perpetual here is ${form.example}, not "${symbol.slice(0, 40)}"` });
+  };
+  /** one POST's JSON answer; `null` (the coin is not traded there) as that, in words; anything else not a yes, Hyperliquid's refusal */
+  const askOf = async (q: Extract<HyperliquidAsk, { coin: string }>): Promise<unknown> => {
+    let r: HttpReply;
+    try {
+      r = await info(q);
+    } catch (err) {
+      return unreachable(id, name, err);
+    }
+    if ((r.status === 200 || r.status === 500) && r.text.trim() === "null") return no("E_VENUE_REJECTED", { venue: id, message: `${name} trades no perpetual ${q.coin}` });
+    return r.status === 200 && r.body !== undefined && r.body !== null ? r.body : publicNo(id, name, r);
+  };
+  return {
+    book: (symbol, depth) => {
+      const coin = coinOf(symbol);
+      if (isRefusal(coin)) return Promise.resolve(coin);
+      const d = countOf(depth, BOOK_DEPTH_MAX, 20);
+      return books(`${coin}|${d}`, async () => {
+        const body = await askOf({ type: "l2Book", coin });
+        if (isRefusal(body)) return body;
+        const levels = list(rec(body).levels);
+        if (levels.length !== 2) return no("E_VENUE_REJECTED", { venue: id, message: `${name} answered without a book for ${coin}` });
+        const side = (l: unknown): Level[] => list(l).map((x) => [rec(x).px, rec(x).sz]);
+        const bids = side(levels[0]);
+        const asks = side(levels[1]);
+        // l2Book sends twenty levels a side at most, whatever is asked: a side of twenty may go on
+        return { bids: sideOf(bids, "bids", d), asks: sideOf(asks, "asks", d), at: stampOf(rec(body).time, clock()), from: name, depth: "full", more: { bids: goesOn(bids, d, pos, HL_BOOK_MOST), asks: goesOn(asks, d, pos, HL_BOOK_MOST) } };
+      });
+    },
+    trades: (symbol, limit) => {
+      const coin = coinOf(symbol);
+      if (isRefusal(coin)) return Promise.resolve(coin);
+      const n = countOf(limit, TRADES_MAX, 30);
+      return tape(`${coin}|${n}`, async () => {
+        const body = await askOf({ type: "recentTrades", coin });
+        if (isRefusal(body)) return body;
+        const out: Array<PublicTrade & { i: number }> = [];
+        list(body).forEach((r, i) => {
+          const t = rec(r);
+          const price = pos(t.px);
+          const size = pos(t.sz);
+          const at = pos(t.time);
+          if (price === undefined || size === undefined || at === undefined) return;
+          const side = t.side === "B" ? "buy" : t.side === "A" ? "sell" : undefined;
+          out.push({ price, size, ...(side ? { side } : {}), at: new Date(at).toISOString(), i: -i });
+        });
+        return newestFirst(out, n);
+      });
+    },
+    clear: () => {
+      books.clear();
+      tape.clear();
+    },
+  };
 }
 
 /** Hyperliquid's perpetuals (its first dex), keyless, busiest first: each `<COIN>-PERP`, placed through Hyperliquid's connection to trade
@@ -1326,13 +1739,17 @@ export function hyperliquidPublic(deps: PublicDeps = {}): PublicSource {
       return out.sort((a, b) => (b.volumeUsd24h ?? -1) - (a.volumeUsd24h ?? -1));
     });
   const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" });
+  const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" });
   return {
     id,
     name,
     reset: () => {
       keep.clear();
       bars.clear();
+      depth.clear();
     },
+    book: depth.book,
+    trades: depth.trades,
     kind: "exchange",
     ...HL_TRADE,
     async listings(o) {
@@ -1958,6 +2375,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
   // the dexes the last listing with nothing searched for showed, for the sentence under it
   let shown: string[] | undefined;
   const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" });
+  const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" });
   return {
     id,
     name,
@@ -1965,7 +2383,10 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
       dexAnswers.clear();
       finds.clear();
       bars.clear();
+      depth.clear();
     },
+    book: depth.book,
+    trades: depth.trades,
     kind: "exchange",
     ...HL_TRADE,
     async listings(o) {
@@ -2009,7 +2430,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
 }
 
 /** every public source, in the order the Markets screen asks them: the exchanges (PUBLIC_EXCHANGES unless others are named), Kalshi,
- * Polymarket, Polymarket US, Hyperliquid's perpetuals, US stocks at Cboe's delayed quotes, Robinhood's Stock Tokens, xStocks at Gate, Ondo
+ * Polymarket, Polymarket US, Hyperliquid's perpetuals, US stocks (real-time public quotes, Cboe's delayed ones behind them), Robinhood's Stock Tokens, xStocks at Gate, Ondo
  * Stocks as LI.FI prices them, the eight exchanges' pre-IPO perpetuals and Hyperliquid's HIP-3 ones. The stocks come before the Stock
  * Tokens: a paper account lists a symbol by the first source that names it (paper.ts), and "NVDA" there is the share, not Robinhood's
  * token of it. Made once and kept: what each keeps lives in it */

@@ -603,6 +603,60 @@ describe("the Portfolio pane", () => {
     expect(one).toContain('data-pf-act="all"');
   });
 
+  it("keeps paper money in a book of its own on the Net worth card: the paper accounts' figure, change and curve when no real account holds anything, a switch when both are connected, never added to the net worth", () => {
+    const paper = venue("paper-1", "Paper account", { usd: 9988.17, paper: true, paperStartUsd: 10000, trade: { can: true, what: "paper trading" } });
+    const coinbase = venue("coinbase", "Coinbase Advanced", { usd: 0, trade: { can: true, what: "spot" } });
+    const HOLD_REAL0 = { ok: true, totalUsd: 0, rows: [], money: { readyUsd: 0, venues: [] }, change24h: { usd: 0, coveredUsd: 0, ofUsd: 0, missing: [] }, missing: [] };
+    const HOLD_PAPER = { ok: true, paper: true, totalUsd: 9988.17, rows: [{ key: "cash:USD", asset: "USD", class: "cash", amount: 7281.7, usd: 7281.7, price: 1, venues: [{ venue: "paper-1", venueName: "Paper account", amount: 7281.7, usd: 7281.7 }] }], money: { readyUsd: 7281.7, venues: [{ venue: "paper-1", venueName: "Paper account", usd: 7281.7, lines: [], tradesHere: true, movesOut: false }] }, change24h: { usd: -54.97, pct: -0.55, coveredUsd: 9988.17, ofUsd: 9988.17, missing: [] }, missing: [] };
+    const HIST_ZERO = { range: "1w", from: "2026-09-29T12:00:00Z", first: "2026-09-20T00:00:00Z", points: [{ at: "2026-09-29T12:00:00Z", usd: 0 }, { at: "2026-10-06T12:00:00Z", usd: 0 }], events: [], changeUsd: 0 };
+    const HIST_PAPER = { range: "1w", from: "2026-09-29T12:00:00Z", first: "2026-10-05T15:58:58Z", bucket: "1h", paper: true, rebuilt: true, startUsd: 10000, sinceStartUsd: -11.83, points: [{ at: "2026-10-05T15:58:58Z", usd: 10000 }, { at: "2026-10-06T00:00:00Z", usd: 10002.09 }, { at: "2026-10-06T12:00:00Z", usd: 9988.17 }], events: [{ at: "2026-10-05T15:58:58Z", kind: "connect", venue: "paper-1", name: "Paper account", usd: 10000 }, { at: "2026-10-05T16:00:00Z", kind: "connect", venue: "paper-2", name: "Paper two", usd: 5000 }], changeUsd: -11.83, changePct: -0.12 };
+    const p = account({ venues: [coinbase, paper], liveUsd: 0, cards: [], asks: [], keys: [], spend: [], subAccounts: [], intents: [] });
+    p.set("PF.holdReal", HOLD_REAL0);
+    p.set("PF.holdPaper", HOLD_PAPER);
+    p.run(`PF.hist = new Map([["1w", ${JSON.stringify(HIST_ZERO)}]]); PF.histPaper = new Map([["1w|", ${JSON.stringify(HIST_PAPER)}]]); PF.book = ""; PF.range = "1w"`);
+    // no real account holds anything: the card shows the paper book — its own figure, change and curve, said as paper
+    expect(p.run(`pfBook(${ALL})`)).toBe("paper");
+    const html = String(p.run(`pfWorthHtml(${ALL}, pfScopeIn(${ALL}), [])`));
+    expect(html).toContain("Paper · 1 account");
+    expect(html).toContain('<span class="tag paper">Paper</span>');
+    expect(html).toContain("$9,988.17");
+    expect(html).toContain("$11.83");
+    expect(html).toContain("since they started with $10,000.00".replace("they", "it"));
+    expect(html).toContain("data-pf-curve");
+    expect(html).toContain("Paper money, not counted in your net worth (real money: $0.00).");
+    expect(html).not.toContain("Nothing priced here yet");
+    // both kinds connected: the switch is on the card; the paper connections a few pixels apart are one mark that names both
+    expect(html).toContain('data-pf-act="book" data-book="real"');
+    expect(html.match(/class="pf-ev"/g)).toHaveLength(1);
+    expect(html).toContain("Connected Paper account");
+    expect(html).toContain("Connected Paper two");
+    // the owner picks real money: $0.00 over a curve that never left zero is said as such, with the way back to the paper accounts
+    p.set("PF.book", "real");
+    expect(p.run(`pfBook(${ALL})`)).toBe("real");
+    const real = String(p.run(`pfWorthHtml(${ALL}, pfScopeIn(${ALL}), [])`));
+    expect(real).toContain("Net worth");
+    expect(real).toContain("$0.00");
+    expect(real).toContain("No real money on the account yet");
+    expect(real).not.toContain("data-pf-curve");
+    expect(real).toContain("<span class=\"tag paper\">Paper</span> $9,988.17");
+    expect(real).toContain("not counted");
+    // the pane's parts follow the book: the paper book's cash is the paper account's, said as paper
+    p.set("PF.book", "paper");
+    p.set("PF.hold", HOLD_PAPER);
+    expect(String(p.run(`pfCashHtml(${ALL}, pfScopeIn(${ALL}), true)`))).toContain("$7,281.70");
+    // a paper account's own lens: its own curve (asked for by venue), never called net worth
+    expect(p.run('pfPaperKey({ kind: "venue", id: "paper-1", name: "Paper account" }, "1w")')).toBe("1w|paper-1");
+    p.run(`PF.histPaper.set("1w|paper-1", ${JSON.stringify(HIST_PAPER)})`);
+    const one = String(p.run('pfWorthHtml({ kind: "venue", id: "paper-1", name: "Paper account" }, pfScopeIn({ kind: "venue", id: "paper-1" }), [])'));
+    expect(one).toContain("Paper · Paper account");
+    expect(one).not.toContain("Net worth ·");
+    expect(one).toContain("data-pf-curve");
+    // a real account that holds something: real money first, the paper aside, the switch
+    p.set("PF.book", "");
+    p.set("PF.holdReal", { ...HOLD_REAL0, totalUsd: 500, rows: [{ key: "stable:USDC", asset: "USDC", class: "stable", amount: 500, usd: 500, price: 1, venues: [{ venue: "coinbase", venueName: "Coinbase", amount: 500, usd: 500 }] }] });
+    expect(p.run(`pfBook(${ALL})`)).toBe("real");
+  });
+
   it("brings a card named by the route into view and rings it for a moment; an unknown id does nothing", () => {
     const p = account();
     p.run('var SCROLLED = []; var CLASSES = []; var NODE = { scrollIntoView: (o) => SCROLLED.push(o), classList: { add: (c) => CLASSES.push("+" + c), remove: (c) => CLASSES.push("-" + c) } }; var EL = { querySelector: (s) => (s === \'[data-pf-card="card-0001"]\' ? NODE : null) }');

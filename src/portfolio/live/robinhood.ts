@@ -27,7 +27,7 @@ import { regularSession } from "../account/calendar.ts";
 import { no } from "../refuse.ts";
 import { CHAIN_BY_ID, type ChainName, type ChainReader, type TokenRef } from "./chain.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
-import { badOrder, ceilTo, floorTo, inDollars, onStep, ORDER_TYPES, pick as pickMarkets, plain, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { badOrder, ceilTo, floorTo, inDollars, onStep, pick as pickMarkets, plain, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { asRefusal, isStable, networkNo, notTheApi, notTheApiWords, num, redact, REGION, transportCode, unreachable, venueSaidNo, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 
 // ---- Robinhood Crypto ----------------------------------------------------------------------
@@ -110,6 +110,8 @@ const SELL_ONLY = /^sell_?only$/;
  * when none is given, and "'ioc' is NEVER supported for crypto orders" (place_crypto_order, as its tools/list gives it). The account's gtc is
  * Robinhood's gtc and its day is gfd; a week or a month has no name in the account, and there is no immediate-or-cancel or fill-or-kill. */
 const CRYPTO_TIFS: TimeInForce[] = ["gtc", "day"];
+/** the order types Robinhood takes (a trailing stop is not one of them here) */
+const RH_TYPES: readonly string[] = ["market", "limit", "stop", "stop_limit"];
 
 /** the account's name for a pair is Robinhood's own, `BTC-USD`; `btc/usd` and `BTC` are read as it */
 function pairSymbol(s: string): string {
@@ -343,7 +345,7 @@ export async function robinhoodCryptoSource(req: { venue: string; label: string;
       if (!PAIR.test(sym)) return badOrder(req.venue, name, `"${o.symbol}" is not a crypto pair: Robinhood names them like BTC-USD`);
       if (!inDollars(sym.split("-")[1]!)) return unpriced(sym);
       // what a Robinhood crypto order cannot carry is said before Robinhood is asked anything
-      if (!ORDER_TYPES.includes(o.type)) return badOrder(req.venue, name, `Robinhood takes market, limit, stop and stop-limit crypto orders, not ${String(o.type)} orders`);
+      if (!RH_TYPES.includes(o.type)) return badOrder(req.venue, name, `Robinhood takes market, limit, stop and stop-limit crypto orders, not ${String(o.type)} orders`);
       if (o.postOnly || o.reduceOnly) return badOrder(req.venue, name, "Robinhood's crypto orders have no post-only or reduce-only flag");
       const stopped = o.type === "stop" || o.type === "stop_limit";
       if (o.tif !== undefined && !CRYPTO_TIFS.includes(o.tif)) return badOrder(req.venue, name, `Robinhood's crypto orders are good till canceled or good for the day, never ${o.tif}`);
@@ -1012,7 +1014,7 @@ export async function robinhoodStocksSource(req: { venue: string; label: string;
     if (!TICKER.test(sym)) return badOrder(req.venue, name, `"${o.symbol}" is not a stock symbol`);
     // what place_equity_order cannot carry is said before Robinhood is asked: its types are market, limit, stop_market and stop_limit, its
     // time_in_force gfd or gtc (a market order gfd only, as Robinhood's "Order types" says), and it has no post-only or reduce-only flag
-    if (!ORDER_TYPES.includes(o.type)) return badOrder(req.venue, name, `Robinhood takes market, limit, stop and stop-limit orders, not ${String(o.type)} orders`);
+    if (!RH_TYPES.includes(o.type)) return badOrder(req.venue, name, `Robinhood takes market, limit, stop and stop-limit orders, not ${String(o.type)} orders`);
     if (o.postOnly || o.reduceOnly) return badOrder(req.venue, name, "Robinhood's stock orders have no post-only or reduce-only flag");
     if (o.tif !== undefined && o.tif !== "gtc" && o.tif !== "day") return badOrder(req.venue, name, `Robinhood's stock orders are good for the day or good till canceled, never ${o.tif}`);
     if (o.type === "market" && o.tif === "gtc") return badOrder(req.venue, name, "a market order at Robinhood is good for the day only");

@@ -28,11 +28,12 @@ import { no } from "../refuse.ts";
 import { isStable, type MarginMode } from "./types.ts";
 
 export type Side = "buy" | "sell";
-/** market · limit · stop (a market order once the price reaches `stopPrice`) · stop_limit (a limit order at `limitPrice` once it does) */
-export type OrderType = "market" | "limit" | "stop" | "stop_limit";
+/** market · limit · stop (a market order once the price reaches `stopPrice`) · stop_limit (a limit order at `limitPrice` once it does) ·
+ * trailing_stop (a stop that follows the price: `trailPercent` or `trailPrice` behind the best price since it was placed) */
+export type OrderType = "market" | "limit" | "stop" | "stop_limit" | "trailing_stop";
 /** how long an order stays: until canceled · what fills at once, the rest canceled · all at once or nothing · until the session's end */
 export type TimeInForce = "gtc" | "ioc" | "fok" | "day";
-export const ORDER_TYPES: readonly OrderType[] = ["market", "limit", "stop", "stop_limit"];
+export const ORDER_TYPES: readonly OrderType[] = ["market", "limit", "stop", "stop_limit", "trailing_stop"];
 export const TIFS: readonly TimeInForce[] = ["gtc", "ioc", "fok", "day"];
 export type MarketKind = "spot" | "perp" | "future" | "stock" | "crypto" | "event" | "token";
 
@@ -42,6 +43,9 @@ export interface Market {
   symbol: string;
   /** a perpetual's margin modes the venue lets be set from here (none listed: the venue sets none per market, so the page offers none) */
   marginModes?: MarginMode[] | undefined;
+  /** an entry order may carry its exits here (a BRACKET: `takeProfit` and `stopLoss`, either or both, placed by the venue once the entry
+   * fills, one canceling the other) */
+  brackets?: boolean | undefined;
   /** where the 24-hour figures came from when they are not the venue's own documented reading (an exchange library's unified ticker) */
   statsFrom?: string | undefined;
   /** in words */
@@ -118,6 +122,14 @@ export interface Market {
    * one dollar of price stands for, `unit` that rule in words, and `usd` the valuation the price implies now (price × perPoint), where a
    * price is known (a listing's always; a trader's start-from list carries none until the market is read) */
   implied?: { perPoint: number; unit: string; usd?: number | undefined } | undefined;
+  // ---- where a stock's price is from, and how old it is ----
+  /** the price's own time, ISO 8601 — the last trade or the quote it is, as its source stamps it — where the source stamps one: a paper
+   * account fills a stock only at a quote stamped inside a session it trades in (paper.ts) */
+  quoteAt?: string | undefined;
+  /** how far behind the market the source's price is, in ms (Cboe's delayed file: 15 minutes; 0: real time), where the source says */
+  delayMs?: number | undefined;
+  /** which source the price came from, in words ("Nasdaq · real time"), where a line reads more than one */
+  quoteFrom?: string | undefined;
 }
 
 /** a venue's trading session (Market.session): in session now, and when it next opens and next closes, ISO 8601 — each where the venue or
@@ -139,6 +151,19 @@ export interface MarketSession {
   extendedHours?: boolean | undefined;
 }
 
+/** A stock market's clock, as a public source knows it from its calendar (account/calendar.ts): which phase an instant is in — so a
+ * quote's own time can be judged, not only now — and when a DAY order placed at an instant ends */
+export interface SessionClock {
+  /** "New York" */
+  city: string;
+  zone: string;
+  /** the phase at `ms` */
+  phaseAt(ms: number): SessionPhase;
+  /** the end of the trading day a DAY order placed at `ms` is for — that day's close while it is open or before it, the next market day's
+   * after it — or, `extended`, the end of that day's last extended session */
+  dayEndAt(ms: number, extended: boolean): number;
+}
+
 /** a market's last 24 hours, as the venue reports it */
 export interface MarketStats {
   price?: number | undefined;
@@ -149,6 +174,44 @@ export interface MarketStats {
   low24h?: number | undefined;
   /** where these figures came from when not the venue's own documented reading (see Market.statsFrom) */
   statsFrom?: string | undefined;
+}
+
+/** ONE MARKET'S ORDER BOOK, as its source gives it: the price levels people are bidding and offering at, each with the size resting there.
+ * Prices in the market's quote (an event contract's in dollars per contract: 0.62 = 62¢), sizes in the units an order is sized in there —
+ * coins, shares, contracts (a contract market's contracts, `contractSize` each) — best first: the highest bid first, the lowest ask first.
+ * Every level is the source's own; none is made up, filled in or spread out. `depth` says how much of the book the source gives:
+ *   full   its own levels, as many as were asked (up to fifty a side) and it holds
+ *   top    only its best bid and its best ask — the source publishes no depth (a US stock's public quote) — and a size only where it gives
+ *          one (null where it does not) */
+export interface OrderBook {
+  bids: Array<[price: number, size: number | null]>;
+  asks: Array<[price: number, size: number | null]>;
+  /** when the source stamped the book (ISO 8601), else when it was read */
+  at: string;
+  /** whose book it is, in words: the venue's name, or the source a stock's quote came from ("Nasdaq · real time") */
+  from: string;
+  depth: "full" | "top";
+  /** a "full" book's sides that may go on past their last level: the source sent as many levels as it was asked for, or as many as it ever
+   * sends (Hyperliquid twenty), or more than the depth asked and the rest were cut off here. A side marked false came back shorter than all
+   * that — the source sent every level it holds. Grouped prices at the far end of a side that may go on hold only the levels that were read
+   * of that range (the page says so of that row). Absent: not known, and taken as may go on */
+  more?: { bids: boolean; asks: boolean } | undefined;
+  /** why a "top" book is only the best bid and ask: `none` — its source publishes no depth at all (a US stock's public quote) — or `unread`
+   * — the source has a book the account does not read (an exchange's pre-IPO contract, xStocks at Gate, a venue connected whose trader
+   * reads no book). Absent: taken as `unread` */
+  topOnly?: "none" | "unread" | undefined;
+  /** a "top" book whose quote carries no time of its own and came from a list kept a while (a public listing: ninety seconds): how old the
+   * quote may be at most, in ms — `at` is then when it was read here, not when it was quoted */
+  upToMs?: number | undefined;
+}
+
+/** One trade that happened in a market, as its source publishes it: the price, the size (in the units of its book), the side of the order
+ * that took it — `buy` when a buyer took an offer, `sell` when a seller took a bid — only where the source says which side took, and when */
+export interface PublicTrade {
+  price: number;
+  size: number;
+  side?: Side | undefined;
+  at: string;
 }
 
 export type CandleInterval = "5m" | "1h" | "1d";
@@ -182,6 +245,14 @@ export interface OrderRequest {
   /** a limit order for the extended session that is on (pre-market, after-hours, overnight): only where the market's session says
    * `extendedHours`, and only a limit order (Alpaca takes nothing else there) */
   extendedHours?: boolean | undefined;
+  /** a TRAILING STOP: how far behind the best price since it was placed its stop follows — in percent, or in the market's quote (one of the
+   * two) */
+  trailPercent?: number | undefined;
+  trailPrice?: number | undefined;
+  /** a BRACKET's exits, where the market says `brackets`: once this order fills, a limit order the other way at `takeProfit` and a stop the
+   * other way at `stopLoss` (either or both), the one that fills canceling the other */
+  takeProfit?: number | undefined;
+  stopLoss?: number | undefined;
 }
 
 /** an open order changed in place: what changes, as the venue would take it (the rest stays) */
@@ -207,6 +278,8 @@ export interface Position {
   leverage?: number | undefined;
   marginMode?: "cross" | "isolated" | undefined;
   liquidationPrice?: number | undefined;
+  /** what was paid for it in dollars, fees in it, where the venue keeps that (a paper account's book) */
+  costUsd?: number | undefined;
   native: unknown;
 }
 
@@ -269,6 +342,14 @@ export interface LiveTrader {
   events?(o: { category?: string | undefined; closingWithinMs?: number | undefined; limit: number }): Promise<Market[] | Refusal>;
   /** price history since `sinceMs`, oldest first */
   candles?(symbol: string, interval: CandleInterval, sinceMs: number): Promise<Candle[] | Refusal>;
+  /** whose prices a market's history and book are, where that is not the venue's own: a paper account's market's public source ("Kraken",
+   * "US stocks"); absent, the venue's own */
+  pricesFrom?(symbol: string): Promise<string | undefined>;
+  /** the market's order book, `depth` levels a side at most (1 to 50), best first; a venue that publishes none has no `book` (a paper
+   * account's answers from its market's public source, and says so where that source has none) */
+  book?(symbol: string, depth: number): Promise<OrderBook | Refusal>;
+  /** the market's latest trades, newest first, `limit` at most (1 to 100) */
+  trades?(symbol: string, limit: number): Promise<PublicTrade[] | Refusal>;
 }
 
 // ---- sizes and prices ------------------------------------------------------------------------------

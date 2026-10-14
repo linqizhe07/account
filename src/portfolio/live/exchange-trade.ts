@@ -50,14 +50,16 @@
  *     never for its whole list;
  *   · a perpetual's funding rate and when it is next paid (fetchFundingRate; Bybit's ticker carries it already), at OKX, Binance and Bybit;
  *     a dated future's expiry as when it stops trading;
- *   · price history (fetchOHLCV), at most 300 bars of 5 minutes, an hour or a day.
+ *   · price history (fetchOHLCV), at most 300 bars of 5 minutes, an hour or a day;
+ *   · the order book (fetchOrderBook), best first, fifty levels a side at most, and the latest trades (fetchTrades), newest first, a trade's
+ *     side only where the exchange's docs say it is the taker's.
  */
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import type { KeyFile } from "./credentials.ts";
 import { exchangeSaidNo, isBinance, isBybit, isOkx, thrownHttp, type ExchangeClient } from "./exchange.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, preIpoOf } from "./preipo.ts";
-import { badOrder, ceilTo, floorTo, inDollars, notionalOf, onStep, pick, plain, CANDLE_INTERVALS, DONE, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type TimeInForce } from "./trade.ts";
+import { badOrder, ceilTo, floorTo, inDollars, notionalOf, onStep, pick, plain, CANDLE_INTERVALS, DONE, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderBook, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type PublicTrade, type TimeInForce } from "./trade.ts";
 import { num, redact, transportCode, type LiveProbe, type MarginMode, type MarketExtras } from "./types.ts";
 
 type Dict = Record<string, unknown>;
@@ -75,6 +77,10 @@ interface Library extends ExchangeClient {
   setMarginMode?(marginMode: string, symbol?: string, params?: Dict): Promise<unknown>;
   /** OKX: POST /api/v5/trade/amend-algos */
   privatePostTradeAmendAlgos?(request: Dict): Promise<unknown>;
+  /** the market's book, {bids, asks: [[price, amount, …]], timestamp}, best first, and its latest trades, [{timestamp, price, amount, side}],
+   * oldest first — public reads, through the same client */
+  fetchOrderBook?(symbol: string, limit?: number, params?: Dict): Promise<unknown>;
+  fetchTrades?(symbol: string, since?: number, limit?: number, params?: Dict): Promise<unknown[]>;
 }
 
 /** the exchanges whose stops, flags, order changes, positions and leverage the trader has checked (see the head of this file) */
@@ -116,7 +122,7 @@ const TICK_SIZE = 4;
 const LIST_MS = 5 * 60_000;
 const WELL_KNOWN = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LINK", "AVAX", "LTC"];
 const QUOTES = ["USDT", "USDC", "USD"];
-const WORDS: Record<OrderType, string> = { market: "market", limit: "limit", stop: "stop", stop_limit: "stop-limit" };
+const WORDS: Record<OrderType, string> = { market: "market", limit: "limit", stop: "stop", stop_limit: "stop-limit", trailing_stop: "trailing-stop" };
 /** the most markets one stats call reads: Binance's futures are read one ticker at a time (GET /fapi/v1/ticker/24hr?symbol=, weight 1), so
  * forty of them never weigh more than its whole list does (40) */
 const STATS_MAX = 40;
@@ -127,6 +133,9 @@ const LIBRARY_KIND: Record<Kind, string> = { spot: "spot", perp: "swap", future:
 /** the most bars one history reads, in one request: OKX's candles and Coinbase's take at most 300 a call */
 const BARS = 300;
 const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
+/** the most levels a side of a book is read to, and the most trades one read gives (the page's order book and its trades) */
+const BOOK_DEPTH = 50;
+const TRADES_MAX = 100;
 
 const obj = (v: unknown): Dict => (v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Dict) : {});
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : typeof v === "number" ? String(v) : undefined);
@@ -1227,6 +1236,65 @@ export function exchangeTrader(client: ExchangeClient, venue: string, name: stri
     return [...bars.values()].sort((a, b) => a.t - b.t);
   };
 
+  /** the library has the call here, and says the exchange has it */
+  const reads = (m: "fetchOrderBook" | "fetchTrades"): boolean => typeof lib[m] === "function" && (client.has === undefined || Boolean(client.has[m]));
+  /** The market's order book (fetchOrderBook), from the trader's own client: the levels the exchange sent, best first, at most `depth` a side
+   * (1 to 50). At the exchanges whose depths the trader knows — OKX, Binance, Bybit, Coinbase, Kraken and KuCoin each take 20 and 100, and
+   * Binance no 50, KuCoin nothing else — 20 or 100 are asked and cut to the depth; elsewhere the exchange's own default is asked and cut. The
+   * sizes are in the units an order is sized in there: the coin, or a contract market's contracts */
+  const book = async (symbol: string, depth: number): Promise<OrderBook | Refusal> => {
+    const d = Number.isFinite(depth) && depth >= 1 ? Math.min(BOOK_DEPTH, Math.floor(depth)) : 20;
+    const f = await find(symbol, true);
+    if (isRefusal(f)) return f;
+    const asked = dayFam !== undefined ? (d <= 20 ? 20 : 100) : undefined;
+    let raw: Dict;
+    try {
+      raw = obj(await lib.fetchOrderBook!(f.m.symbol, asked));
+    } catch (err) {
+      return fail(err);
+    }
+    const levels = (rows: unknown): Array<[number, number]> =>
+      (Array.isArray(rows) ? rows : [])
+        .map((r): [number | undefined, number | undefined] => (Array.isArray(r) ? [pos(r[0]), pos(r[1])] : [undefined, undefined]))
+        .filter((x): x is [number, number] => x[0] !== undefined && x[1] !== undefined);
+    const side = (rows: unknown, best: "high" | "low"): Array<[number, number]> => levels(rows).sort((a, b) => (best === "high" ? b[0] - a[0] : a[0] - b[0])).slice(0, d);
+    // a side may go on past its last level where more came than the depth (cut off here) or as many rows as were asked; where the exchange's
+    // own default count was asked, how many that is is not known here, and that is left unsaid (OrderBook.more absent: taken as may go on)
+    const goesOn = (rows: unknown): boolean => levels(rows).length > d || (Array.isArray(rows) && asked !== undefined && rows.length >= asked);
+    return { bids: side(raw.bids, "high"), asks: side(raw.asks, "low"), at: isoAt(raw.timestamp) ?? new Date(now()).toISOString(), from: name, depth: "full", ...(asked !== undefined ? { more: { bids: goesOn(raw.bids), asks: goesOn(raw.asks) } } : {}) };
+  };
+  /** The market's latest trades (fetchTrades), newest first, at most `limit` (1 to 100), in the same units as its book. A trade's side is
+   * said only at the exchanges whose docs say it is the taker's: OKX ("Trade side of taker"), Binance (isBuyerMaker, which the library turns
+   * into the taker's side), Bybit ("Side of taker") and Kraken; Coinbase's docs do not say whose side theirs is, and an exchange the trader
+   * has not read is not trusted to say */
+  const trades = async (symbol: string, limit: number): Promise<PublicTrade[] | Refusal> => {
+    const n = Number.isFinite(limit) && limit >= 1 ? Math.min(TRADES_MAX, Math.floor(limit)) : 30;
+    const f = await find(symbol, true);
+    if (isRefusal(f)) return f;
+    let rows: unknown[];
+    try {
+      // Bybit gives a spot market's trades sixty at a time at most
+      rows = await lib.fetchTrades!(f.m.symbol, undefined, fam === "bybit" && f.kind === "spot" ? Math.min(n, 60) : n);
+    } catch (err) {
+      return fail(err);
+    }
+    const sided = fam === "okx" || fam === "binance" || fam === "bybit" || fam === "kraken";
+    const out: Array<PublicTrade & { i: number }> = [];
+    (Array.isArray(rows) ? rows : []).forEach((r, i) => {
+      const t = obj(r);
+      const price = pos(t.price);
+      const size = pos(t.amount);
+      const at = isoAt(t.timestamp);
+      if (price === undefined || size === undefined || at === undefined) return;
+      const side = sided && (t.side === "buy" || t.side === "sell") ? t.side : undefined;
+      out.push({ price, size, ...(side ? { side } : {}), at, i });
+    });
+    return out
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.i - a.i)
+      .slice(0, n)
+      .map(({ i: _i, ...t }) => t);
+  };
+
   const trader: LiveTrader = {
     can: (() => {
       const kinds = [allowed("spot"), ...(contractsHere ? [allowed("perp")] : [])];
@@ -1420,6 +1488,9 @@ export function exchangeTrader(client: ExchangeClient, venue: string, name: stri
   // reading the market: many tickers where the library reads them (one at a time where it reads only one), price history where it has it
   if (able("fetchTickers") || typeof client.fetchTicker === "function") trader.stats = stats;
   if (able("fetchOHLCV")) trader.candles = candles;
+  // its book and its latest trades, where the library reads them here
+  if (reads("fetchOrderBook")) trader.book = book;
+  if (reads("fetchTrades")) trader.trades = trades;
   earnHooks.set(trader, { client, venue, name, key, can: [...probe.can] });
   return trader;
 }

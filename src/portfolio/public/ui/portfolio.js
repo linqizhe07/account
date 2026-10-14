@@ -11,7 +11,7 @@
 
 /* what the pane keeps between draws: the segment and the curve's range, the last answer of each read, what the curve last drew, the key
    of the intents last mounted under Agents at work, and the card a "Review" elsewhere asked to be shown */
-const PF = { tab: "assets", range: "1w", hold: null, holdErr: "", hist: new Map(), pos: null, agents: null, earn: null, curve: null, intentsKey: "", hiWant: "", soon: false, hover: null };
+const PF = { tab: "assets", range: "1w", hold: null, holdErr: "", hist: new Map(), histPaper: new Map(), book: "", pos: null, agents: null, earn: null, curve: null, intentsKey: "", hiWant: "", soon: false, hover: null };
 const PF_RANGES = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["all", "All"]];
 const PF_TABS = [["assets", "Assets"], ["positions", "Positions"]];
 const PF_RANGE_WORDS = { "1d": "past day", "1w": "past week", "1m": "past month", all: "since the start" };
@@ -41,6 +41,30 @@ function pfVenueIn(l = lensNow()) {
   const mine = new Set((A.subAccounts || []).filter((s) => String(s.agent).toLowerCase() === l.id.toLowerCase()).map((s) => pfWalletVenue(s.name)));
   return (id) => mine.has(id);
 }
+/* WHICH BOOK the pane shows: real money or paper money, never the two added up. The Paper lens and a paper account's own lens are paper;
+   the Real money lens, an agent's wallets and a real venue's lens are real. Under All accounts it is the owner's pick on the Net worth card
+   (Real money | Paper, offered when both kinds are connected) — and, until they pick, paper when no real account holds anything and a paper
+   account is open (a $0.00 net worth over a flat line says nothing), real otherwise */
+function pfBook(l = lensNow()) {
+  if (l.kind === "paper" || (l.kind === "venue" && paperVenue(l.id))) return "paper";
+  if (l.kind !== "all") return "real";
+  const papers = connected().some((v) => v.paper);
+  if (!papers) return "real";
+  if (!pfBothBooks()) return "paper";
+  if (PF.book === "real" || PF.book === "paper") return PF.book;
+  const real = PF.holdReal;
+  return real && !(Number(real.totalUsd) > 0) && !(real.rows || []).length ? "paper" : "real";
+}
+/* both kinds of account are connected: the Net worth card offers the switch */
+const pfBothBooks = () => connected().some((v) => v.paper) && connected().some((v) => !v.paper);
+/* the venues the pane's parts show under the lens and the book: under All accounts, the book's own */
+function pfScopeIn(l = lensNow()) {
+  if (l.kind !== "all") return pfVenueIn(l);
+  return pfBook(l) === "paper" ? (id) => paperVenue(id) : (id) => !paperVenue(id);
+}
+/* the paper curve asked for the lens: every paper account's, or one's */
+const pfPaperKey = (l = lensNow(), range = PF.range) => `${range}|${l.kind === "venue" && paperVenue(l.id) ? l.id : ""}`;
+
 /* the venue a card is about, from what its agent asked (its "venue" field) */
 const pfCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {}).value || "";
 /* a card or an ask is in the lens: under an agent, that agent's; under a venue, about that venue */
@@ -234,9 +258,10 @@ function pfPut(el, part, html) {
 
 function pfDraw(el, owner) {
   const l = lensNow();
-  const venueIn = pfVenueIn(l);
-  // under Paper the holdings are the paper accounts' (their own read, summed as paper money); under anything else the real ones
-  PF.hold = l.kind === "paper" ? PF.holdPaper || null : PF.holdReal || null;
+  // the book the pane shows (real money or paper, never both added up), and the venues its parts show
+  const book = pfBook(l);
+  const venueIn = pfScopeIn(l);
+  PF.hold = book === "paper" ? PF.holdPaper || null : PF.holdReal || null;
   const rows = PF.hold && PF.hold.rows ? pfRowsIn(PF.hold.rows, venueIn) : null;
   pfPut(el, "steps", pfStepsHtml(owner, el.firstElementChild.dataset.pf === "fresh"));
   pfPut(el, "worth", pfWorthHtml(l, venueIn, rows));
@@ -254,7 +279,7 @@ function pfDraw(el, owner) {
   pfPut(el, "table", pfTableHtml(l, venueIn, rows, owner));
   pfIntents(el, pfPut(el, "agents", pfAgentsHtml(l)));
   pfPut(el, "cash", pfCashHtml(l, venueIn, owner));
-  pfPut(el, "alloc", pfAllocHtml(rows));
+  pfPut(el, "alloc", pfAllocHtml(rows, book));
 }
 /* draw again when an answer came back, if the Portfolio is still what is shown: once a frame, however many answers land in it */
 function pfAgain() {
@@ -299,6 +324,14 @@ function pfReadHistory() {
     PF.hist.set(range, b && b.ok ? b : { error: refusalOf(b) || "The account did not answer." });
     pfAgain();
   });
+  // the paper accounts' own curve, while one is open: every paper account's, or — a paper account's lens — its own
+  if (!connected().some((v) => v.paper)) return;
+  const key = pfPaperKey(lensNow(), range);
+  const venue = key.split("|")[1];
+  api(`/api/account/history?range=${range}&paper=1${venue ? `&venue=${encodeURIComponent(venue)}` : ""}`, { ttl: 60_000 }).then((b) => {
+    PF.histPaper.set(key, b && b.ok ? b : { error: refusalOf(b) || "The account did not answer." });
+    pfAgain();
+  });
 }
 function pfReadPositions() {
   api("/api/account/positions", { ttl: 8_000 }).then((b) => {
@@ -338,9 +371,10 @@ function pfStepsHtml(owner, fresh) {
  * its own. A card's Sell or Close is the owner's own ticket. Nothing without a known cost is here: it is in the table below */
 function pfLiveHtml(l, venueIn, owner) {
   if (l.kind === "agent" || typeof lvCard !== "function") return "";
+  // the book the pane shows: real money's cards, or the paper accounts'
   const sources = [];
-  if (l.kind !== "paper" && PF.holdReal) sources.push({ h: PF.holdReal, paper: false });
-  if (l.kind !== "real" && PF.holdPaper) sources.push({ h: PF.holdPaper, paper: true });
+  if (pfBook(l) === "real" && PF.holdReal) sources.push({ h: PF.holdReal, paper: false });
+  else if (pfBook(l) === "paper" && PF.holdPaper) sources.push({ h: PF.holdPaper, paper: true });
   const cards = [];
   for (const { h, paper } of sources) {
     for (const c of h.cost || []) {
@@ -363,37 +397,77 @@ function pfLiveHtml(l, venueIn, owner) {
 }
 
 /* the net worth: the figure, ONE change line that follows the range (1D is today, from the holdings' own 24 hours; the others from the
-   curve's history), the curve, and one ⓘ holding the footnotes */
+   curve's history), the curve, and one ⓘ holding the footnotes. Paper money is its own book on the same card — its own figure, change and
+   curve, said as paper — and never added to the net worth */
 function pfWorthHtml(l, venueIn, rows) {
-  const L = connected().filter((v) => venueIn(v.id));
   if (!connected().length) {
     // nothing read yet; a connection may be on the account all the same, waiting for its venue to answer this network (one the venue
     // refused is under Venues, with Connect again)
     const w = pfWaiting().filter((x) => !x.stopped).length;
     return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : `Nothing is connected yet. Connect an account and what it holds shows here — or ${pfBtn("paper", "start a paper account", { cls: "link" })}: paper money in the public markets, nothing to connect.`}</p></section>`;
   }
+  return pfBook(l) === "paper" ? pfPaperWorthHtml(l) : pfRealWorthHtml(l, venueIn, rows);
+}
+/* the switch between the two books, on the card, under All accounts when both kinds are connected */
+const pfBookSeg = (l, book) => (l.kind === "all" && pfBothBooks() ? `<div class="seg pf-book" role="group" aria-label="Book">${[["real", "Real money"], ["paper", "Paper"]].map(([v, t]) => `<button type="button" data-pf-act="book" data-book="${v}" data-fk="book:${v}" aria-pressed="${String(v === book)}">${t}</button>`).join("")}</div>` : "");
+/* REAL MONEY: the account's own figure (paper never in it), its change and its curve */
+function pfRealWorthHtml(l, venueIn, rows) {
+  const L = connected().filter((v) => venueIn(v.id));
   // the figure and today's change come from one read where they can (the holdings read says both), so they never disagree by a tick
-  const usd = l.kind === "all" ? (PF.hold && Number.isFinite(Number(PF.hold.totalUsd)) ? Number(PF.hold.totalUsd) : A.liveUsd) : L.reduce((s, v) => s + v.usd, 0);
-  const label = l.kind === "all" ? "Net worth" : l.kind === "real" ? "Net worth · real money" : l.kind === "paper" ? `Paper · ${plural(L.length, "account")}` : l.kind === "venue" ? `Net worth · ${l.name}` : `${l.name} · agent wallets`;
-  const day = !PF.hold ? null : l.kind === "all" ? PF.hold.change24h : pfDayChange(rows || []);
-  const h = l.kind === "all" ? PF.hist.get(PF.range) : null;
-  const today = l.kind !== "all" || PF.range === "1d";
+  const usd = l.kind === "all" || l.kind === "real" ? (PF.hold && Number.isFinite(Number(PF.hold.totalUsd)) ? Number(PF.hold.totalUsd) : A.liveUsd) : L.reduce((s, v) => s + v.usd, 0);
+  const label = l.kind === "all" ? "Net worth" : l.kind === "real" ? "Net worth · real money" : l.kind === "venue" ? `Net worth · ${l.name}` : `${l.name} · agent wallets`;
+  // the account's whole curve is real money's: drawn for All accounts and for Real money
+  const whole = l.kind === "all" || l.kind === "real";
+  const day = !PF.hold ? null : whole ? PF.hold.change24h : pfDayChange(rows || []);
+  const h = whole ? PF.hist.get(PF.range) : null;
+  const today = !whole || PF.range === "1d";
   const notes = pfWorthNotes(l, today ? day : null, today ? null : h);
-  const info = notes.length ? `<details class="more pf-info"><summary aria-label="About these figures" title="${esc(notes.join(" "))}">ⓘ</summary><ul class="pf-info-l">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></details>` : "";
-  const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)}</div><div class="num">${money(usd)}</div><div class="pf-today">${today ? pfTodayLine(day) : pfRangeLine(h)}${info}</div>${PF.holdErr && !PF.hold ? `<div class="msg no">${esc(PF.holdErr)}</div>` : ""}</div>${l.kind === "all" ? pfSeg("range", PF_RANGES, PF.range, "Range") : ""}</div>`;
-  // paper money: what the paper accounts are worth now against what they started with, and nothing of it in the net worth
-  if (l.kind === "paper") {
-    // what was made or lost: only over the paper accounts that said what they started with (the account's own; a venue's test
-    // environment says nothing of it), each against its own start
-    const started = L.filter((v) => num(v.paperStartUsd) > 0);
-    const start = started.reduce((s, v) => s + num(v.paperStartUsd), 0);
-    const now = started.reduce((s, v) => s + num(v.usd), 0);
-    const who = started.length === L.length ? (L.length === 1 ? "it" : "they") : started.map((v) => v.name).join(", ");
-    return `${head}<p class="dim small pf-note">Paper money, not counted in your net worth.${start > 0 ? ` ${chg(now - start, "$")} since ${who} started with ${money(start)}.` : ""} ${pfBtn("all", "Show all accounts", { cls: "link" })}</p>`;
+  const info = pfInfo(notes);
+  // the paper accounts, beside it and never in it: their figure, a way to their book
+  const papers = l.kind === "all" ? connected().filter((v) => v.paper) : [];
+  const paperUsd = PF.holdPaper && Number.isFinite(Number(PF.holdPaper.totalUsd)) ? Number(PF.holdPaper.totalUsd) : papers.reduce((s, v) => s + v.usd, 0);
+  const aside = papers.length ? `<div class="pf-aside small">${pfBtn("book", `<span class="tag paper">Paper</span> ${money(paperUsd)}`, { cls: "link", data: { book: "paper" }, title: "Show the paper accounts" })} <span class="dim">not counted</span></div>` : "";
+  const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)}</div><div class="num">${money(usd)}</div><div class="pf-today">${today ? pfTodayLine(day) : pfRangeLine(h)}${info}</div>${aside}${PF.holdErr && !PF.hold ? `<div class="msg no">${esc(PF.holdErr)}</div>` : ""}</div><div class="pf-worth-c">${pfBookSeg(l, "real")}${whole ? pfSeg("range", PF_RANGES, PF.range, "Range") : ""}</div></div>`;
+  if (!whole) return `${head}<p class="dim small pf-note">The curve covers all accounts together. ${pfBtn("all", "Show all accounts", { cls: "link" })}</p>`;
+  // a curve that never left $0.00 says nothing: what there is to do instead
+  if (h && !h.error && (h.points || []).length && h.points.every((p) => !(Math.abs(Number(p.usd)) >= 0.005))) {
+    return `${head}<p class="dim small pf-note pf-zero">No real money on the account yet: the curve starts once a connected account holds some.${papers.length ? ` ${pfBtn("book", "See the paper accounts", { cls: "link", data: { book: "paper" } })}` : ` ${pfBtn("connect", "Connect an account", { cls: "link" })}`}</p>`;
   }
-  if (l.kind !== "all") return `${head}<p class="dim small pf-note">The curve covers all accounts together. ${pfBtn("all", "Show all accounts", { cls: "link" })}</p>`;
   return `${head}${pfCurveHtml(h)}`;
 }
+/* PAPER: the paper accounts' own figure, change and curve (every paper account under All or Paper, one under its own lens) — paper money,
+   said as paper, never the net worth */
+function pfPaperWorthHtml(l) {
+  const one = l.kind === "venue" ? A.venues.find((v) => v.id === l.id) : null;
+  const L = one ? [one] : connected().filter((v) => v.paper);
+  const usd = !one && PF.holdPaper && Number.isFinite(Number(PF.holdPaper.totalUsd)) ? Number(PF.holdPaper.totalUsd) : L.reduce((s, v) => s + num(v.usd), 0);
+  const h = PF.histPaper.get(pfPaperKey(l));
+  const label = one ? `Paper · ${one.name.replace(/ · paper$/i, "")}` : `Paper · ${plural(L.length, "account")}`;
+  const notes = [];
+  if (h && !h.error) {
+    if (h.rebuilt) notes.push("Before the account wrote points of its own, the curve is told again from each paper account's own fills and the public prices since it started.");
+    for (const x of h.inexact || []) notes.push(x);
+    if ((h.missing || []).length) notes.push(`No price at some points for ${h.missing.join(", ")}: the last price it traded at stands there.`);
+    if ((h.events || []).length) notes.push("Paper accounts opened and closed are marked on the curve, and are not counted as a gain or a loss.");
+  }
+  // what was made or lost since the start: the curve's own figure (every paper account in it said what it started with), else the venues'
+  const started = L.filter((v) => num(v.paperStartUsd) > 0);
+  const startUsd = h && !h.error && h.startUsd !== undefined ? h.startUsd : started.length === L.length ? started.reduce((s, v) => s + num(v.paperStartUsd), 0) : 0;
+  const since = startUsd > 0 ? (h && !h.error && h.sinceStartUsd !== undefined ? h.sinceStartUsd : usd - startUsd) : null;
+  const realUsd = PF.holdReal && Number.isFinite(Number(PF.holdReal.totalUsd)) ? Number(PF.holdReal.totalUsd) : A.liveUsd;
+  const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)} <span class="tag paper">Paper</span></div><div class="num">${money(usd)}</div><div class="pf-today">${pfPaperRangeLine(h)}${pfInfo(notes)}</div>${since !== null ? `<div class="pf-aside small">${chg(since, "$")} <span class="dim">since ${L.length === 1 ? "it" : "they"} started with ${money(startUsd)}${h && h.first ? ` · ${esc(nyDay(h.first))}` : ""}</span></div>` : ""}</div><div class="pf-worth-c">${pfBookSeg(l, "paper")}${pfSeg("range", PF_RANGES, PF.range, "Range")}</div></div>`;
+  const foot = `<p class="dim small pf-note">Paper money, not counted in your net worth${l.kind === "all" || l.kind === "paper" ? ` (real money: ${money(realUsd)})` : ""}.${l.kind === "venue" || l.kind === "paper" ? ` ${pfBtn("all", "Show all accounts", { cls: "link" })}` : ""}</p>`;
+  return `${head}${pfCurveHtml(h, { paper: true })}${foot}`;
+}
+/* the paper curve's change over the range: since the first point when the range starts before it */
+function pfPaperRangeLine(h) {
+  if (!h) return '<span class="skel" style="width:180px" aria-hidden="true"></span>';
+  if (h.error) return '<span class="dim">The curve could not be read.</span>';
+  const since = h.first && Date.parse(h.first) > Date.parse(h.from) + 60_000 ? `since ${nyDay(h.first)}` : PF_RANGE_WORDS[h.range] || "";
+  return `<span>${chg(h.changeUsd, "$")}${h.changePct !== undefined ? ` <span class="tab-nums">(${Math.abs(h.changePct).toFixed(2)}%)</span>` : ""} <span class="dim">${esc(since)}</span></span>`;
+}
+/* the footnotes behind one ⓘ */
+const pfInfo = (notes) => (notes.length ? `<details class="more pf-info"><summary aria-label="About these figures" title="${esc(notes.join(" "))}">ⓘ</summary><ul class="pf-info-l">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></details>` : "");
 /* today's change, from each row's own 24 hours */
 function pfTodayLine(day) {
   if (!day) return '<span class="skel" style="width:180px" aria-hidden="true"></span>';
@@ -420,19 +494,34 @@ function pfWorthNotes(l, day, h) {
   return notes;
 }
 
-function pfCurveHtml(h) {
+function pfCurveHtml(h, { paper = false } = {}) {
   PF.curve = null;
   if (!h) return '<div class="skel pf-skel-curve" aria-hidden="true"></div>';
   if (h.error) return `<div class="msg no">${esc(h.error)}</div>`;
   const c = pfCurve(h.points);
   if (!c) return `<p class="dim small pf-note">${h.first ? `The curve draws once the account has two points: the first was taken ${esc(nyDay(h.first))} ${esc(nyTime(h.first))}.` : "The curve starts with the account's first snapshot, a few minutes after an account is connected."}</p>`;
   PF.curve = c;
-  const ticks = (h.events || []).map((e) => { const x = c.at(Date.parse(e.at)); return x >= 0 && x <= c.w ? `<line x1="${x}" x2="${x}" y1="0" y2="${c.h}" class="pf-ev"><title>${esc(`${e.kind === "connect" ? "Connected" : "Disconnected"} ${e.name || e.venue} · ${nyDay(e.at)} ${nyTime(e.at)}`)}</title></line>` : ""; }).join("");
+  const ticks = pfTicks(h.events, c);
   const first = c.points[0];
   const last = c.points[c.points.length - 1];
-  const words = `Net worth from ${money(first.usd)} on ${nyDay(first.at)} to ${money(last.usd)} on ${nyDay(last.at)}; low ${money(c.lo)}, high ${money(c.hi)}`;
+  const words = `${paper ? "Paper accounts" : "Net worth"} from ${money(first.usd)} on ${nyDay(first.at)} to ${money(last.usd)} on ${nyDay(last.at)}; low ${money(c.lo)}, high ${money(c.hi)}`;
   // the cursor is a line of its own over the curve, moved by a transform (no redraw of the curve as the pointer moves)
   return `<div class="pf-plot"><svg class="spark pf-curve" viewBox="0 0 ${c.w} ${c.h}" preserveAspectRatio="none" role="img" aria-label="${esc(words)}" data-pf-curve><path class="area" d="${c.area}"/><path class="line" d="${c.line}"/>${ticks}</svg><span class="pf-cursor" aria-hidden="true"></span><div class="pf-read small tab-nums" data-pf-read aria-hidden="true"></div></div>`;
+}
+
+/* the connections marked on a curve: a short mark at its foot (the whole height under the pointer), those a few pixels apart one mark that
+   names them all */
+function pfTicks(events, c) {
+  const marks = [];
+  for (const e of events || []) {
+    const x = c.at(Date.parse(e.at));
+    if (!(x >= 0 && x <= c.w)) continue;
+    const said = `${e.kind === "connect" ? "Connected" : "Disconnected"} ${e.name || e.venue} · ${nyDay(e.at)} ${nyTime(e.at)}`;
+    const near = marks.find((m) => Math.abs(m.x - x) < 8);
+    if (near) near.said.push(said);
+    else marks.push({ x, said: [said] });
+  }
+  return marks.map((m) => `<line x1="${m.x}" x2="${m.x}" y1="${c.h - 14}" y2="${c.h}" class="pf-ev"><title>${esc(m.said.join("\n"))}</title></line>`).join("");
 }
 
 /* Trade · Move · Receive · Hand to agent: each shown only where some account (or agent) can do it */
@@ -517,7 +606,7 @@ function pfCashHtml(l, venueIn, owner) {
   const L = connected().filter((v) => venueIn(v.id));
   // offered where a venue that serves this network takes money to earn
   const earn = typeof openEarn === "function" && L.some((v) => v.earn && v.earn.can !== false && servedHere(v)) ? pfBtn("earn", "Earn…", { cls: "btn btn-sm", off: !owner, title: owner ? "" : PF_LOOK_ONLY }) : "";
-  const head = `<div class="sec-head"><div class="label">Cash ready</div>${earn}</div>`;
+  const head = `<div class="sec-head"><div class="label">Cash ready${pfBook(l) === "paper" ? ' <span class="tag paper">Paper</span>' : ""}</div>${earn}</div>`;
   if (!PF.hold) return `${head}${PF.holdErr ? `<div class="msg no">${esc(PF.holdErr)}</div>` : '<span class="skel" aria-hidden="true"></span>'}`;
   const c = pfCash(PF.hold.money, venueIn);
   const line = !(c.ready > 0) ? `No cash or dollar stablecoins here.${L.some(canReceive) ? " Receive some to trade with." : ""}` : c.canMove > 0 ? `${money(c.canMove)} can move between your accounts.` : "None of it can move between your accounts from here.";
@@ -525,11 +614,12 @@ function pfCashHtml(l, venueIn, owner) {
 }
 
 /* what the money is in */
-function pfAllocHtml(rows) {
+function pfAllocHtml(rows, book = "real") {
   const s = pfAlloc(rows);
-  if (!rows) return '<div class="label">Allocation</div><span class="skel" aria-hidden="true"></span>';
+  const label = `<div class="label">Allocation${book === "paper" ? ' <span class="tag paper">Paper</span>' : ""}</div>`;
+  if (!rows) return `${label}<span class="skel" aria-hidden="true"></span>`;
   if (!s.length) return "";
-  return `<div class="label">Allocation</div><div class="bar" aria-hidden="true">${s.map((x) => `<span style="flex:${x.usd};background:${(CLASS[x.cls] || ["", "var(--dim)"])[1]}"></span>`).join("")}</div><div class="legend-l">${s.map((x) => `<div><span class="sw-k" style="background:${(CLASS[x.cls] || ["", "var(--dim)"])[1]}" aria-hidden="true"></span><span>${esc((CLASS[x.cls] || [x.cls])[0])}</span><span>${x.pct}% · ${money(x.usd)}</span></div>`).join("")}</div>`;
+  return `${label}<div class="bar" aria-hidden="true">${s.map((x) => `<span style="flex:${x.usd};background:${(CLASS[x.cls] || ["", "var(--dim)"])[1]}"></span>`).join("")}</div><div class="legend-l">${s.map((x) => `<div><span class="sw-k" style="background:${(CLASS[x.cls] || ["", "var(--dim)"])[1]}" aria-hidden="true"></span><span>${esc((CLASS[x.cls] || [x.cls])[0])}</span><span>${x.pct}% · ${money(x.usd)}</span></div>`).join("")}</div>`;
 }
 
 // ---- Assets · Positions · Accounts ------------------------------------------------------------------------------------------------
@@ -599,7 +689,7 @@ function pfPositionsHtml(l, venueIn, owner) {
   // a derivative is closed; a holding — contracts, shares, coins — is sold
   const verb = (p) => (p.kind === "event" || p.kind === "spot" || p.kind === "stock" || p.kind === "crypto" || p.kind === "token" ? "Sell…" : "Close…");
   const t = table([
-    { label: "Position", cell: (p) => `<b>${esc(p.name)}</b><span class="why">${esc([p.venueName || nameOf(p.venue), `${p.side === "short" ? "short" : "long"} ${qtyOf(p.qty)}${p.kind === "event" ? " contracts" : ""}`, p.leverage ? `${p.leverage}x${p.marginMode ? ` ${p.marginMode}` : ""}` : ""].filter(Boolean).join(" · "))}</span>` },
+    { label: "Position", cell: (p) => `<b>${esc(p.name)}</b>${p.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc([p.venueName || nameOf(p.venue), `${p.side === "short" ? "short" : "long"} ${qtyOf(p.qty)}${p.kind === "event" ? " contracts" : ""}`, p.leverage ? `${p.leverage}x${p.marginMode ? ` ${p.marginMode}` : ""}` : ""].filter(Boolean).join(" · "))}</span>` },
     { label: "Value", r: true, cell: (p) => (p.usd !== undefined ? money(p.usd) : "—") },
     { label: "Entry · Mark", r: true, cell: (p) => `${at(p, p.entryPrice)} · ${at(p, p.markPrice)}` },
     { label: "Liquidation", r: true, cell: (p) => (p.liquidationPrice ? esc(px(p.liquidationPrice)) : '<span class="flat">—</span>') },
@@ -771,6 +861,12 @@ async function pfAct(act, d) {
   const l = lensNow();
   switch (act) {
     case "connect": return void (typeof openPicker === "function" && openPicker());
+    // the Net worth card's book: real money or paper (under All accounts); the paper curve is read when it is first shown
+    case "book": {
+      PF.book = d.book === "paper" ? "paper" : "real";
+      pfAgain();
+      return void pfReadHistory();
+    }
     // a paper account: the connect form for one, straight from the empty account
     case "paper": return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account", back: true }));
     case "setup": return void copySetup();
