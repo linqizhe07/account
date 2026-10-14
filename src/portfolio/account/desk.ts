@@ -45,7 +45,7 @@ import { no } from "../refuse.ts";
 import type { TabId } from "../live/categories.ts";
 import type { Exploration, ExploreItem } from "../live/explore.ts";
 import type { LiveOrder } from "./live-orders.ts";
-import type { Market, Position } from "../live/trade.ts";
+import { ceilTo, floorTo, type Market, type Position, type Side } from "../live/trade.ts";
 import type { AccountPage, Outcome } from "./exchange.ts";
 import { seatKey } from "./keystore.ts";
 import { signAgent, type Action, type AgentAction, type Envelope, type Hex, type SimKey } from "./sign.ts";
@@ -365,7 +365,9 @@ const MAX_CYCLE_MIN = 240;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 /** the spread a lead may have, in percent of the price */
-export const MAX_SPREAD_PCT = 0.6;
+export /** an extended-hours limit's distance past the book, so that it fills now as a market order would (overnight books are thin) */
+const EH_BAND = 0.005;
+const MAX_SPREAD_PCT = 0.6;
 /** a lead's plan where the brain gives none, or one out of bounds */
 const PLAN = { tpPct: 1.5, slPct: 0.8, maxHours: 12 };
 const PLAN_BOUNDS = { tpPct: [0.2, 25], slPct: [0.2, 15], maxHours: [1, 168] } as const;
@@ -1041,7 +1043,7 @@ export class Desk {
     const maxSize = r2(Math.min(s.startEquityUsd * (f.objective.maxRiskPct / 100), limit.perOrderUsd, limit.leftUsd));
     if (!(maxSize > 0)) return reject(`nothing left of the Sniper's limit (${usd(limit.leftUsd)} of ${usd(limit.budgetUsd)})`);
     if (m.minNotional !== undefined && maxSize < m.minNotional) return reject(`the most this lead may be (${usd(maxSize)}) is under the venue's smallest order (${usd(m.minNotional)})`);
-    const checks = `market open · price ${price} · spread ${spread === undefined ? "n/a" : `${spread.toFixed(2)}%`} · volume ${m.volumeUsd24h === undefined ? "n/a" : usd(m.volumeUsd24h)} · day's loss room ${usd(lossRoom)} · size up to ${usd(maxSize)}`;
+    const checks = `market open${m.session?.phase && m.session.phase !== "regular" ? ` (${m.session.phase} session${m.session.extendedHours ? ", extended hours" : ""})` : ""} · price ${price} · spread ${spread === undefined ? "n/a" : `${spread.toFixed(2)}%`} · volume ${m.volumeUsd24h === undefined ? "n/a" : usd(m.volumeUsd24h)} · day's loss room ${usd(lossRoom)} · size up to ${usd(maxSize)}`;
     const seat = f.seats.find((x) => x.role === "risk");
     let plan = { ...PLAN, sizeUsd: maxSize, why: "the hard checks passed; no Risk seat, so the plan is the default" };
     if (seat) {
@@ -1087,7 +1089,20 @@ export class Desk {
       this.room("sniper", "note", `${lead.id}: the Sniper seat is ${seat?.kind === "outside" ? "an outside agent's: it places the entry itself" : "not the house's"}; nothing placed from here.`, { lead: lead.id });
       return false;
     }
-    const action = { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "market", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: "", nonce: this.world.nonce() };
+    const m = await this.world.market(venue.id, lead.symbol);
+    const eh = this.extendedLimit(m, lead.side);
+    if (eh && !eh.ok) {
+      lead.state = "refused";
+      lead.why = eh.why;
+      lead.updatedAt = this.world.now();
+      this.room("sniper", "refusal", `${lead.id}: ${eh.why}`, { lead: lead.id });
+      this.save();
+      return false;
+    }
+    if (eh) this.room("sniper", "note", `${lead.id}: the regular session is closed (${eh.phase} session): the entry goes as a day limit at ${eh.limit} with extended hours.`, { lead: lead.id });
+    const action = eh
+      ? { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "limit", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: eh.limit, tif: "day", extendedHours: "true", nonce: this.world.nonce() }
+      : { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "market", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: "", nonce: this.world.nonce() };
     const out = await this.world.exchange(await signAgent(key, action));
     const now = this.world.now();
     lead.updatedAt = now;
@@ -1255,6 +1270,20 @@ export class Desk {
     return open.length;
   }
 
+  /** Outside the regular session, where the venue trades the session that is on (a stock at Alpaca in pre-market, after-hours or
+   * overnight: Market.session.extendedHours), a market order is not taken: the order goes as a DAY LIMIT with extended hours, a little
+   * past the book — a buy over the ask, a sell under the bid, by EH_BAND — so that it fills now at the book or better, as a market order
+   * would. Undefined where the regular session is on or the venue keeps no such session; not ok where no price is up to set the limit by */
+  private extendedLimit(m: Market | Refusal, side: Side): { ok: true; limit: string; phase: string } | { ok: false; why: string } | undefined {
+    if (isRefusal(m) || m.session?.extendedHours !== true || m.session.open) return undefined;
+    const phase = m.session.phase ?? "extended";
+    const px = side === "buy" ? (m.ask ?? m.price) : (m.bid ?? m.price);
+    if (!(px && px > 0)) return { ok: false, why: `no price is up for ${m.symbol} in the ${phase} session to set an extended-hours limit by` };
+    const step = m.priceStep ?? 0.01;
+    const limit = side === "buy" ? ceilTo(px * (1 + EH_BAND), step) : floorTo(px * (1 - EH_BAND), step);
+    return { ok: true, limit: Number(limit.toFixed(6)).toString(), phase };
+  }
+
   private async close(lead: Lead, venue: AccountPage["venues"][number], why: string, from: RoleId): Promise<void> {
     const f = this.file!;
     const seat = f.seats.find((s) => s.role === from) ?? f.seats.find((s) => s.role === "exit");
@@ -1265,9 +1294,19 @@ export class Desk {
     }
     const e = lead.entry!;
     const perp = lead.kind === "perp";
+    const side = lead.side === "buy" ? "sell" : "buy";
+    // a stock outside its regular session: the venue takes a limit for the session that is on, and nothing else (Alpaca's extended hours)
+    const eh = perp ? undefined : this.extendedLimit(await this.world.market(venue.id, lead.symbol), side);
+    if (eh && !eh.ok) {
+      this.room(seat.role, "warning", `${lead.id}: ${why} — ${eh.why}`, { lead: lead.id });
+      return;
+    }
+    if (eh) this.room(seat.role, "note", `${lead.id}: the regular session is closed (${eh.phase} session): the close goes as a day limit at ${eh.limit} with extended hours.`, { lead: lead.id });
     const action: AgentAction = perp
       ? { type: "agentLiveClose", venue: venue.id, symbol: lead.symbol, qty: "", nonce: this.world.nonce() }
-      : { type: "agentLiveOrder", venue: venue.id, symbol: lead.symbol, side: lead.side === "buy" ? "sell" : "buy", orderType: "market", qty: String(e.qty), usd: "", limitPrice: "", nonce: this.world.nonce() };
+      : eh
+        ? { type: "agentLiveOrder", venue: venue.id, symbol: lead.symbol, side, orderType: "limit", qty: String(e.qty), usd: "", limitPrice: eh.limit, tif: "day", extendedHours: "true", nonce: this.world.nonce() }
+        : { type: "agentLiveOrder", venue: venue.id, symbol: lead.symbol, side, orderType: "market", qty: String(e.qty), usd: "", limitPrice: "", nonce: this.world.nonce() };
     const out = await this.world.exchange(await signAgent(key, action));
     lead.exitWhy = why;
     lead.updatedAt = this.world.now();

@@ -52,11 +52,12 @@
     ]
   },
   "connectionKinds": {
-    "count": 15,
+    "count": 16,
     "ids": [
       "paper",
       "exchange",
       "alpaca",
+      "alpaca-paper",
       "robinhood",
       "robinhood-crypto",
       "kalshi",

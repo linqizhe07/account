@@ -44,7 +44,7 @@ let CONNECT_TIMER = 0;
 const TILES = [
   ["Paper", [["paper", "", "Paper account"]]],
   ["Exchanges", [["exchange", "okx", "OKX"], ["exchange", "kraken", "Kraken"], ["exchange", "coinbase", "Coinbase"], ["exchange", "bybit", "Bybit"], ["exchange", "binance", "Binance"], ["exchange", "", "Another exchange"]]],
-  ["Brokers", [["robinhood", "", "Robinhood"], ["alpaca", "", "Alpaca"], ["robinhood-crypto", "", "Robinhood Crypto"]]],
+  ["Brokers", [["robinhood", "", "Robinhood"], ["alpaca", "", "Alpaca"], ["alpaca-paper", "", "Alpaca · paper"], ["robinhood-crypto", "", "Robinhood Crypto"]]],
   ["Wallets", [["wallet", "", "Browser wallet"], ["metamask", "", "MetaMask Agent Wallet"], ["wallet", "watch", "Watch an address"]]],
   ["Markets and tokens", [["kalshi", "", "Kalshi"], ["polymarket-us", "", "Polymarket US"], ["polymarket-trade", "", "Polymarket"], ["polymarket", "", "Polymarket · by address"], ["hyperliquid-trade", "", "Hyperliquid"], ["hyperliquid-paper", "", "Hyperliquid · paper"], ["hyperliquid", "", "Hyperliquid · by address"], ["ondo", "", "Ondo · OUSG"]]],
 ];
@@ -64,6 +64,7 @@ const KEY_HOW = {
   gate: "API v4 key. Spot: Read and Write; leave Withdrawal off. Bind this machine's IP: without one the key lasts 90 days.",
   bitget: "Read/write with the Trade permission; leave Withdraw and Transfer off. Bind this machine's IP. The passphrase goes in \"password\".",
   alpaca: "Generate a key in your Live account (or Paper, to try it first). Alpaca keys have no permissions to choose: any key can trade, and none can move cash.",
+  "alpaca-paper": "PAPER TRADING at Alpaca: no real money, open to anyone with an email address. In the Alpaca dashboard switch to the Paper account (top left), then Generate New Keys: \"keyId\" and \"secret\". Orders fill against real quotes; the balance is paper. Alpaca's overnight session (20:00–04:00 New York) is daytime in Hong Kong and Singapore: a limit order with extended hours trades then.",
   kalshi: "Create New API Key (Ed25519). If scopes are offered, take read and write::trade and leave write::transfer off.",
   "polymarket-us": "Verify your identity in the Polymarket US app first. On its developer page, sign in with the same method you use in the app (Apple, Google or email) — Polymarket US says switching methods may break API key access — and create a key: its Key ID goes in \"keyId\", its Secret Key in \"secretKey\" (the secret is shown only once). Its API moves no money in or out.",
   "robinhood-crypto": "Add key with your Ed25519 public key, and enable reading accounts, holdings, orders, products and quotes, and placing crypto orders.",
@@ -234,7 +235,7 @@ function keyHowFor(v) {
 }
 
 /* what each key file holds, until the server says exactly (an exchange's own list comes from the exchange library) */
-const FIELDS = { exchange: ["apiKey", "secret"], alpaca: ["keyId", "secret"], kalshi: ["keyId", "privateKeyFile"], "polymarket-us": ["keyId", "secretKey"], "robinhood-crypto": ["apiKey", "privateKey"], "polymarket-trade": ["privateKey", "funderAddress", "signatureType"], "hyperliquid-trade": ["walletAddress", "privateKey"], "hyperliquid-paper": ["walletAddress", "privateKey"] };
+const FIELDS = { exchange: ["apiKey", "secret"], alpaca: ["keyId", "secret"], "alpaca-paper": ["keyId", "secret"], kalshi: ["keyId", "privateKeyFile"], "polymarket-us": ["keyId", "secretKey"], "robinhood-crypto": ["apiKey", "privateKey"], "polymarket-trade": ["privateKey", "funderAddress", "signatureType"], "hyperliquid-trade": ["walletAddress", "privateKey"], "hyperliquid-paper": ["walletAddress", "privateKey"] };
 /* a shell word, quoted */
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 /* the one command that makes a key file: the folder, an empty template if there is no file yet (an existing one is never overwritten),

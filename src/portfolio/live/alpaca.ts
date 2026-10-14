@@ -10,6 +10,12 @@
  *   GET /v2/assets/{symbol}                          one of them (a coin pair URL-encoded: BTC%2FUSD)
  *   GET /v2/clock                                    whether the US stock market is open, and when it next opens and closes: a
  *                                                    stock market's session (Market.session)
+ *   GET /v2/calendar?start=&end=                     the trading days ahead and their hours: which session is on now (pre-market,
+ *                                                    regular, after-hours, overnight — Alpaca's 24/5 page), and whether a limit order
+ *                                                    may be sent for it (extended_hours; overnight for the assets marked
+ *                                                    overnight_tradable)
+ *   GET data.alpaca.markets/v1beta1/screener/stocks/movers, …/most-actives   what moves today: the start-from list after the well-known
+ *                                                    markets
  *   GET data.alpaca.markets …/quotes/latest          a fresh bid and ask (stocks: also …/trades/latest, the last trade)
  *   POST /v2/orders                                  an order, with the account's id as client_order_id. A MARKET order goes as a
  *                                                    limit order at its worst price, and a STOP as a stop-limit at its worst price,
@@ -45,7 +51,7 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import type { ChainName } from "./chain.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
-import { badOrder, ceilTo, CANDLE_INTERVALS, DONE, floorTo, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketSession, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { badOrder, ceilTo, CANDLE_INTERVALS, DONE, floorTo, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketSession, type MarketStats, type SessionPhase, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { asRefusal, networkNo, notTheApi, num, redact, REGION, unreachable, venueSaidNo, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 import type { LiveWriter } from "./writes.ts";
 
@@ -53,6 +59,10 @@ import type { LiveWriter } from "./writes.ts";
 const placeNo = (venue: string, name: string, native: Record<string, unknown>): Refusal => no("E_VENUE_GEOBLOCKED", { venue, message: `${name} does not serve this location: that is its own rule, and the account does not look for a way around it`, native });
 
 export const ALPACA_KEY: KeyShape = { required: ["keyId", "secret"], optional: ["paper"], example: '{"keyId": "…", "secret": "…"} (add "paper": "true" for a paper-trading account)' };
+/** the key file of a PAPER account at Alpaca (live:alpaca-paper): the keys made in the paper account's own dashboard, which reach
+ * paper-api.alpaca.markets and nothing else. Alpaca's paper-trading page: anyone with an email address may open one; it fills orders
+ * against real quotes (the NBBO), and its dollars are paper */
+export const ALPACA_PAPER_KEY: KeyShape = { required: ["keyId", "secret"], example: '{"keyId": "…", "secret": "…"} (the keys of your Alpaca PAPER account: in the dashboard switch to Paper, then Generate New Keys)' };
 
 const LIVE = "https://api.alpaca.markets";
 const PAPER = "https://paper-api.alpaca.markets";
@@ -62,8 +72,8 @@ const WALLET_CHAIN: Partial<Record<ChainName, string>> = { Ethereum: "ETH", Arbi
 /** why no withdrawal is made from here, in Alpaca's words: its reference page for POST /v2/wallets/transfers */
 const NO_WITHDRAWAL = 'Alpaca retired crypto withdrawals through its Trading API ("This endpoint is deprecated. Use the Alpaca web application to initiate withdrawals." Sunset: 2026-10-09): crypto leaves Alpaca in the Alpaca app, to an address whitelisted there first; cash moves by ACH at Alpaca';
 
-export async function alpacaSource(req: { venue: string; label: string; reference: string; key: KeyFile; http: Http; clock?: (() => number) | undefined }): Promise<{ source: LiveSource; first: LiveBalance[] } | Refusal> {
-  const paper = req.key.paper === "true";
+export async function alpacaSource(req: { venue: string; label: string; reference: string; key: KeyFile; http: Http; clock?: (() => number) | undefined; /** a paper account (live:alpaca-paper): the paper host whatever the key file says */ paper?: boolean | undefined }): Promise<{ source: LiveSource; first: LiveBalance[] } | Refusal> {
+  const paper = req.paper === true || req.key.paper === "true";
   const base = paper ? PAPER : LIVE;
   // a paper account says so in its name, whatever the owner called it
   const name = `${req.label || "Alpaca"}${paper && !/paper/i.test(req.label) ? " · paper" : ""}`;
@@ -128,7 +138,7 @@ export async function alpacaSource(req: { venue: string; label: string; referenc
     const w = await wallets();
     const writer = w.on ? alpacaWriter({ venue: req.venue, name, base, keyId: req.key.keyId!, secret: req.key.secret!, http: req.http }) : undefined;
     const note = `an Alpaca key has no scopes: any key can place orders. ${w.on ? "Crypto comes in to Alpaca's wallets for this account (GET /v2/wallets: enabled), on Ethereum or Arbitrum; it leaves Alpaca in the Alpaca app (the Trading API's withdrawal is deprecated, sunset 2026-10-09). Cash moves by ACH at Alpaca" : w.why}`;
-    const source: LiveSource = { name, kind: "broker", reference: req.reference, via: `Alpaca Trading API${paper ? " · paper" : ""}`, probe: { can: ["read", "trade"], note, native: { calls: ["GET /v2/account", "GET /v2/positions", "GET /v2/wallets"], paper, wallets: w.on } }, read, ...(writer ? { writer } : { readOnlyBecause: (w as { why: string }).why }), trader };
+    const source: LiveSource = { name, kind: "broker", reference: req.reference, via: `Alpaca Trading API${paper ? " · paper" : ""}`, probe: { can: ["read", "trade"], note, native: { calls: ["GET /v2/account", "GET /v2/positions", "GET /v2/wallets"], paper, wallets: w.on } }, read, ...(writer ? { writer } : { readOnlyBecause: (w as { why: string }).why }), trader, ...(paper ? { paper: true as const } : {}) };
     return { source, first };
   } catch (err) {
     return asRefusal(req.venue, name, err, secrets);
@@ -189,8 +199,17 @@ const DATA = "https://data.alpaca.markets";
 const LIST_MS = 5 * 60_000;
 /** an order Alpaca already holds under the account's id is this order only if it was made this recently */
 const RETRY_MS = 10 * 60_000;
-/** what an owner looks for first, when nothing is typed yet */
+/** what an owner looks for first, when nothing is typed yet; after them, what Alpaca's screener says moves today */
 const KNOWN = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BTC/USD", "ETH/USD", "SOL/USD"];
+/** the screener's reads: the most-traded stocks, and the day's gainers and losers (each), and the most markets a start-from list holds */
+const SCREEN_TOP = 25;
+const SCREEN_MOVERS = 10;
+const START_MAX = 36;
+/** the calendar is read for a week ahead and kept an hour; the overnight session's bounds, New York minutes since midnight */
+const CAL_MS = 60 * 60_000;
+const DAY_MS = 86_400_000;
+const OVERNIGHT_START = 20 * 60;
+const OVERNIGHT_END = 4 * 60;
 const STOCK = /^[A-Z][A-Z0-9.]{0,14}$/;
 const PAIR = /^([A-Z0-9]{1,15})\/([A-Z0-9]{1,15})$/;
 /** the most markets one stats call reads: one snapshots request for the stocks among them, one for the pairs */
@@ -273,10 +292,81 @@ function sessionOf(clock: unknown): MarketSession | undefined {
   return { open: clock.is_open, ...(opensAt ? { opensAt } : {}), ...(closesAt ? { closesAt } : {}) };
 }
 
+// ---- New York's clock and Alpaca's calendar: which session is on ------------------------------------------------------------------
+
+const NY_PARTS = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+/** New York's wall clock at an instant: the date (YYYY-MM-DD) and the minutes since midnight */
+const nyWall = (ms: number): { date: string; minutes: number } => {
+  const p = Object.fromEntries(NY_PARTS.formatToParts(new Date(ms)).filter((x) => x.type !== "literal").map((x) => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, minutes: (Number(p.hour) % 24) * 60 + Number(p.minute) };
+};
+const dateParts = (date: string): [number, number, number] => {
+  const [y, m, d] = date.split("-").map(Number);
+  return [y!, m! - 1, d!];
+};
+const nextDate = (date: string): string => new Date(Date.UTC(...dateParts(date)) + DAY_MS).toISOString().slice(0, 10);
+/** the instant a New York wall-clock time is, through the zone's offset in force then (found twice, so a change of offset between the
+ * guess and the instant is caught) */
+const nyMs = (date: string, minutes: number): number => {
+  const guess = Date.UTC(...dateParts(date), Math.floor(minutes / 60), minutes % 60);
+  const off = (ms: number): number => {
+    const w = nyWall(ms);
+    return Date.UTC(...dateParts(w.date), Math.floor(w.minutes / 60), w.minutes % 60) - ms;
+  };
+  return guess - off(guess - off(guess));
+};
+/** a New York wall-clock stamp of an instant: "2026-10-14 09:30" */
+const nyStamp = (iso: string | undefined): string => {
+  const ms = Date.parse(iso ?? "");
+  if (!Number.isFinite(ms)) return "";
+  const w = nyWall(ms);
+  return `${w.date} ${String(Math.floor(w.minutes / 60)).padStart(2, "0")}:${String(w.minutes % 60).padStart(2, "0")}`;
+};
+/** a trading day's hours as the calendar gives them (GET /v2/calendar: open and close "09:30"/"16:00", session_open and session_close
+ * "0400"/"2000" — either spelling is read), New York minutes since midnight */
+interface CalDay {
+  open: number;
+  close: number;
+  sessionOpen: number;
+  sessionClose: number;
+}
+const hhmm = (v: unknown, d: number): number => {
+  const m = /^(\d{1,2}):?(\d{2})$/.exec(String(v ?? "").trim());
+  return m ? Number(m[1]) * 60 + Number(m[2]) : d;
+};
+/** Which session is on at Alpaca now, from its clock (the regular session, is_open) and its calendar (the trading days and their hours):
+ * pre-market from the session's open (04:00) to the regular open, after-hours from the regular close to the session's close (20:00),
+ * overnight from 20:00 to 04:00 ahead of a trading day (Sunday evening to Friday morning, Blue Ocean ATS; Alpaca's 24/5 page), closed
+ * otherwise. The clock is the venue's own; the day's bounds are its calendar's. Without a calendar the regular session alone is known
+ * and no phase is said */
+export function phaseOf(nowMs: number, clock: unknown, days: Map<string, CalDay> | undefined): { phase: SessionPhase; endsAt?: string | undefined } | undefined {
+  if (!isObj(clock) || isRefusal(clock) || typeof clock.is_open !== "boolean" || !days) return undefined;
+  const w = nyWall(nowMs);
+  const today = days.get(w.date);
+  const tomorrow = days.get(nextDate(w.date));
+  const at = (date: string, minutes: number): string => new Date(nyMs(date, minutes)).toISOString();
+  const nextOpen = isoOf(clock.next_open);
+  if (clock.is_open) return { phase: "regular", endsAt: isoOf(clock.next_close) ?? (today ? at(w.date, today.close) : undefined) };
+  if (today) {
+    if (w.minutes < OVERNIGHT_END) return { phase: "overnight", endsAt: at(w.date, OVERNIGHT_END) };
+    if (w.minutes >= today.sessionOpen && w.minutes < today.open) return { phase: "pre", endsAt: at(w.date, today.open) };
+    if (w.minutes >= today.close && w.minutes < today.sessionClose) return { phase: "after", endsAt: at(w.date, today.sessionClose) };
+    if (w.minutes >= OVERNIGHT_START) return tomorrow ? { phase: "overnight", endsAt: at(nextDate(w.date), OVERNIGHT_END) } : { phase: "closed", endsAt: nextOpen };
+    // inside the day's hours with the clock saying closed (a halt, a half day's gap): closed until the clock's next open
+    return { phase: "closed", endsAt: nextOpen };
+  }
+  if (w.minutes >= OVERNIGHT_START && tomorrow) return { phase: "overnight", endsAt: at(nextDate(w.date), OVERNIGHT_END) };
+  return { phase: "closed", endsAt: nextOpen };
+}
+
 function alpacaTrader(c: { venue: string; name: string; base: string; keyId: string; secret: string; http: Http; clock: () => number }): LiveTrader {
   const secrets = [c.keyId, c.secret];
   const auth = { "APCA-API-KEY-ID": c.keyId, "APCA-API-SECRET-KEY": c.secret };
   let listed: { at: number; all: Market[] } | undefined;
+  /** the screener's picks, as symbols, kept five minutes */
+  let picks: { at: number; symbols: string[] } | undefined;
+  /** the market calendar for the week, kept an hour */
+  let cal: { at: number; days: Map<string, CalDay> } | undefined;
   /** a coin pair's price step (its price_increment), as last read: a market order's worst price is put onto it */
   const steps = new Map<string, { at: number; step: number | undefined }>();
   const learn = (m: Market): void => {
@@ -406,6 +496,29 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
     return undefined;
   };
 
+  /** what moves at Alpaca today, from its screener (GET /v1beta1/screener/stocks/movers?top= — the day's gainers and losers — and
+   * …/most-actives?by=volume&top=), as symbols, movers first; a screener that does not answer gives none, and the start-from list is the
+   * well-known markets alone */
+  const moving = async (): Promise<string[]> => {
+    if (picks && Date.now() - picks.at < LIST_MS) return picks.symbols;
+    const [mv, ac] = await Promise.all([soft(`${DATA}/v1beta1/screener/stocks/movers?top=${SCREEN_MOVERS}`), soft(`${DATA}/v1beta1/screener/stocks/most-actives?by=volume&top=${SCREEN_TOP}`)]);
+    const sym = (x: unknown): string => (isObj(x) && typeof x.symbol === "string" ? x.symbol.toUpperCase() : "");
+    const of = (r: unknown, k: string): string[] => (isObj(r) && !isRefusal(r) && Array.isArray(r[k]) ? (r[k] as unknown[]).map(sym).filter(Boolean) : []);
+    const symbols = [...new Set([...of(mv, "gainers"), ...of(mv, "losers"), ...of(ac, "most_actives")])];
+    picks = { at: Date.now(), symbols };
+    return symbols;
+  };
+  /** the trading days ahead, as Alpaca's calendar gives them (GET /v2/calendar?start=&end=), kept an hour; none when it did not answer */
+  const calendar = async (nowMs: number): Promise<Map<string, CalDay> | undefined> => {
+    if (cal && nowMs - cal.at < CAL_MS) return cal.days;
+    const r = await soft(`${c.base}/v2/calendar?start=${nyWall(nowMs - DAY_MS).date}&end=${nyWall(nowMs + 8 * DAY_MS).date}`);
+    if (isRefusal(r) || !Array.isArray(r)) return cal?.days;
+    const days = new Map<string, CalDay>();
+    for (const d of r) if (isObj(d) && typeof d.date === "string") days.set(d.date, { open: hhmm(d.open, 9 * 60 + 30), close: hhmm(d.close, 16 * 60), sessionOpen: hhmm(d.session_open, 4 * 60), sessionClose: hhmm(d.session_close, 20 * 60) });
+    cal = { at: nowMs, days };
+    return days;
+  };
+
   const list = async (): Promise<Market[]> => {
     if (listed && Date.now() - listed.at < LIST_MS) return listed.all;
     const [stocks, coins] = await Promise.all([getJson(`${c.base}/v2/assets?status=active&asset_class=us_equity`, 30_000), soft(`${c.base}/v2/assets?status=active&asset_class=crypto`)]);
@@ -426,8 +539,20 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
     if (pair && !inDollars(pair[2]!)) throw no("E_ACCOUNT_UNPRICED", { venue: c.venue, message: `${symbol} is priced in ${pair[2]}: the account trades markets priced in dollars, so that every limit means dollars` });
     if (!pair && !STOCK.test(symbol)) throw no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name} lists no market "${raw.trim()}": a stock is its ticker (AAPL), a coin a pair (BTC/USD)` });
     const assetUrl = `${c.base}/v2/assets/${encodeURIComponent(symbol)}`;
-    // a stock's asset, the clock and its price are asked at once; a pair needs no clock (crypto trades every day, around the clock)
-    const [assetR, clock, quote, trade] = await Promise.all([call(assetUrl), pair ? undefined : soft(`${c.base}/v2/clock`), pair ? undefined : soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`), pair ? undefined : soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/trades/latest`)]);
+    const nowMs = c.clock();
+    // a stock's asset, the clock, the calendar and its price are asked at once; a pair needs no clock (crypto trades every day, around the
+    // clock)
+    const [assetR, clock, days, quote0, trade0] = await Promise.all([call(assetUrl), pair ? undefined : soft(`${c.base}/v2/clock`), pair ? undefined : calendar(nowMs), pair ? undefined : soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`), pair ? undefined : soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/trades/latest`)]);
+    const ph = pair ? undefined : phaseOf(nowMs, clock, days);
+    // in the overnight session the day feed's last quote is the evening's: the quote and trade are asked again on Alpaca's overnight feed
+    // (feed=overnight, Blue Ocean's, the one a key without a subscription may read), kept only when it has a price
+    let quote = quote0;
+    let trade = trade0;
+    if (ph?.phase === "overnight") {
+      const [q, t] = await Promise.all([soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest?feed=overnight`), soft(`${DATA}/v2/stocks/${encodeURIComponent(symbol)}/trades/latest?feed=overnight`)]);
+      if (isObj(q) && !isRefusal(q) && isObj(q.quote) && (positive(q.quote.bp) || positive(q.quote.ap))) quote = q;
+      if (isObj(t) && !isRefusal(t) && isObj(t.trade) && positive(t.trade.p)) trade = t;
+    }
     if (assetR.status === 404 || (assetR.status === 422 && /not found/i.test(assetR.text))) throw no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name} lists no market ${symbol}`, native: { status: assetR.status, said: redact(assetR.text, secrets).slice(0, 200) } });
     if (assetR.status !== 200 || !isObj(assetR.body)) throw refusal(assetR);
     const asset = assetR.body;
@@ -457,21 +582,34 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
     const priceStep = price !== undefined && price < 1 ? 0.0001 : 0.01;
     let note = m.note;
     let types = m.types;
+    const attrs = Array.isArray(asset.attributes) ? asset.attributes.map(String) : [];
+    // the overnight session trades the stocks Alpaca marks overnight_tradable (and not overnight_halted); pre-market and after-hours every one
+    const overnightOk = attrs.includes("overnight_tradable") && !attrs.includes("overnight_halted");
+    const extended = !!ph && m.open && (ph.phase === "pre" || ph.phase === "after" || (ph.phase === "overnight" && overnightOk));
     if (m.open) {
-      // Outside the regular session Alpaca still takes the order and holds it (status `accepted`) until the next one: an order with
-      // extended_hours unset — and the account never sets it — waits for 9:30 New York time. A limit order held so fills at its limit or
-      // better; a market order would fill at the opening price, which can be well past the price it was valued at here (and past the cap
-      // and the agent's limit, which allow 2%). So until the clock says the market is open, no market order is offered. A limit, a
-      // stop-limit and a stop (sent as a stop-limit at its worst price) each carry a limit, and wait for the open with it.
+      // Outside the regular session Alpaca still takes the order and holds it (status `accepted`) until the next one: an order without
+      // extended_hours waits for 9:30 New York time. A limit order held so fills at its limit or better; a market order would fill at the
+      // opening price, which can be well past the price it was valued at here (and past the cap and the agent's limit, which allow 2%). So
+      // until the clock says the market is open, no market order is offered. A limit, a stop-limit and a stop (sent as a stop-limit at its
+      // worst price) each carry a limit, and wait for the open with it — or, a limit sent with extended hours, trade in the session that is
+      // on (pre-market, after-hours, overnight for a stock Alpaca trades overnight).
       const isOpen = isObj(clock) && !isRefusal(clock) && clock.is_open === true;
       if (!isOpen) types = types.filter((t) => t !== "market");
-      if (isObj(clock) && clock.is_open === false) note = `the US stock market is closed: ${c.name} holds an order and sends it when the market opens${nyTime(clock.next_open) ? ` (${nyTime(clock.next_open)} New York time)` : ""}. Until then no market order is placed here: it would fill at the opening price, which can be well away from this one. A limit, stop or stop-limit order waits for the open with its limit`;
+      const opens = nyTime(isObj(clock) ? clock.next_open : undefined);
+      const until = ph?.endsAt ? ` until ${nyStamp(ph.endsAt)} New York time` : "";
+      const held = `one without, and any market, stop or stop-limit order, ${c.name} holds for the regular session${opens ? ` (${opens} New York time)` : ""}`;
+      if (ph && (ph.phase === "pre" || ph.phase === "after")) note = `the regular session is closed — ${ph.phase === "pre" ? "pre-market" : "after-hours"} trading is on${until}: a limit order sent with extended hours fills in this session; ${held}`;
+      else if (ph && ph.phase === "overnight" && overnightOk) note = `the overnight session is on${until} (Blue Ocean ATS, through ${c.name}): a limit order sent with extended hours trades now; ${held}`;
+      else if (ph && ph.phase === "overnight") note = `the overnight session is on${until}, but ${c.name} does not trade ${symbol} overnight: an order waits for pre-market (04:00 New York time) or the regular session${opens ? ` (${opens} New York time)` : ""}`;
+      else if (isObj(clock) && clock.is_open === false) note = `the US stock market is closed: ${c.name} holds an order and sends it when the market opens${opens ? ` (${opens} New York time)` : ""}. Until then no market order is placed here: it would fill at the opening price, which can be well away from this one. A limit, stop or stop-limit order waits for the open with its limit`;
       else if (isRefusal(clock)) note = `${c.name}'s market clock did not answer, so no market order is placed here: outside market hours ${c.name} holds an order until the market opens, and a market order would fill at the opening price`;
       if (price === undefined && isRefusal(quote)) note = `${note ? `${note} · ` : ""}${c.name}'s market data did not answer: ${quote.message}`;
     }
-    // the session, by Alpaca's own clock: in session now, and when it next opens and closes. At night a stock is open (Alpaca takes an order
-    // and holds it for the open) and out of its session. No clock answer: unknown, and no session is said
-    const session = sessionOf(clock);
+    // the session, by Alpaca's own clock: in session now, and when it next opens and closes; which session is on, by its calendar (phaseOf),
+    // and whether a limit order may be sent for it. At night a stock is open (Alpaca takes an order and holds it for the open) and out of
+    // its regular session. No clock answer: unknown, and no session is said
+    const s0 = sessionOf(clock);
+    const session: MarketSession | undefined = s0 ? { ...s0, ...(ph ? { phase: ph.phase, ...(ph.endsAt ? { phaseEndsAt: ph.endsAt } : {}), extendedHours: extended } : {}) } : undefined;
     return { ...m, price, bid, ask, priceStep, note, types, ...(session ? { session } : {}) };
   };
 
@@ -560,7 +698,13 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
 
     async markets(query) {
       try {
-        return pick(await list(), query);
+        const all = await list();
+        if (query.trim()) return pick(all, query);
+        // nothing typed: the well-known markets, then what the screener says moves today (as listed, tradable), then the listing's own
+        // order up to twenty — so a key whose screener does not answer starts from the same twenty as before
+        const by = new Map(all.map((m) => [m.symbol, m]));
+        const start = [...KNOWN, ...(await moving())].map((s) => by.get(s)).filter((m): m is Market => m !== undefined);
+        return [...new Set([...start, ...all])].slice(0, Math.min(START_MAX, Math.max(20, new Set(start).size)));
       } catch (err) {
         return asRefusal(c.venue, c.name, err, secrets);
       }
@@ -593,6 +737,10 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
         if (o.postOnly) return badOrder(c.venue, c.name, "no post-only order is taken here");
         if (o.reduceOnly) return badOrder(c.venue, c.name, "no reduce-only order is taken here: an order can open or grow a position");
         const pair = PAIR.exec(o.symbol);
+        // extended hours: a stock's limit order, day or gtc, for the session that is on (Alpaca's extended_hours: "Only limit orders with
+        // time_in_force of day or gtc are accepted"); anything else with the flag is refused here, in words, not sent without it
+        if (o.extendedHours && pair) return badOrder(c.venue, c.name, "extended hours are a stock's: a coin pair trades around the clock");
+        if (o.extendedHours && o.type !== "limit") return badOrder(c.venue, c.name, `${c.name} takes a limit order in extended hours, not a ${named} order`);
         if (pair && !inDollars(pair[2]!)) return no("E_ACCOUNT_UNPRICED", { venue: c.venue, message: `${o.symbol} is priced in ${pair[2]}: the account trades markets priced in dollars, so that every limit means dollars` });
         const fraction = !pair && !isWhole(o.qty);
         const cid = idOf(o.clientId);
@@ -608,7 +756,8 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
         // order's rest would be — and anything else of a pair's gtc. A stock market order is day: a day limit at the worst price fills at once
         // at that price or better, and what it cannot fill waits on the book for that price and lapses at the close. A whole-share limit, stop
         // or stop-limit is gtc, as a resting order is on an exchange; Alpaca cancels a gtc order by itself 90 days on. A fraction is day.
-        // extended_hours is never set: a stock market order is offered only while the clock says the regular session is open. Older pages said
+        // extended_hours goes only when the order asks for it (a limit, day or gtc, for the session that is on); a stock market order is
+        // offered only while the clock says the regular session is open. Older pages said
         // a fraction goes only as a market order; the newer table takes day limits, stops and stop-limits too: they are sent, and Alpaca's own
         // refusal is the answer if it says otherwise.
         const tif: TimeInForce = o.tif ?? (pair ? (o.type === "market" ? "ioc" : "gtc") : fraction || o.type === "market" ? "day" : "gtc");
@@ -634,7 +783,7 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
         }
         const kind = stopped ? "stop_limit" : "limit";
         const sent: Sent = { symbol: o.symbol, side: o.side, type: kind, qty: o.qty, limitPrice: limit!, ...(stopped ? { stopPrice: o.stopPrice! } : {}) };
-        const body: Record<string, string> = { symbol: o.symbol, qty: plain(o.qty, 9), side: o.side, type: kind, limit_price: plain(limit!, 9), ...(stopped ? { stop_price: plain(o.stopPrice!, 9) } : {}), time_in_force: tif, client_order_id: cid };
+        const body: Record<string, string | boolean> = { symbol: o.symbol, qty: plain(o.qty, 9), side: o.side, type: kind, limit_price: plain(limit!, 9), ...(stopped ? { stop_price: plain(o.stopPrice!, 9) } : {}), time_in_force: tif, client_order_id: cid, ...(o.extendedHours ? { extended_hours: true } : {}) };
         let r: HttpReply;
         try {
           r = await call(`${c.base}/v2/orders`, "POST", body);

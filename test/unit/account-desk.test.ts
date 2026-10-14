@@ -8,7 +8,7 @@ import { BRAIN_MODELS, deskPath, readRoom, ROLE_SPECS, ROLES, scriptedBrain, typ
 import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
-import type { LiveTrader, Market, OrderState } from "../../src/portfolio/live/trade.ts";
+import { ceilTo, floorTo, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderType } from "../../src/portfolio/live/trade.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
 
@@ -29,11 +29,13 @@ const codex = simKey("agent:codex");
 const SPOT = (symbol: string, price: number): Market => ({ symbol, name: symbol, kind: "spot", base: symbol.split("/")[0]!, quote: "USDT", price, bid: price * 0.9995, ask: price * 1.0005, minQty: 0.0001, qtyStep: 0.0001, priceStep: 0.1, open: true, types: ["market", "limit"], volumeUsd24h: 2_000_000_000, changePct24h: 2.5 });
 
 /** a stand-in exchange: market orders fill at once at the market's price; `markets` is mutable, so a test moves prices between cycles */
-function traderOf(markets: Record<string, Market>): LiveTrader & { states: Map<string, OrderState> } {
+function traderOf(markets: Record<string, Market>): LiveTrader & { states: Map<string, OrderState>; placed: OrderRequest[] } {
   const states = new Map<string, OrderState>();
+  const placed: OrderRequest[] = [];
   let n = 0;
   return {
     states,
+    placed,
     can: true,
     what: "spot",
     async markets(q) {
@@ -44,9 +46,11 @@ function traderOf(markets: Record<string, Market>): LiveTrader & { states: Map<s
       return markets[symbol] ? { ...markets[symbol]! } : no("E_VENUE_REJECTED", { venue: "ex", message: `no market ${symbol}` });
     },
     async place(o) {
+      placed.push(o);
       const ref = `o-${++n}`;
       const m = markets[o.symbol]!;
-      const s: OrderState = o.type === "market" ? { ref, status: "filled", filledQty: o.qty, avgPrice: o.side === "buy" ? m.ask! : m.bid!, feeUsd: 0.01, native: {} } : { ref, status: "open", filledQty: 0, native: {} };
+      // a market order fills at the book; so does a limit with extended hours (a marketable limit in the session that is on)
+      const s: OrderState = o.type === "market" || o.extendedHours ? { ref, status: "filled", filledQty: o.qty, avgPrice: o.side === "buy" ? m.ask! : m.bid!, feeUsd: 0.01, native: {} } : { ref, status: "open", filledQty: 0, native: {} };
       states.set(ref, s);
       return s;
     },
@@ -390,6 +394,36 @@ describe("the floor, the clock, the words", () => {
     expect(v.objective).toMatchObject({ text: "Majors only, smaller", maxRiskPct: 0.5, venue: "ex" });
     expect(v.seats.find((s) => s.role === "risk")?.charter.never).toBe("Clear anything on a Friday.");
     expect(v.seats.find((s) => s.role === "risk")?.charter.owns).toBe(ROLE_SPECS.risk.charter.owns);
+  });
+
+  it("outside the regular session, where the venue trades the session that is on, the Sniper's entry and the Exit's close go as day limits with extended hours", async () => {
+    const night = (price: number): Market => ({ ...SPOT("AAPL", price), kind: "stock", types: ["limit", "stop", "stop_limit"] as OrderType[], tifs: ["day", "gtc"], session: { open: false, opensAt: "2026-10-13T13:30:00.000Z", phase: "overnight", phaseEndsAt: "2026-10-13T08:00:00.000Z", extendedHours: true } });
+    const brain = brainOf({ search: () => ({ leads: [{ symbol: "AAPL", side: "buy", thesis: "overnight momentum", confidence: 0.7 }], note: "" }) });
+    const { desk, hire, own, markets, advance, home, trader } = await boot({ brain, prices: { AAPL: night(200) } });
+    await hire();
+    await own({ type: "setPolicy", change: "mode", value: "open" });
+    await desk.cycle("test");
+    let v = (await desk.view())!;
+    expect(v.open.map((l) => [l.id, l.state])).toEqual([["L-0001", "executed"]]);
+    const entryLimit = ceilTo(markets.AAPL!.ask! * 1.005, 0.1);
+    expect(trader.placed[0]).toMatchObject({ symbol: "AAPL", side: "buy", type: "limit", tif: "day", extendedHours: true, limitPrice: entryLimit });
+    expect(readRoom(home).some((m) => m.from === "sniper" && m.text.includes(`the regular session is closed (overnight session): the entry goes as a day limit at ${entryLimit} with extended hours`))).toBe(true);
+    expect(readRoom(home).find((m) => m.from === "risk" && m.kind === "clearance")?.text).toContain("market open (overnight session, extended hours)");
+    // the mark reaches the take-profit: the close goes the same way, a sell a little under the bid
+    markets.AAPL = night(206);
+    advance(2 * 60_000);
+    await desk.cycle("test");
+    const exitLimit = floorTo(markets.AAPL.bid! * 0.995, 0.1);
+    expect(trader.placed[1]).toMatchObject({ symbol: "AAPL", side: "sell", type: "limit", tif: "day", extendedHours: true, limitPrice: exitLimit });
+    expect(readRoom(home).some((m) => m.text.includes(`the close goes as a day limit at ${exitLimit} with extended hours`))).toBe(true);
+    // in the regular session the entry is a market order, as before
+    markets.AAPL = { ...night(200), types: ["market", "limit"], session: { open: true, phase: "regular", extendedHours: false } };
+    advance(60 * 60_000);
+    await desk.cycle("test");
+    expect(trader.placed.at(-1)).toMatchObject({ symbol: "AAPL", side: "buy", type: "market" });
+    expect(trader.placed.at(-1)).not.toHaveProperty("extendedHours");
+    v = (await desk.view())!;
+    expect(v.open.map((l) => l.state)).toEqual(["executed"]);
   });
 
   it("without a brain nothing is made up: the room says so, the plan's exits still run, no lead appears", async () => {

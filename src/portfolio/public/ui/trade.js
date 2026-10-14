@@ -619,7 +619,7 @@ const TK_STOPPED = ["stop", "stop_limit"];
 function tkOrderDraft(f, { venue, symbol, side, event }) {
   const t = f.orderType || "market";
   const amount = String(f.amount || "").trim();
-  return { type: "liveOrder", venue, symbol, side, orderType: t, ...(f.unit === "qty" ? { qty: amount } : { usd: amount }), limitPrice: TK_LIMITED.includes(t) ? tkPriceIn(f.limitPrice, event) : "", stopPrice: TK_STOPPED.includes(t) ? tkPriceIn(f.stopPrice, event) : "", tif: f.tif || "", postOnly: t === "limit" && f.postOnly ? "true" : "", reduceOnly: f.reduceOnly ? "true" : "" };
+  return { type: "liveOrder", venue, symbol, side, orderType: t, ...(f.unit === "qty" ? { qty: amount } : { usd: amount }), limitPrice: TK_LIMITED.includes(t) ? tkPriceIn(f.limitPrice, event) : "", stopPrice: TK_STOPPED.includes(t) ? tkPriceIn(f.stopPrice, event) : "", tif: f.tif || "", postOnly: t === "limit" && f.postOnly ? "true" : "", reduceOnly: f.reduceOnly ? "true" : "", extendedHours: t === "limit" && f.extendedHours ? "true" : "" };
 }
 
 /** THE TICKET. Find the market (at the connected venues and at the venues that publish prices without a key), pick where (the best price of
@@ -646,7 +646,7 @@ function tkTicket(panel, kind0, preset) {
       <div class="row2"><label class="fld">Order<select name="orderType"><option value="market">Market</option><option value="limit">Limit</option></select></label><label class="fld" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /></label></div>
       <div class="row2" data-stop hidden><label class="fld"><span data-stop-l>Stop price</span><input name="stopPrice" inputmode="decimal" autocomplete="off" /></label></div>
       <div class="tk-lev" data-lev hidden></div>
-      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="dim small tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce-only</label></div></div></details>
+      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="dim small tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
       <div class="quote real" data-q><span class="dim">Type an amount.</span></div>
       <div data-sign></div>
       <div class="msg" data-msg role="status"></div>
@@ -681,6 +681,11 @@ function tkTicket(panel, kind0, preset) {
   let seq = 0;
   let stopLeft = () => {};
   let presetUsed = false;
+  // the extended-hours switch is set on for a market whose session takes one, until the owner touches it
+  let ehTouched = false;
+  form.addEventListener("change", (e) => {
+    if (e.target && e.target.name === "extendedHours") ehTouched = true;
+  });
   // paying with a coin held (Crypto, a buy): the two-step plan and, once its sale went, the buy waiting for the fill
   let pay = "";
   let payPlan = null;
@@ -935,6 +940,7 @@ function tkTicket(panel, kind0, preset) {
     q("[data-limit-l]").textContent = ev ? "Limit (¢)" : "Limit price";
     q("[data-stop-l]").textContent = ev ? "Stop (¢)" : "Stop price";
     q("[data-post]").hidden = !(mk && mk.postOnly && t === "limit");
+    q("[data-eh]").hidden = !(mk && mk.session && mk.session.extendedHours && t === "limit");
     // the times in force this order type takes here (a venue may take "Today only" for a stop and not for a limit); the select's options
     // are rewritten only when they differ, so one open under the pointer stays open
     const sel = q("[data-tif] select");
@@ -980,8 +986,12 @@ function tkTicket(panel, kind0, preset) {
       setOptions(tifSel, [["", "The venue's default"], ...m.tifs.map((t) => [t, TK_TIF_NAMES[t] || t])], presetUsed ? tifSel.value : preset.tif || "");
     }
     q("[data-reduce]").hidden = !m.reduceOnly;
+    // outside the regular session, where the venue trades the session that is on, a limit goes with extended hours unless the owner says not
+    const takesEh = !!(m.session && m.session.extendedHours);
+    if (!takesEh) form.elements.extendedHours.checked = false;
+    else if (!ehTouched) form.elements.extendedHours.checked = true;
     const more = q("[data-more]");
-    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly && !m.reduceOnly;
+    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly && !m.reduceOnly && !takesEh;
     // Advanced is folded and holds only what the market takes; a market that takes none of it has no Advanced
     q("[data-adv]").hidden = more.hidden;
     if (!pay || isDollar(pay)) form.elements.unit.options[1].textContent = unitName(m);
@@ -1472,7 +1482,7 @@ function tkOrderWords(p, m) {
   const unit = UNITS[q.kind] || q.base;
   const at = (n) => (ev ? tkCents(n) : `${px(n)} ${q.quote}`);
   const how = a.orderType === "stop" ? `when the price reaches ${esc(at(a.stopPrice))}, at market` : a.orderType === "stop_limit" ? `when the price reaches ${esc(at(a.stopPrice))}, a limit at ${esc(at(a.limitPrice))}` : `at ${esc(at(a.limitPrice || q.price))}`;
-  const flags = [a.tif ? TK_TIF_NAMES[a.tif] : "", a.postOnly ? "post-only" : "", a.reduceOnly ? "reduce-only" : ""].filter(Boolean).join(" · ");
+  const flags = [a.tif ? TK_TIF_NAMES[a.tif] : "", a.postOnly ? "post-only" : "", a.reduceOnly ? "reduce-only" : "", a.extendedHours ? "extended hours" : ""].filter(Boolean).join(" · ");
   const n = Number(a.qty);
   const what = ev ? `${m && m.outcome ? m.outcome : q.name}` : unit === q.base ? q.base : `${unit} · ${q.base}`;
   return `<div class="big"><span>${a.side === "buy" ? "Buy" : "Sell"} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${esc(q.name)} ${how}${(a.orderType === "market" || a.orderType === "stop") && a.side === "buy" ? ` · up to ${money(q.maxUsd)} if the price moves` : ""}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(q.notionalUsd)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(q.notionalUsd)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<div class="path">${esc(q.note)}</div>` : ""}`;
@@ -1525,14 +1535,15 @@ function tkConnectTo(a) {
  * (its times in force, per type where they differ; whether a limit may be post-only or an order reduce-only), never invented */
 function tkAdvSummary(m, f = {}) {
   const t = f.orderType || "market";
-  const set = [f.tif ? TK_TIF_NAMES[f.tif] || f.tif : "", t === "limit" && f.postOnly ? "post-only" : "", f.reduceOnly ? "reduce-only" : ""].filter(Boolean);
+  const eh = !!(m.session && m.session.extendedHours);
+  const set = [f.tif ? TK_TIF_NAMES[f.tif] || f.tif : "", t === "limit" && f.postOnly ? "post-only" : "", f.reduceOnly ? "reduce-only" : "", t === "limit" && eh && f.extendedHours ? "extended hours" : ""].filter(Boolean);
   if (set.length) return set.join(" · ");
   const allowed = (m.tifsByType && m.tifsByType[t]) || m.tifs || [];
   const word = (x) => (TK_TIF_NAMES[x] || x).toLowerCase();
-  if (!allowed.length && !m.postOnly && !m.reduceOnly) return "The venue's defaults: no time in force, post-only or reduce-only is set from here";
+  if (!allowed.length && !m.postOnly && !m.reduceOnly && !eh) return "The venue's defaults: no time in force, post-only or reduce-only is set from here";
   if (allowed.length && allowed.every((x) => x === "ioc" || x === "fok")) return `A ${(TK_TYPE_NAMES[t] || t).toLowerCase()} order here fills now or is cancelled (${allowed.join("/")})`;
   if (allowed.length && !allowed.includes("gtc")) return `Never rests until cancelled here: ${allowed.map(word).join(" or ")}`;
-  return `${allowed.length ? `The venue's default · ${allowed.map(word).join(" · ")}` : "The venue's default time in force"}${m.postOnly && t === "limit" ? " · post-only possible" : ""}${m.reduceOnly ? " · reduce-only possible" : ""}`;
+  return `${allowed.length ? `The venue's default · ${allowed.map(word).join(" · ")}` : "The venue's default time in force"}${m.postOnly && t === "limit" ? " · post-only possible" : ""}${m.reduceOnly ? " · reduce-only possible" : ""}${eh && t === "limit" ? " · extended hours possible" : ""}`;
 }
 
 /* a stock market's session as the face says it — open now and when it closes, or closed and when it opens — from the venue's own clock or
@@ -1542,7 +1553,15 @@ function tkSessionLine(s) {
   if (!s || typeof s.open !== "boolean") return "";
   const at = s.open ? s.closesAt : s.opensAt;
   const when = at && Number.isFinite(Date.parse(at)) ? at : "";
-  return s.open ? `<b>Open now</b>${when ? ` · closes ${esc(nyTime(when))} New York` : ""}` : `<b>Closed</b>${when ? ` · opens ${esc(nyDay(when))}, ${esc(nyTime(when))} New York` : ""}`;
+  // a session the venue trades outside the regular one (Alpaca's pre-market, after-hours, overnight): what is on, until when, and whether a
+  // limit order with extended hours trades in it now — on New York's clock and the viewer's own
+  const ph = s.phase && s.phase !== "regular" && s.phase !== "closed" ? s.phase : "";
+  if (ph) {
+    const ends = s.phaseEndsAt && Number.isFinite(Date.parse(s.phaseEndsAt)) ? s.phaseEndsAt : "";
+    const name = { pre: "Pre-market", after: "After-hours", overnight: "Overnight session" }[ph] || ph;
+    return `<b>${esc(name)}</b>${ends ? ` · until ${esc(nyTime(ends))} New York${esc(yourTime(ends))}` : ""}${s.extendedHours ? " · a limit order with extended hours trades now" : " · orders wait for the regular session"}${when ? ` · regular session opens ${esc(nyDay(when))}, ${esc(nyTime(when))} New York${esc(yourTime(when))}` : ""}`;
+  }
+  return s.open ? `<b>Open now</b>${when ? ` · closes ${esc(nyTime(when))} New York${esc(yourTime(when))}` : ""}` : `<b>Closed</b>${when ? ` · opens ${esc(nyDay(when))}, ${esc(nyTime(when))} New York${esc(yourTime(when))}` : ""}`;
 }
 
 /* the one line to the sibling kind, when the ticket found one: a stock as a token (RWAs), a token as shares (Stocks) */

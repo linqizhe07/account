@@ -3065,6 +3065,7 @@ const KIND_HERE: Record<string, { name: string; group: VenueHere["group"] }> = {
   polymarket: { name: "Polymarket · by address", group: "Markets and tokens" },
   "hyperliquid-trade": { name: "Hyperliquid", group: "Markets and tokens" },
   "hyperliquid-paper": { name: "Hyperliquid · paper (testnet)", group: "Markets and tokens" },
+  "alpaca-paper": { name: "Alpaca · paper", group: "Brokers" },
   paper: { name: "Paper account (nothing to connect)", group: "Paper" },
   hyperliquid: { name: "Hyperliquid · by address", group: "Markets and tokens" },
   ondo: { name: "Ondo · OUSG", group: "Markets and tokens" },

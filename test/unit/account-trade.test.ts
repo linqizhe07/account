@@ -150,7 +150,7 @@ describe("orders at venues connected live", () => {
     const p = await x.prepared({ symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "30" });
     if (isRefusal(p)) throw new Error(p.message);
     // $30 at the ask of 60,010 is 0.000499… BTC, down to the step: 0.0004; worth $24.00, and up to 2% more for a market buy
-    expect([p.action, p.accountChain, p.quote?.order?.notionalUsd]).toEqual([{ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", qty: "0.0004", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "", maxNotional: "24.49", deadline: 5_600_000, nonce: p.action.nonce }, "Live · real money", 24]);
+    expect([p.action, p.accountChain, p.quote?.order?.notionalUsd]).toEqual([{ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", qty: "0.0004", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "", extendedHours: "", maxNotional: "24.49", deadline: 5_600_000, nonce: p.action.nonce }, "Live · real money", 24]);
     const o = placed(await x.order({ symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "30" }));
     // the venue gets the worst price it may fill at (2% over the ask, down to the price step) and a client id no other run sends
     expect(x.venue.placed).toEqual([{ symbol: "BTC/USDT", side: "buy", type: "market", qty: 0.0004, worstPrice: 61_210.2, clientId: o.clientId }]);
@@ -531,3 +531,35 @@ describe("the same thing at every venue", () => {
   });
 });
 
+describe("extended hours", () => {
+  it("a limit order for the session that is on goes with the flag where the market's session takes one; refused where it does not, and for anything but a limit", async () => {
+    const { venue, order, prepared } = await boot();
+    const AAPL: Market = { symbol: "AAPL", name: "Apple", kind: "stock", base: "AAPL", quote: "USD", price: 200, bid: 199.9, ask: 200.1, qtyStep: 1e-9, priceStep: 0.01, minNotional: 1, open: true, types: ["limit", "stop", "stop_limit"], tifs: ["day", "gtc"], session: { open: false, opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-06T20:00:00.000Z", phase: "overnight", phaseEndsAt: "2026-10-06T08:00:00.000Z", extendedHours: true } };
+    venue.markets.AAPL = AAPL;
+    const draft = { symbol: "AAPL", side: "buy", orderType: "limit", usd: "20", limitPrice: "201", tif: "day", extendedHours: "true" };
+    const p = await prepared(draft);
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.action).toMatchObject({ orderType: "limit", tif: "day", extendedHours: "true", limitPrice: "201" });
+    expect(p.quote?.words).toContain("(DAY, extended hours · overnight)");
+    const o = placed(await order(draft));
+    expect(o.extendedHours).toBe(true);
+    expect(venue.placed.at(-1)).toMatchObject({ symbol: "AAPL", type: "limit", limitPrice: 201, tif: "day", extendedHours: true });
+    // the flag on anything but a limit is refused before the venue is asked; so is a word that is not "true"
+    const asked = venue.asked;
+    expect(refusal(await prepared({ ...draft, orderType: "stop_limit", stopPrice: "199" })).message).toBe("extended hours are for a limit order: a venue that trades outside its regular session takes a limit there and nothing else");
+    expect(venue.asked).toBe(asked);
+    // a signed order with a word that is not "true": refused at the door (the page's prepare never writes one)
+    expect(refusal(await order(draft, { extendedHours: "maybe" })).message).toBe('extended hours is "true", or left out');
+    // the regular session on, or a market whose venue keeps no such session: no extended-hours order
+    venue.markets.AAPL = { ...AAPL, types: ["market", "limit"], session: { open: true, phase: "regular", extendedHours: false } };
+    const day = refusal(await prepared(draft));
+    expect([day.code, day.message]).toEqual(["E_VENUE_ORDER_INVALID", "Stand-in takes no extended-hours order in Apple now (the regular session is on)"]);
+    venue.markets.AAPL = { ...AAPL, session: { open: false, phase: "overnight", extendedHours: false }, note: "Stand-in does not trade AAPL overnight" };
+    expect(refusal(await prepared(draft)).message).toBe("Stand-in takes no extended-hours order in Apple now (overnight session): Stand-in does not trade AAPL overnight");
+    expect(refusal(await prepared({ symbol: "BTC/USDT", side: "buy", orderType: "limit", usd: "20", limitPrice: "50000", extendedHours: "true" })).message).toBe("Stand-in takes no extended-hours order in BTC/USDT now");
+    // without the flag the same limit goes, and no flag reaches the venue
+    const plain = placed(await order({ ...draft, extendedHours: "" }));
+    expect(plain.extendedHours).toBeUndefined();
+    expect(venue.placed.at(-1)).not.toHaveProperty("extendedHours");
+  });
+});

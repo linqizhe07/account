@@ -112,7 +112,7 @@ export type OwnerAction =
   /** An ORDER at a venue connected live, on the owner's signature: the market, the side, the exact size in the market's own units, the limit
    * price ("" for a market order), the most the order may be worth in dollars when it is placed (a price that has moved past it is a new
    * signature), and the moment after which it is void */
-  | { type: "liveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; limitPrice: string; /** a stop or stop-limit order's trigger; "" otherwise */ stopPrice: string; /** "gtc" · "ioc" · "fok" · "day", or "" for the venue's own default */ tif: string; /** "true" or "" */ postOnly: string; reduceOnly: string; maxNotional: string; deadline: number; nonce: number }
+  | { type: "liveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; limitPrice: string; /** a stop or stop-limit order's trigger; "" otherwise */ stopPrice: string; /** "gtc" · "ioc" · "fok" · "day", or "" for the venue's own default */ tif: string; /** "true" or "" */ postOnly: string; reduceOnly: string; /** "true" or "": a limit order for the extended session that is on (pre-market, after-hours, overnight) */ extendedHours: string; maxNotional: string; deadline: number; nonce: number }
   /** cancel an order the account placed (its id on the account, `ord-0001`) */
   | { type: "liveCancel"; venue: string; order: string; nonce: number }
   /** change an open order in place: its new size, limit and stop ("" keeps what it was), the most it may then be worth, and ten minutes */
@@ -166,7 +166,7 @@ export type AgentAction =
   | { type: "agentLiveMove"; kind: string; from: string; fromLedger: string; to: string; toLedger: string; asset: string; toAsset: string; network: string; amount: string; maxFee: string; nonce: number }
   /** an agent's ORDER at a venue connected live: a size in the market's units (`qty`) or in dollars (`usd`), one of the two; a limit price, or
    * "" for a market order. Inside its trading limit: Beast places it at once, Guard asks the owner on a card */
-  | { type: "agentLiveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; usd: string; limitPrice: string; /** optional: a stop's trigger, the time in force, post-only, reduce-only ("true") */ stopPrice?: string | undefined; tif?: string | undefined; postOnly?: string | undefined; reduceOnly?: string | undefined; nonce: number }
+  | { type: "agentLiveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; usd: string; limitPrice: string; /** optional: a stop's trigger, the time in force, post-only, reduce-only ("true") */ stopPrice?: string | undefined; tif?: string | undefined; postOnly?: string | undefined; reduceOnly?: string | undefined; extendedHours?: string | undefined; nonce: number }
   /** an agent cancels an order it placed itself */
   | { type: "agentLiveCancel"; venue: string; order: string; nonce: number }
   /** an agent changes an order it placed itself: its new size, limit or stop ("" keeps what it was) */
@@ -253,7 +253,7 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   connectVenue: { primary: "AccountTransaction:ConnectVenue", fields: [{ name: "venue", type: "string" }, { name: "connector", type: "string" }, { name: "label", type: "string" }, { name: "credentialRef", type: "string" }, NONCE] },
   disconnectVenue: { primary: "AccountTransaction:DisconnectVenue", fields: [{ name: "venue", type: "string" }, NONCE] },
   liveMove: { primary: "AccountTransaction:LiveMove", fields: [{ name: "kind", type: "string" }, { name: "from", type: "string" }, { name: "fromLedger", type: "string" }, { name: "to", type: "string" }, { name: "toLedger", type: "string" }, { name: "asset", type: "string" }, { name: "toAsset", type: "string" }, { name: "network", type: "string" }, { name: "amount", type: "string" }, { name: "toAddress", type: "string" }, { name: "maxFee", type: "string" }, { name: "deadline", type: "uint64" }, NONCE] },
-  liveOrder: { primary: "AccountTransaction:LiveOrder", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "side", type: "string" }, { name: "orderType", type: "string" }, { name: "qty", type: "string" }, { name: "limitPrice", type: "string" }, { name: "stopPrice", type: "string" }, { name: "tif", type: "string" }, { name: "postOnly", type: "string" }, { name: "reduceOnly", type: "string" }, { name: "maxNotional", type: "string" }, { name: "deadline", type: "uint64" }, NONCE] },
+  liveOrder: { primary: "AccountTransaction:LiveOrder", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "side", type: "string" }, { name: "orderType", type: "string" }, { name: "qty", type: "string" }, { name: "limitPrice", type: "string" }, { name: "stopPrice", type: "string" }, { name: "tif", type: "string" }, { name: "postOnly", type: "string" }, { name: "reduceOnly", type: "string" }, { name: "extendedHours", type: "string" }, { name: "maxNotional", type: "string" }, { name: "deadline", type: "uint64" }, NONCE] },
   liveCancel: { primary: "AccountTransaction:LiveCancel", fields: [{ name: "venue", type: "string" }, { name: "order", type: "string" }, NONCE] },
   liveAmend: { primary: "AccountTransaction:LiveAmend", fields: [{ name: "venue", type: "string" }, { name: "order", type: "string" }, { name: "qty", type: "string" }, { name: "limitPrice", type: "string" }, { name: "stopPrice", type: "string" }, { name: "maxNotional", type: "string" }, { name: "deadline", type: "uint64" }, NONCE] },
   liveClose: { primary: "AccountTransaction:LiveClose", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "qty", type: "string" }, NONCE] },
@@ -322,7 +322,7 @@ const AGENT_TEXT: Partial<Record<AgentAction["type"], string[]>> = {
 };
 /** text fields an agent request MAY carry (when it does, they are text too, and signed like the rest) */
 const AGENT_OPTIONAL: Partial<Record<AgentAction["type"], string[]>> = {
-  agentLiveOrder: ["stopPrice", "tif", "postOnly", "reduceOnly"],
+  agentLiveOrder: ["stopPrice", "tif", "postOnly", "reduceOnly", "extendedHours"],
 };
 
 export function malformed(action: Action): string | null {

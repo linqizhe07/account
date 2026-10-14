@@ -120,7 +120,7 @@ describe("the six kinds, as the page runs them", () => {
   });
 
   it("drafts an order from the ticket: in dollars or in the market's units, an event contract's limit typed in cents, only the flags the type takes", () => {
-    expect(p.out('tkOrderDraft({ amount: " 50 ", unit: "usd", orderType: "market" }, { venue: "ex", symbol: "BTC/USDT", side: "buy", event: false })')).toEqual({ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "50", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "" });
+    expect(p.out('tkOrderDraft({ amount: " 50 ", unit: "usd", orderType: "market" }, { venue: "ex", symbol: "BTC/USDT", side: "buy", event: false })')).toEqual({ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "50", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "", extendedHours: "" });
     expect(p.out('tkOrderDraft({ amount: "26", unit: "qty", orderType: "limit", limitPrice: "38", postOnly: "on", tif: "gtc" }, { venue: "predict", symbol: "SI-FEDCUT-DEC:NO", side: "buy", event: true })')).toMatchObject({ qty: "26", limitPrice: "0.38", postOnly: "true", tif: "gtc" });
     // a stop has no limit and is never post-only; reduce-only rides along where ticked
     expect(p.out('tkOrderDraft({ amount: "0.01", unit: "qty", orderType: "stop", limitPrice: "9", stopPrice: "60000", postOnly: "on", reduceOnly: "on" }, { venue: "ex", symbol: "BTC/USDT:USDT", side: "sell", event: false })')).toMatchObject({ limitPrice: "", stopPrice: "60000", postOnly: "", reduceOnly: "true" });
@@ -258,6 +258,38 @@ describe("the six kinds, as the page runs them", () => {
     expect(kb("predictions", fed, null, null, { side: "buy", outcome: "Yes", positions: [] })).toContain("<b>Yes</b> at 62¢ — the market gives it 62%. Each contract pays $1.00 if it happens, nothing if not.");
     // Crypto at a wallet: the venue's own line (route, slippage, gas); paid with a coin held: the two steps said
     expect(kb("crypto", { symbol: "WETH/USDC@Base", kind: "token", base: "WETH", quote: "USDC", open: true, bid: 2499, ask: 2501, note: "Route by LI.FI · 0.3% slippage · gas ≈ $0.02", types: ["market"] }, null, null, { pay: { asset: "cbBTC" } })).toMatch(/Route by LI\.FI[\s\S]*Paid with <b>cbBTC<\/b>: sold first, then WETH bought/);
+  });
+
+  it("a session outside the regular one — pre-market, after-hours, overnight — is said with when it ends, on New York's clock and the viewer's own, and whether a limit with extended hours trades now; the ticket drafts the flag only for a limit", () => {
+    const line = (s: unknown) => p.run<string>(`tkSessionLine(${JSON.stringify(s)})`);
+    const words = (s: unknown) => p.run<string>(`mkSessionWhen(${JSON.stringify(s)})`);
+    const night = { open: false, opensAt: "2026-10-14T13:30:00.000Z", closesAt: "2026-10-14T20:00:00.000Z", phase: "overnight", phaseEndsAt: "2026-10-14T08:00:00.000Z", extendedHours: true };
+    // the page's own zone is New York's here (the stand-in browser), so no "your time" follows
+    expect(p.run<string>("YOUR_ZONE")).toBeDefined();
+    expect(line(night).replace(/ \([^)]* your time\)/g, "")).toBe("<b>Overnight session</b> · until 04:00 New York · a limit order with extended hours trades now · regular session opens Wed 14 Oct, 09:30 New York");
+    expect(line({ ...night, phase: "pre", phaseEndsAt: "2026-10-14T13:30:00.000Z" }).replace(/ \([^)]* your time\)/g, "")).toBe("<b>Pre-market</b> · until 09:30 New York · a limit order with extended hours trades now · regular session opens Wed 14 Oct, 09:30 New York");
+    expect(line({ ...night, phase: "after", phaseEndsAt: "2026-10-15T00:00:00.000Z", extendedHours: false }).replace(/ \([^)]* your time\)/g, "")).toBe("<b>After-hours</b> · until 20:00 New York · orders wait for the regular session · regular session opens Wed 14 Oct, 09:30 New York");
+    expect(line({ open: false, opensAt: "2026-10-19T13:30:00.000Z", phase: "closed" }).replace(/ \([^)]* your time\)/g, "")).toBe("<b>Closed</b> · opens Mon 19 Oct, 09:30 New York");
+    expect(line({ open: true, closesAt: "2026-10-14T20:00:00.000Z", phase: "regular", extendedHours: false }).replace(/ \([^)]* your time\)/g, "")).toBe("<b>Open now</b> · closes 16:00 New York");
+    expect(words(night).replace(/ \([^)]* your time\)/g, "")).toBe("overnight session until 04:00 New York · a limit order with extended hours trades now");
+    expect(words({ open: false, opensAt: "2026-10-19T13:30:00.000Z" })).toMatch(/^opens Mon 19 Oct, 09:30 New York/);
+    // the viewer's own clock, by zone: Hong Kong's afternoon for New York's 04:00, Singapore's evening for 09:30, the next day's morning for 20:00
+    const your = (iso: string, zone: string) => p.run<string>(`yourTime(${JSON.stringify(iso)}, ${JSON.stringify(zone)})`);
+    expect(your("2026-10-14T08:00:00.000Z", "Asia/Hong_Kong")).toBe(" (16:00 your time)");
+    expect(your("2026-10-14T13:30:00.000Z", "Asia/Singapore")).toBe(" (21:30 your time)");
+    expect(your("2026-10-15T00:00:00.000Z", "Asia/Hong_Kong")).toBe(" (Thu 08:00 your time)");
+    expect(your("2026-10-14T08:00:00.000Z", "America/New_York")).toBe("");
+    expect(your("2026-10-14T08:00:00.000Z", "America/Los_Angeles")).toBe(" (01:00 your time)");
+    // Advanced's line: the flag when set, "possible" when the market's session takes it
+    const adv = (m: unknown, f: unknown) => p.run<string>(`tkAdvSummary(${JSON.stringify(m)}, ${JSON.stringify(f)})`);
+    expect(adv({ tifs: ["day", "gtc"], session: { extendedHours: true } }, { orderType: "limit", extendedHours: "on" })).toBe("extended hours");
+    expect(adv({ tifs: ["day", "gtc"], session: { extendedHours: true } }, { orderType: "limit", tif: "day", extendedHours: "on" })).toBe("Today only · extended hours");
+    expect(adv({ tifs: ["day", "gtc"], session: { extendedHours: true } }, { orderType: "limit" })).toBe("The venue's default · today only · until canceled · extended hours possible");
+    expect(adv({ session: { extendedHours: true } }, { orderType: "stop" })).toBe("The venue's default time in force");
+    // the draft carries the flag for a limit only
+    const draft = (f: unknown) => p.out(`tkOrderDraft(${JSON.stringify(f)}, { venue: "alpaca-paper", symbol: "AAPL", side: "buy", event: false })`);
+    expect(draft({ amount: "20", unit: "usd", orderType: "limit", limitPrice: "201", tif: "day", extendedHours: "on" })).toMatchObject({ orderType: "limit", limitPrice: "201", tif: "day", extendedHours: "true" });
+    expect(draft({ amount: "20", unit: "usd", orderType: "stop_limit", limitPrice: "201", stopPrice: "199", extendedHours: "on" })).toMatchObject({ orderType: "stop_limit", extendedHours: "" });
   });
 
   it("speaks the venue's rule on Advanced's one line — what is set, else what the market takes — never invented", () => {
