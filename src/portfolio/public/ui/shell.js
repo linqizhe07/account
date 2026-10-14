@@ -32,7 +32,8 @@ function renderChrome(L, owner) {
   $("stamp").textContent = `${ny(A.now, { weekday: "short", day: "numeric", month: "short" }).replace(",", "")} · ${nyTime(A.now)} New York`;
   // trading on or off, and the most one order or move may be worth (round 7's "Trading on · $100 a move"; the sentence is in Settings)
   const cap = A.connectLive && A.connectLive.writes ? Number(A.connectLive.writes.capUsd) : NaN;
-  paint($("writes"), writesOn() ? `<span class="pill up" title="Orders and moves go through only when you sign them, or inside a limit you gave an agent">Trading on${Number.isFinite(cap) ? ` · $${cap.toLocaleString("en-US")} a move` : ""}</span>` : '<span class="pill" title="Started with --read-only">Read-only</span>');
+  // the pill opens Settings, where the cap is the owner's to change
+  paint($("writes"), writesOn() ? `<button type="button" class="pill up pill-btn" data-open-settings title="Orders and moves go through only when you sign them, or inside a limit you gave an agent. The cap is yours to change in Settings">Trading on${Number.isFinite(cap) ? ` · $${cap.toLocaleString("en-US")} a move` : ""}</button>` : '<span class="pill" title="Started with --read-only">Read-only</span>');
   // the Account at the rail's foot: what it is worth, and the mode
   setText($("rail-worth"), `${money(A.liveUsd)} · ${A.mode === "open" ? "Beast" : "Guard"}`);
   for (const b of document.querySelectorAll("button[data-set-mode]")) {
@@ -112,7 +113,7 @@ function speak() {
 function drawPane(L, owner) {
   const tab = ROUTE.tab;
   const el = $(`pane-${tab}`);
-  const draw = { portfolio: typeof renderPortfolio === "function" ? renderPortfolio : null, venues: typeof renderVenues === "function" ? renderVenues : null, memory: typeof renderMemory === "function" ? renderMemory : null, markets: typeof renderMarkets === "function" ? renderMarkets : null, trade: typeof renderTrade === "function" ? renderTrade : null }[tab];
+  const draw = { portfolio: typeof renderPortfolio === "function" ? renderPortfolio : null, venues: typeof renderVenues === "function" ? renderVenues : null, memory: typeof renderMemory === "function" ? renderMemory : null, markets: typeof renderMarkets === "function" ? renderMarkets : null, trade: typeof renderTrade === "function" ? renderTrade : null, desk: typeof renderDesk === "function" ? renderDesk : null }[tab];
   try {
     if (!draw) throw new Error(`its script did not load. Reload the page`);
     draw({ el, owner, lens: lensNow(), params: ROUTE.params });
@@ -145,8 +146,11 @@ onRoute((tab, params, moved) => {
     if (a.dataset.acct === tab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  if (account) $("rail-wallet").setAttribute("aria-current", "page");
+  // the desk is the rail's Agents: that button is marked, not the wallet
+  if (account && tab !== "desk") $("rail-wallet").setAttribute("aria-current", "page");
   else $("rail-wallet").removeAttribute("aria-current");
+  if (tab === "desk") $("open-agents").setAttribute("aria-current", "page");
+  else $("open-agents").removeAttribute("aria-current");
   railPill(motion);
   if (document.activeElement !== $("search")) $("search").value = tab === "markets" ? params.q || "" : "";
   if (moved) window.scrollTo(0, 0);
@@ -302,7 +306,8 @@ function setTheme(t) {
 setTheme(document.documentElement.dataset.theme);
 /* the Mode sheet: what each mode does, door by door — opened from here and nowhere else */
 $("mode-more").addEventListener("click", () => A && openMode());
-$("open-agents").addEventListener("click", () => A && openAgents());
+/* Agents: the desk pane (ui/desk.js), where every agent is reached from — the sheet (openAgents, agents-mount.js) opens from there */
+$("open-agents").addEventListener("click", () => go("desk"));
 $("open-settings").addEventListener("click", () => A && openSettings());
 
 /* one click handler for what is drawn over and over: a toggle (seg), the mode (the rail's seg and the Mode sheet's), a sheet's or the
@@ -322,6 +327,7 @@ document.addEventListener("click", (e) => {
   }
   const md = t.closest("button[data-set-mode]");
   if (md && !md.disabled) return void setMode(md.dataset.setMode);
+  if (t.closest("[data-open-settings]")) return void (A && openSettings());
   if (t.closest("[data-sheet-close]")) return void closeSheet();
   if (t.closest("[data-drawer-close]")) closeDrawer();
 });

@@ -131,6 +131,7 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 .rail-links { display: flex; flex-direction: column; }
 .rail-links button { min-height: 44px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--dim); display: flex; align-items: center; gap: 12px; padding: 0 12px; font-size: 14px; font-weight: 500; width: 100%; text-align: left; }
 .rail-links button:hover { color: var(--text); background: var(--hover); }
+.rail-links button[aria-current="page"] { background: var(--surface-2); color: var(--text); font-weight: 700; }
 .rail-status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 12px; }
 .rail-status .stamp { font-size: 12px; font-variant-numeric: tabular-nums; }
 .note-s { font-size: 12px; color: var(--dim); line-height: 1.4; }
@@ -138,6 +139,9 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 .pill { display: inline-block; font-size: 12px; font-weight: 600; border-radius: var(--radius-pill); padding: 3px 10px; white-space: nowrap; color: var(--dim); background: var(--surface-2); }
 .pill.warm { background: var(--warn-fill); color: var(--warn-text); }
 .pill.up { background: var(--up-fill); color: var(--up); }
+/* a pill that opens something (Trading on · the cap → Settings): the same pill, pointed at it darkens a little */
+button.pill-btn { cursor: pointer; border: 0; line-height: inherit; }
+button.pill-btn:hover { filter: brightness(0.96); }
 
 .main { flex: 999 1 560px; min-width: 0; padding: 24px 36px 48px; display: flex; flex-direction: column; gap: 24px; outline: none; }
 /* the top bar is the Account's header on its three tabs (F5: its name, the mode, trading on, Settings) and Markets' and Trade's search on theirs */

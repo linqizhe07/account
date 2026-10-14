@@ -78,6 +78,10 @@ export interface CostBasis {
   parts: CostPart[];
   /** the account's filled orders counted for it */
   orders: number;
+  /** the markets the account's orders traded it at, the last traded first: where a fresh price for it is asked (the Live cards) */
+  markets: Array<{ venue: string; symbol: string }>;
+  /** when the account's orders last filled for it */
+  lastFillAt?: string | undefined;
   soldUnknownQty?: number | undefined;
   unpricedFills?: number | undefined;
   unreportedFees?: number | undefined;
@@ -195,6 +199,8 @@ interface Tally {
   orders: number;
   unpricedFills: number;
   unreportedFees: number;
+  /** the markets the orders traded it at, by venue|symbol, with the last fill's time */
+  markets: Map<string, { venue: string; symbol: string; at: number }>;
 }
 
 const pileOf = (t: Tally, id: string): Pile => {
@@ -258,13 +264,18 @@ function positionTrade(p: Pile, side: LiveOrder["side"], q: number, value: numbe
  * the orders traded, and every position — each saying how much of what is held its cost covers. Largest holding first */
 export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow[], positions: readonly VenuePosition[] = []): CostBasis[] {
   const tallies = new Map<string, Tally>();
-  const tallyOf = (key: string, make: () => Omit<Tally, "piles" | "orders" | "unpricedFills" | "unreportedFees">): Tally => {
+  const tallyOf = (key: string, make: () => Omit<Tally, "piles" | "orders" | "unpricedFills" | "unreportedFees" | "markets">): Tally => {
     let t = tallies.get(key);
     if (!t) {
-      t = { ...make(), piles: new Map(), orders: 0, unpricedFills: 0, unreportedFees: 0 };
+      t = { ...make(), piles: new Map(), orders: 0, unpricedFills: 0, unreportedFees: 0, markets: new Map() };
       tallies.set(key, t);
     }
     return t;
+  };
+  const marketsOf = (t: Tally): CostBasis["markets"] => [...t.markets.values()].sort((a, b) => b.at - a.at).map((m) => ({ venue: m.venue, symbol: m.symbol }));
+  const lastFillOf = (t: Tally): { lastFillAt?: string } => {
+    const at = Math.max(0, ...[...t.markets.values()].map((m) => m.at));
+    return at > 0 ? { lastFillAt: new Date(at).toISOString() } : {};
   };
   // a venue that reports its own entry price for something held keeps its own pile of it
   const ownPile = new Set<string>();
@@ -280,7 +291,7 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
     .sort((a, b) => (a.at || 0) - (b.at || 0) || a.i - b.i || a.j - b.j);
   const counted = new Set<LiveOrder>();
   const unpriced = new Set<LiveOrder>();
-  for (const { o, qty, value, fee } of fills) {
+  for (const { o, qty, value, fee, at } of fills) {
     const cls = marketClass(o.kind, o.base);
     if (cls === "stable" || cls === "cash") continue;
     const cs = contract(o);
@@ -296,6 +307,9 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
       t = tallyOf(key, () => ({ key, asset: cls === "event" ? o.symbol : key.slice(key.indexOf(":") + 1), class: cls }));
       holdingTrade(pileOf(t, ownPile.has(`${key}|${o.venue}`) ? o.venue : "*"), o.side, qty * cs, value, fee);
     }
+    // the market it was traded at, and when it last filled there: where a fresh price for it is asked
+    const where = t.markets.get(`${o.venue}|${o.symbol}`);
+    if (!where || where.at < (at || 0)) t.markets.set(`${o.venue}|${o.symbol}`, { venue: o.venue, symbol: o.symbol, at: at || 0 });
     // counted once an order, however many fills it had
     if (!counted.has(o)) {
       counted.add(o);
@@ -331,7 +345,11 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
     const soldUnknown = [...t.piles.values()].reduce((s, p) => s + p.soldUnknown, 0);
     const extra = { orders: t.orders, ...(soldUnknown > 1e-12 ? { soldUnknownQty: units(soldUnknown) } : {}), ...(t.unpricedFills ? { unpricedFills: t.unpricedFills } : {}), ...(t.unreportedFees ? { unreportedFees: t.unreportedFees } : {}) };
     if (t.class === "position") {
-      out.push({ ...positionBasis(t, own.find((p) => positionKey(p.venue, p.symbol) === t.key)), realizedUsd: r2(realized), ...extra });
+      // a position at its venue is its own market; the orders' market too, where they traded it
+      const p = own.find((x) => positionKey(x.venue, x.symbol) === t.key);
+      const markets = marketsOf(t);
+      if (p && !markets.some((m) => m.venue === p.venue && m.symbol === p.symbol)) markets.unshift({ venue: p.venue, symbol: p.symbol });
+      out.push({ ...positionBasis(t, p), realizedUsd: r2(realized), markets, ...lastFillOf(t), ...extra });
       continue;
     }
     const row = rows.get(t.key);
@@ -368,6 +386,9 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
       source: sources.size === 2 ? "venue and account orders" : sources.has("venue") ? "venue" : sources.has("account orders") ? "account orders" : "none",
       words: ofQty > 0 ? `cost known for ${qtyText(units(covered))} of ${qtyText(units(ofQty))} ${row?.asset ?? t.asset}` : "nothing held now",
       parts: parts.map((p) => ({ ...p, ...(p.costUsd !== undefined ? { costUsd: r2(p.costUsd) } : {}) })),
+      // where a fresh price is asked: the markets the orders traded, then the venues that report the position without an order here
+      markets: [...marketsOf(t), ...reported.filter((p) => !t.markets.has(`${p.venue}|${p.symbol}`)).map((p) => ({ venue: p.venue, symbol: p.symbol }))],
+      ...lastFillOf(t),
       ...extra,
     });
   }
@@ -376,7 +397,7 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
 }
 
 /** A position at one venue: the venue's entry price where it gives one; the account's own pile otherwise, while it is on the same side */
-function positionBasis(t: Tally, p: VenuePosition | undefined): Omit<CostBasis, "realizedUsd" | "orders"> {
+function positionBasis(t: Tally, p: VenuePosition | undefined): Omit<CostBasis, "realizedUsd" | "orders" | "markets" | "lastFillAt"> {
   const pile = t.piles.get("*");
   const symbol = t.symbol ?? p?.symbol;
   const base = { key: t.key, asset: p?.name || t.asset, class: "position" as const, ...(symbol ? { symbol } : {}) };

@@ -61,8 +61,11 @@ describe("the stand-in account", () => {
     expect(venue("predict").trade.kinds).toEqual(["event"]);
     expect(venue("wallet").trade.kinds).toEqual(["token"]);
     expect(venue(s.seeded.agent.wallet)).toMatchObject({ proven: "this account holds its key" });
-    expect(a.cards).toHaveLength(1);
-    expect(a.cards[0]).toMatchObject({ id: s.seeded.card, agentName: "Claude Code", agent: s.agent.address });
+    // Claude Code's card, and the desk's Sniper's beside it (the stand-in hires the desk and runs it once in Guard)
+    const mine = a.cards.filter((c: { agentName: string }) => c.agentName === "Claude Code");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ id: s.seeded.card, agentName: "Claude Code", agent: s.agent.address });
+    expect(a.cards.filter((c: { agentName: string }) => c.agentName === "Desk Sniper")).toHaveLength(1);
     expect(a.intents.map((i: { agentName: string }) => i.agentName).sort()).toEqual(["Claude Code", "every agent"]);
     expect(a.intents.find((i: { agentName: string }) => i.agentName === "Claude Code").byAgent[0]).toMatchObject({ status: "taking", byName: "Claude Code" });
     expect(a.asks.map((x: { kind: string }) => x.kind).sort()).toEqual(["limit", "venue"]);
@@ -229,11 +232,11 @@ describe("the stand-in account", () => {
     expect(a.signers.owners.map((o: { id: string }) => o.id).sort()).toEqual([`device:${browser.kid}`, `device:${s.seed.kid}`].sort());
     // let in under the label it paired with
     expect(a.signers.owners.map((o: { label: string }) => o.label).sort()).toEqual(["Stand-in seed key", "this browser"]);
-    const card = a.cards[0];
+    const card = a.cards.find((c: { agentName: string }) => c.agentName === "Claude Code");
     const answered = await sign({ type: "approveCard", card: card.id, action: card.hash, decision: "approve" });
     expect(answered.status).toBe(200);
     const after = (await get("/api/account")).body;
-    expect(after.cards).toHaveLength(0);
+    expect(after.cards.filter((c: { agentName: string }) => c.agentName === "Claude Code")).toHaveLength(0);
     expect(after.orders.find((o: { agent?: string; symbol: string; side: string }) => o.agent === s.agent.address && o.symbol === "ETH/USDT")).toMatchObject({ side: "buy", status: "filled" });
     // a second browser now waits until an owner lets it in
     expect((await post("/api/account/pair", { jwk: simKey("device:ui-standin-second").jwk, label: "another browser" })).body.role).toBe("pending");

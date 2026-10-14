@@ -52,6 +52,9 @@ import { fileURLToPath } from "node:url";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
+import { scriptedBrain, seatName, type RoleId } from "../../src/portfolio/account/desk.ts";
+import { claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
+import { openaiBrain } from "../../src/portfolio/account/brain-openai.ts";
 import { agentWalletKey } from "../../src/portfolio/account/keystore.ts";
 import { NetWorthLog, networthPath } from "../../src/portfolio/account/networth.ts";
 import { isJwk, kidOf, signAgent, signDevice, simKey, type AgentAction, type OwnerAction, type SimKey } from "../../src/portfolio/account/sign.ts";
@@ -85,6 +88,8 @@ export interface StandinOptions {
   code?: string | undefined;
   /** where the account keeps its ledger (a fresh temporary home unless given) */
   home?: string | undefined;
+  /** the desk hired and run twice (true unless said): false leaves it to the page, with the scripted brain behind it (`--no-desk`) */
+  desk?: boolean | undefined;
 }
 
 /** what was seeded, by id */
@@ -146,6 +151,9 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     liveWrites: { capUsd, pairingCode: code },
     openness: { ...(loadOpenness() as object), sessionExpiresAt: month },
     publicMarkets: publicSources(),
+    // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds
+    // no desk seeded: the real brains stand behind the hire form, each saying honestly that this home holds no key for it
+    desk: { brain: o.desk === false ? [claudeBrain({ home }), openaiBrain({ home })] : standinBrain(), tickMs: 0 },
     payHttp: async () => ({ status: 0, headers: {}, body: undefined, error: "the stand-in pays no one: it reaches no network" }),
     liveDeps: {
       http: noNetwork,
@@ -251,6 +259,23 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   if (asked.kind !== "card") throw new Error(`the stand-in's agent order came back as ${asked.kind}, not a card`);
   let card = asked.card.id;
 
+  // ---- the desk (account/desk.ts): the account's own agents — five house seats let in, the two that trade given a limit at the
+  // exchange, the desk hired; one cycle in Beast places a lead at once, the next in Guard raises a card ----
+  const deskRoles: RoleId[] = ["head", "search", "risk", "sniper", "exit"];
+  if (o.desk !== false) for (const role of deskRoles) {
+    const k = svc.desk!.seatKeyOf(role);
+    if (isRefusal(k)) throw new Error(`the stand-in could not make the ${role} seat's key: ${k.message}`);
+    ok(`the ${role} seat let in`, await own({ type: "approveAgent", agentAddress: k.address, agentName: seatName(role), validUntil: now + 30 * DAY }));
+    if (role === "sniper" || role === "exit") ok(`the ${role} seat's limit`, await own({ type: "approveSpend", agent: k.address, scope: "trade", allow: "ex", perPayment: "80", budget: "400", windowHours: 0, validUntil: now + 7 * DAY }));
+  }
+  if (o.desk !== false) {
+    ok("the desk hired", await own({ type: "setDesk", desk: "desk", change: "hire", value: JSON.stringify({ name: "The desk", objective: { text: "Small, careful entries on the majors this week; nothing I could not explain", venue: "ex", universe: "all", targetPct: 3, maxRiskPct: 1, maxDailyLossPct: 5, hours: 22, everyMin: 15, reportAt: "21:00" }, brain: { model: "claude-opus-5-5", effort: "medium" }, roles: deskRoles.map((role) => ({ role, kind: "house" })) }) }));
+    ok("Beast for the desk", await own({ type: "setPolicy", change: "mode", value: "open" }));
+    await svc.desk!.cycle("the stand-in");
+    svc.setMode("guard");
+    await svc.desk!.cycle("the stand-in");
+  }
+
   // ---- steering: intents, a report, asks, the watchlist ----
   ok("an intent for Claude Code", await own({ type: "setIntent", id: "", agent: agent.address, venue: "ex", symbol: "SOL/USDT", side: "buy", usd: "300", text: "Build a SOL position under $140, a little at a time", validUntil: now + 3 * DAY }));
   ok("an intent for every agent", await own({ type: "setIntent", id: "", agent: "*", venue: "", symbol: "BTC/USDT", side: "", usd: "", text: "Tell me if BTC moves more than 5% in a day", validUntil: now + 7 * DAY }));
@@ -321,6 +346,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   const step = async () => {
     tick(world);
     await agentLooks();
+    await svc.desk?.tick();
   };
   const timers: Array<ReturnType<typeof setInterval>> = [];
   const every = (ms: number, fn: () => unknown) => {
@@ -338,7 +364,10 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     timers.push(t);
   };
   every(o.tickMs ?? 3_000, () => tick(world));
-  every(o.agentMs ?? 15_000, agentLooks);
+  every(o.agentMs ?? 15_000, async () => {
+    await agentLooks();
+    await svc.desk?.tick();
+  });
 
   const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", "paper", "paper-momentum", walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
   return {
@@ -415,6 +444,23 @@ async function drawThePast(svc: PortfolioService, world: World, home: string, wa
   return written;
 }
 
+/** the desk's brain in the stand-in: a script. Search names ETH, SOL and BTC at the exchange in turn; Risk clears at $60 with a 1.2%
+ * take-profit, a 0.8% stop and twelve hours; Exit holds; the Head writes two fixed sentences */
+function standinBrain() {
+  let n = 0;
+  const picks = ["ETH/USDT", "SOL/USDT", "BTC/USDT"];
+  return scriptedBrain(({ role }) => {
+    if (role === "search") {
+      const symbol = picks[n++ % picks.length]!;
+      return { leads: [{ symbol, side: "buy", thesis: `${symbol.split("/")[0]} leads the majors on volume today`, confidence: 0.66 }], note: "" };
+    }
+    if (role === "risk") return { verdict: "clear", why: "a tight spread, the day's loss room untouched", sizeUsd: 60, tpPct: 1.2, slPct: 0.8, maxHours: 12 };
+    if (role === "exit") return { decisions: [] };
+    if (role === "head") return { worked: "The clearance named its numbers before the order went.", change: "Scan the perpetuals too." };
+    return null;
+  });
+}
+
 const isMain = !!process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isMain) {
@@ -432,7 +478,7 @@ if (isMain) {
   const capUsd = Number(at("--cap") ?? 250);
   const tickMs = Number(at("--tick") ?? 3_000);
   if (!(capUsd > 0) || !(tickMs > 0)) throw new Error("--cap is dollars and --tick milliseconds, both more than zero");
-  const s = await startStandin({ port, capUsd, tickMs }).catch((e: NodeJS.ErrnoException) => {
+  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk") }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EADDRINUSE") {
       console.error(`port ${port} is already in use: is a stand-in running already? Open http://127.0.0.1:${port}, or pick another with --port`);
       process.exit(1);

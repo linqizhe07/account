@@ -15,6 +15,8 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
 <link rel="stylesheet" href="/ui/portfolio.css" />
 <link rel="stylesheet" href="/ui/markets.css" />
 <link rel="stylesheet" href="/ui/trade.css" />
+<link rel="stylesheet" href="/ui/live.css" />
+<link rel="stylesheet" href="/ui/desk.css" />
 </head>
 <body>
 <!-- the page's icons: stroke drawings of its own (no venue's or wallet's logo). icon("name") in ui/core.js draws one -->
@@ -104,6 +106,8 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
     <section class="pane" data-pane="memory" aria-labelledby="h-memory" hidden><h1 class="sr" id="h-memory">Memory</h1><div id="pane-memory"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     <section class="pane" data-pane="markets" aria-labelledby="h-markets" hidden><h1 class="sr" id="h-markets">Markets</h1><div id="pane-markets"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     <section class="pane" data-pane="trade" aria-labelledby="h-trade" hidden><h1 class="sr" id="h-trade">Trade</h1><div id="pane-trade"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
+    <!-- the desk: the account's own agents (ui/desk.js), opened from the rail's Agents -->
+    <section class="pane" data-pane="desk" aria-labelledby="h-desk" hidden><h1 class="sr" id="h-desk">Agents</h1><div id="pane-desk"><div class="skel-rows" aria-hidden="true"><span class="skel big"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     </div>
   </main>
 </div>
@@ -121,11 +125,13 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
 <script defer src="/ui/money.js"></script>
 <script defer src="/ui/asset.js"></script>
 <script defer src="/ui/intent.js"></script>
+<script defer src="/ui/live.js"></script>
 <script defer src="/ui/portfolio.js"></script>
 <script defer src="/ui/memory.js"></script>
 <script defer src="/ui/earn.js"></script>
 <script defer src="/ui/markets.js"></script>
 <script defer src="/ui/trade.js"></script>
+<script defer src="/ui/desk.js"></script>
 <script defer src="/ui/statement.js"></script>
 <script defer src="/ui/agents-mount.js"></script>
 <script defer src="/ui/shell.js"></script>

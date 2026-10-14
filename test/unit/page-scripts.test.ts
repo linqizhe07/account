@@ -105,11 +105,11 @@ describe("the account page's scripts", () => {
     expect(named.filter((s) => s.startsWith("/ui/")).sort()).toEqual(onDisk.sort());
     // the order the contract names: what moves money and what connects before the panes that use it, the statement and the agents' mount
     // point after them, the shell last
-    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
+    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/live.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/desk.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
     // each ui script waits for the page to be parsed and runs in the order named
     for (const m of html.matchAll(/<script\b([^>]*)\bsrc="(\/ui\/[^"]+)"/g)) expect(m[1], m[2] ?? "").toMatch(/\bdefer\b/);
     // the tokens first (both backgrounds), then the shell, then what the earlier renderers still draw; the classic page's sheet is not needed
-    expect(styles()).toEqual(["/ui/tokens.css", "/ui/shell.css", "/account.css", "/ui/portfolio.css", "/ui/markets.css", "/ui/trade.css"]);
+    expect(styles()).toEqual(["/ui/tokens.css", "/ui/shell.css", "/account.css", "/ui/portfolio.css", "/ui/markets.css", "/ui/trade.css", "/ui/live.css", "/ui/desk.css"]);
     for (const path of [...named, ...styles()]) {
       const r = await fetch(`${srv.url}${path}`);
       expect(r.status, path).toBe(200);

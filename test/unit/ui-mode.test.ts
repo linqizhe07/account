@@ -144,7 +144,7 @@ describe("the chrome around the mode", () => {
     p.run(OWNER);
     p.set("A", account());
     p.run("renderChrome(connected(), true)");
-    expect(p.el("writes").innerHTML).toBe('<span class="pill up" title="Orders and moves go through only when you sign them, or inside a limit you gave an agent">Trading on · $250 a move</span>');
+    expect(p.el("writes").innerHTML).toBe('<button type="button" class="pill up pill-btn" data-open-settings title="Orders and moves go through only when you sign them, or inside a limit you gave an agent. The cap is yours to change in Settings">Trading on · $250 a move</button>');
     expect(p.el("mode-note").textContent).toBe("What agents ask for waits for you on a card.");
     p.set("A", account({ mode: "open", connectLive: { writes: { on: false }, options: [] } }));
     p.run("renderChrome(connected(), true)");
@@ -172,7 +172,7 @@ describe("the chrome around the mode", () => {
     expect(settings.html).toContain("<b>Background</b>");
     expect(settings.html).toContain('<h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div>');
     // the cap is said here, once
-    expect(p.el("set-writes").textContent).toBe("On: an order or a move goes through only when you sign it, or inside a limit you gave an agent, and is worth up to $250.00 each (set when the account was started).");
+    expect(p.el("set-writes").textContent).toBe("On: an order or a move goes through only when you sign it, or inside a limit you gave an agent, and is worth up to $250.00 each. The cap is yours to change: your signature, up or down.");
     expect(String(p.el("set-theme").innerHTML)).toMatch(/data-v="cream" aria-pressed="true">Cream<\/button><button type="button" data-v="black" aria-pressed="false">Black<\/button>/);
     expect(String(p.el("dial").innerHTML)).toContain("Agents' session");
     // the agents' table itself is ui-agents.test's: here only the sheet around it

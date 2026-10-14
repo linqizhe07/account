@@ -938,9 +938,10 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
 
 // ---- where the page is ----------------------------------------------------------------------
 
-const TABS = ["portfolio", "venues", "memory", "markets", "trade"];
-/* the Account's own three, opened from the rail's foot (round 7): the rest are the rail's */
-const ACCOUNT_TABS = ["portfolio", "venues", "memory"];
+const TABS = ["portfolio", "venues", "memory", "markets", "trade", "desk"];
+/* the Account's own three, opened from the rail's foot (round 7), and the desk (the rail's Agents), under the Account's header too: the
+   mode matters to the desk */
+const ACCOUNT_TABS = ["portfolio", "venues", "memory", "desk"];
 const ROUTE = { tab: "portfolio", params: {} };
 const ROUTED = [];
 const routeOf = (hash) => {

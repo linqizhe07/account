@@ -213,7 +213,7 @@ function renderPortfolio({ el, owner, params = {} }) {
   if (!el.firstElementChild || el.firstElementChild.dataset.pf !== mode) {
     el.innerHTML = mode === "fresh"
       ? '<div class="pf pf-fresh" data-pf="fresh"><div data-pf-part="worth"></div><div data-pf-part="steps"></div><div data-pf-part="waiting"></div></div>'
-      : '<div class="pf cols" data-pf="full"><div class="col-main"><div data-pf-part="steps"></div><section class="sec pf-worth" data-pf-part="worth" aria-label="Net worth"></section><div class="quick" data-pf-part="quick"></div><section class="sec pf-table" data-pf-part="table" aria-label="Assets, positions and accounts"></section></div><div class="col-side"><div data-pf-part="waiting"></div><section class="sec pf-agents" data-pf-part="agents" aria-label="Agents at work"></section><section class="sec pf-cash" data-pf-part="cash" aria-label="Cash ready"></section><section class="sec pf-alloc" data-pf-part="alloc" aria-label="Allocation"></section></div></div>';
+      : '<div class="pf cols" data-pf="full"><div class="col-main"><div data-pf-part="steps"></div><section class="sec pf-worth" data-pf-part="worth" aria-label="Net worth"></section><section class="sec pf-live" data-pf-part="live" aria-label="Open positions, live"></section><div class="quick" data-pf-part="quick"></div><section class="sec pf-table" data-pf-part="table" aria-label="Assets, positions and accounts"></section></div><div class="col-side"><div data-pf-part="waiting"></div><section class="sec pf-agents" data-pf-part="agents" aria-label="Agents at work"></section><section class="sec pf-cash" data-pf-part="cash" aria-label="Cash ready"></section><section class="sec pf-alloc" data-pf-part="alloc" aria-label="Allocation"></section></div></div>';
   }
   pfWire(el);
   pfDraw(el, owner);
@@ -242,6 +242,14 @@ function pfDraw(el, owner) {
   pfPut(el, "worth", pfWorthHtml(l, venueIn, rows));
   pfPut(el, "waiting", pfWaitingHtml(l, owner));
   if (el.firstElementChild.dataset.pf === "fresh") return;
+  // what was bought, watched as it moves (ui/live.js): the cards are polled while they are on the page
+  const live = pfLiveHtml(l, venueIn, owner);
+  pfPut(el, "live", live);
+  if (typeof lvWatch === "function") {
+    const node = el.querySelector('[data-pf-part="live"]');
+    if (live) lvWatch(node);
+    else if (typeof lvRelease === "function") lvRelease(node);
+  }
   pfPut(el, "quick", pfQuickHtml(l, venueIn, owner));
   pfPut(el, "table", pfTableHtml(l, venueIn, rows, owner));
   pfIntents(el, pfPut(el, "agents", pfAgentsHtml(l)));
@@ -317,10 +325,41 @@ function pfStepsHtml(owner, fresh) {
     // no account to connect yet: a paper account is the first step too — nothing to connect, paper money in the public markets, the same
     // doors, agents and limits as a real one, and the Real money / Paper switch in the top bar when both are on the account
     connect: ["An exchange, a broker, a wallet or a prediction market, read through its own interface. Nothing moves without your signature. No account yet? Start a paper account: nothing to connect, paper money in the public markets, the same doors and limits.", A.connectLive ? `${pfBtn("connect", "Connect an account", { cls: "btn btn-primary btn-sm", off: !owner, title: owner ? "" : PF_LOOK_ONLY })}${pfBtn("paper", "Start a paper account", { cls: "btn btn-sm", off: !owner, title: owner ? "Paper money, nothing to connect" : PF_LOOK_ONLY })}` : ""],
-    agent: [asking ? `${plural(asking, "agent")} asking to be let in.` : `Copy the command and run it where your agent runs; then let it in here.${A.agentSetup && A.agentSetup.command ? "" : " Run it in this account's folder."}`, `${pfBtn("setup", `${icon("copy", "sm")}Copy setup command`, { cls: "btn btn-sm" })}${asking ? pfBtn("letin", "Let it in…", { cls: "btn btn-primary btn-sm", data: { agent: A.requests[0].address }, off: !owner }) : ""}`],
+    // the account's own desk (ui/desk.js), or an agent of the owner's own: the setup command, and the keys knocking
+    agent: [asking ? `${plural(asking, "agent")} asking to be let in.` : "Hire the account's own desk — eight seats, a charter each, one room, one objective — or bring your own: run the command where your agent runs, then let it in here.", `${pfBtn("desk", "Hire the desk", { cls: "btn btn-primary btn-sm" })}${pfBtn("setup", `${icon("copy", "sm")}Copy setup command`, { cls: "btn btn-sm" })}${asking ? pfBtn("letin", "Let it in…", { cls: "btn btn-primary btn-sm", data: { agent: A.requests[0].address }, off: !owner }) : ""}`],
     limit: [trading ? "It acts only inside a limit you sign: where, how much an order, how much in all. In Guard each order still waits for you." : "Connect an account that trades first: a limit names where an agent may trade.", pfBtn("limit", "Give a limit…", { cls: "btn btn-primary btn-sm", off: !owner || !trading || !steps[1].done })],
   };
   return `<section class="callout pf-steps" aria-labelledby="pf-steps-h"><div class="pf-steps-h"><h2 class="label warn-t" id="pf-steps-h">${fresh ? "Get started" : "Next steps"} · ${n} of 3</h2></div><ol>${steps.map((s, i) => `<li class="${s.done ? "done" : ""}"><span class="pf-tick" aria-hidden="true">${s.done ? "✓" : i + 1}</span><div><b>${esc(s.title)}</b>${s.done ? '<span class="sr"> (done)</span>' : `<span class="dim small">${esc(how[s.id][0])}</span>`}</div>${s.done ? "" : `<div class="pf-step-acts">${how[s.id][1]}</div>`}</li>`).join("")}</ol></section>`;
+}
+
+/** OPEN POSITIONS, LIVE: everything bought through the account whose cost it knows (account/costbasis.ts: the account's own orders, and
+ * the positions the venues report with an entry), as the live cards of ui/live.js — the entry, the price now, the unrealised result, moving
+ * as the prices come in. Real and paper alike under All accounts (a paper card says Paper); the Paper lens the paper ones, a venue's lens
+ * its own. A card's Sell or Close is the owner's own ticket. Nothing without a known cost is here: it is in the table below */
+function pfLiveHtml(l, venueIn, owner) {
+  if (l.kind === "agent" || typeof lvCard !== "function") return "";
+  const sources = [];
+  if (l.kind !== "paper" && PF.holdReal) sources.push({ h: PF.holdReal, paper: false });
+  if (l.kind !== "real" && PF.holdPaper) sources.push({ h: PF.holdPaper, paper: true });
+  const cards = [];
+  for (const { h, paper } of sources) {
+    for (const c of h.cost || []) {
+      if (!(c.coveredQty > 0) || c.avgCostUsd === undefined || !c.markets || !c.markets.length) continue;
+      const m = c.markets[0];
+      if (!venueIn(m.venue)) continue;
+      const v = A.venues.find((x) => x.id === m.venue);
+      if (!v || !v.live) continue;
+      const position = c.class === "position" ? (h.positions || []).find((p) => p.venue === m.venue && p.symbol === m.symbol) : null;
+      const side = c.side === "short" || (position && position.side === "short") ? "short" : "long";
+      const kind = position ? position.kind || "perp" : { crypto: "coin", equity: "stock", event: "event", rwa: "token" }[c.class] || "coin";
+      // a contract's base, where the cost says more than one unit a contract (fees in the cost make it a hair above 1: rounded)
+      const cs = c.costUsd && c.avgCostUsd && c.coveredQty ? Math.max(1, Math.round(c.costUsd / (c.avgCostUsd * c.coveredQty))) : 1;
+      const canClose = owner && writesOn() && canTrade(v);
+      cards.push(lvCard({ key: `${paper ? "paper:" : ""}${c.key}`, symbol: m.symbol, name: position ? position.name || c.asset : c.asset, venue: m.venue, venueName: v.name, kind, side, qty: c.coveredQty, entry: c.avgCostUsd, mark: position ? position.markPrice : undefined, costUsd: c.costUsd, unrealizedUsd: c.unrealizedUsd, roiPct: c.costUsd ? ((c.unrealizedUsd || 0) / c.costUsd) * 100 : 0, paper: paper || !!v.paper, cs, leverage: position ? position.leverage : undefined, since: c.lastFillAt, fmt: kind === "event" ? "c" : "usd", unit: position && (position.kind === "perp" || position.kind === "future") ? "contracts" : undefined, close: canClose ? (position ? { kind: "close", position: { ...position, venueName: v.name } } : { kind: "sell", venue: m.venue, symbol: m.symbol, qty: c.coveredQty }) : undefined }));
+    }
+  }
+  if (!cards.length) return "";
+  return `<div class="sec-head pf-live-h"><div class="label">Open positions <span class="lv-live">live</span></div><span class="dim small">${esc(plural(cards.length, "position"))} with a known cost · prices every 5 s</span></div><div class="lv-grid">${cards.join("")}</div>`;
 }
 
 /* the net worth: the figure, ONE change line that follows the range (1D is today, from the holdings' own 24 hours; the others from the
@@ -735,6 +774,7 @@ async function pfAct(act, d) {
     // a paper account: the connect form for one, straight from the empty account
     case "paper": return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account", back: true }));
     case "setup": return void copySetup();
+    case "desk": return void go("desk");
     case "letin": return void pfLetIn(A.requests.find((r) => r.address === d.agent) || (A.asks || []).find((a) => a.agent === d.agent && a.kind === "letIn") || { address: d.agent });
     case "limit": return void pfLimitForm({});
     case "trade": return void pfTrade(l.kind === "venue" ? { venue: l.id } : {});

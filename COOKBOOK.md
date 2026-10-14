@@ -138,6 +138,8 @@ rail 最下面点 Account（钱包按钮），落在 Portfolio。都按 Account 
 
 agent 读同样的东西：`portfolio_holdings {cost}`、`portfolio_history {range}`、`portfolio_asset {key}`、`portfolio_receive {venue, asset, network}`。
 
+**买了以后看涨跌**：Portfolio 的 **Open positions · live**。每一样账户知道成本的持仓——你自己下过单的（账本里的成交）、场所报了入场价的仓位——一张卡：梯子上是入场价和现价的点（desk 的线索还有 TP / SL），下面是未实现盈亏和百分比、这页见过的价格走势线、投入和持有量；每 5 秒从场所拿一次新价（`/api/account/quotes`，一次最多 12 个市场），数字变了闪一下，点滑过去。纸上账户的也在，标 Paper。卡上的 "Sell" / "Close" 打开你自己的下单票。只有成本未知的（别处转进来的）不在这里，在下面的表里。
+
 ## 2c · Markets：有什么可以交易
 
 rail 上点 "Markets"，或在顶栏搜索里打几个字母。一张表里两样东西：
@@ -194,6 +196,32 @@ trading limit: every venue on the account now · up to $25 an order · $100 of o
 **agent 的钥匙是它自己的**：席位第一次运行时在 `~/.buyer-agent-demo/seats/<名字>.json` 生成一把，权限 600，以后一直用这把。不再从名字推出来，所以知道名字的人拿不到它（`PORTFOLIO_SEAT_KEYS=sim` 才回到从名字推，只给测试和演示用）。MCP 席位同理（`PORTFOLIO_AGENT` 定名字），工具 `portfolio_account` 返回它的地址、有没有被授权、额度还剩多少。
 
 会被拒：没点名 `E_MANDATE_RECIPIENT` · 超每单 `E_MANDATE_PER_ORDER_CAP` · 超总额 `E_MANDATE_BUDGET` · 窗口内的第二单 `E_MANDATE_RATE` · 到期 `E_MANDATE_EXPIRED` · 没有额度 `E_MANDATE_NONE` · 额度写了一个不存在、已过期或不是给这个 agent 的意图 `E_ACCOUNT_BAD_ACTION`。
+
+## 3b · 雇一个 Desk：账户自己的 agent 团队
+
+没有自己的 agent 也能让账户飞起来。rail 上的 **Agents**（`#/desk`）：
+
+1. **Hire the desk**。填一句话（你这周要什么）、场所（默认选纸上账户：那是"你输得起的钱包"）、范围（All / Crypto / Perps / Stocks / RWAs / Predictions）、本周目标 %、每笔最多占权益 %、当日亏损熔断 %、会话小时数、几分钟一轮、晚报时间（纽约）；勾席位（Head 必选；Search · Risk · Sniper · Exit 默认勾上，Watch 可选；Flow · Sentiment 只能填你自己的 agent 的钥匙）；交易席位的额度（每笔、总额、期限）；脑子（模型、effort；下面一行写它现在能不能用，和为什么）。按下去是一串签名：每个席位一次 `approveAgent`，每个交易席位一次 `approveSpend`，最后一次 `setDesk hire`。哪一次被拒就停在那里，前面签过的照旧。
+2. 页面变成直播：**LIVE 00:12:30 / 22H** 计时、权益和曲线、到目标的进度条、在手线索的实时卡（入场 / 现价 / TP / SL / 未实现，每 5 秒一次新价）、Trade tape、Big closes、房间（每行带 `L-0001` 这样的线索号和角色标签）、名单（每个席位在门上的状态：放进来了没、有没有额度、几张卡在等）、脑子的花费。
+3. **一轮**：到点自动（几分钟一轮），或按 "Cycle now"（会问脑子，花它的 token）。Guard 下 Sniper 的单是一张卡，在 Open leads 里和 Portfolio 的 Waiting for you 里都能批；Beast 下在额度内直接成交。止盈 / 止损 / 时限到了 Exit 自动平，房间里写 "TP HIT"。
+4. "Objective…" 改目标（签名），名单里每个席位 "Edit charter" 改章程（签名）、"Fill a seat…" 换人或留空、"Memory" 看它记得的你；"Pause" / "Resume" / "End"；"Report now" 立刻写一份晚报。
+5. **换成你自己的 agent 坐席位**：先在 Agents 弹层放它的钥匙进来（第 3 条），再 "Fill a seat…" 选 "An agent of mine"。它在 MCP 里用 `portfolio_desk` 读章程、目标、漏斗和房间，`portfolio_desk_say {kind, text, lead}` 在房里说话；要交易的席位照第 3 条给它额度，下单还是 `portfolio_live_order`。
+
+```
+LEAD L-0001 | ETH/USDT | long | ETH leads the majors on volume today | confidence 0.66 → RISK
+RISK CLEARANCE L-0001 | market open · price 2455.75 · spread 0.03% · volume $322,173,865.00 · day's loss room $1,081.95 · size up to $80.00 | a tight spread, the day's loss room untouched | size $60.00 · TP +1.2% · SL -0.8% · 12 h | Verdict: CLEAR → SNIPER
+L-0001: filled 0.0239 ETH at 2455.75 at Stand-in Exchange (Beast, inside the limit).
+Cycle 1 (the clock): 1 lead scanned, 1 cleared, 1 placed, 1 open.
+```
+
+- **脑子的钥匙**：服务环境里的 `ANTHROPIC_API_KEY`（或 `ANTHROPIC_AUTH_TOKEN`、`ant auth login` 的 profile），或者文件 `~/.buyer-agent-demo/credentials/anthropic/api-key.json`：`{"apiKey": "sk-ant-…"}`，`chmod 600`；文件每次检查时重新读，改完不用重启（环境变量那条要 `npm run account:service -- restart`）。把示例值 `sk-ant-…` 原样写进去不算有钥匙：雇佣表单会说文件里还是示例。
+- **OpenAI 格式的脑子**：雇佣表单第 4 步 "Brain" 里选 "OpenAI-format endpoint"，可以是 OpenAI 自己、DeepSeek、Kimi、通义、xAI、OpenRouter，或本机的 vLLM / Ollama——凡是 `…/v1/chat/completions` 这一套。钥匙放 `~/.buyer-agent-demo/credentials/openai/api-key.json`：`{"apiKey": "…", "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat"}`（`chmod 600`；`baseUrl` 不写就是 OpenAI 自己的；`model` 是表单里的默认值），或者环境变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`（要重启）。模型名按那家接口的叫法填；价格（每百万 token 的 $ in / $ out）可填可不填，不填就只数 token、页面标 "unpriced"。各家收的字段不一样（`max_tokens` 还是 `max_completion_tokens`、认不认 `reasoning_effort`、支不支持 JSON schema），脑子先按 base URL 猜，接口回 400 就换它点名的那个字段再问，最多三次，被拒的请求不计费，试出来的写法记住下次直接用。雇了以后右栏 "Brain…" 随时换脑子、换模型、改价格，一个签名。没有钥匙：desk 雇得了，计划里的止盈止损照跑，房间每小时说一次它没法想；不编线索。
+- **花费**：每轮至多三次调用（Exit 有在手线索时、Search、Risk 有线索时），晚报和周评各一次；按 API 返回的 token 数和模型标价算，写在 Brain 卡里（估算）。
+- **哪些是真的**：线索来自账户自己的 Markets 列表（`/api/account/explore`），清算的硬检查来自场所的报价（`/api/account/market`），每一单从门走（`agentLiveOrder` / `agentLiveClose`），成交从账户的订单读回来，权益 = 会话开始时场所的权益 + 已实现 + 在手线索按最新价的未实现。房间里"brain"标的句子是脑子说的，其余是账户的数。
+- **会被拒**：目标里的场所没接上或不能交易 `E_ACCOUNT_BAD_ACTION`；没有 Head 不能雇；Flow / Sentiment 不能由房里坐；不是席位的钥匙 `portfolio_desk_say` 是 `E_ACCOUNT_OWNER_ONLY`；没额度的席位下单是 `E_MANDATE_NONE`——这就是"章程变成额度"。
+- 文件：`~/.buyer-agent-demo/desk/desk.json`、`desk/room.jsonl`（600）；席位钥匙 `seats/desk-<role>.json`。重启继续。
+
+**单笔上限也在这里改**：头上的 "Trading on · $20 a move" 点开 Settings，"Change the cap" 一次签名（`setPolicy cap`），升降都行，立刻生效，重启按最后一次签的恢复；启动参数 `--live-cap` 只是起点。纸上账户不受它。
 
 ## 4 · 选模式：Guard 还是 Beast
 
@@ -623,7 +651,7 @@ Agent 的管理（放谁进来、给多少额度、它们在做什么、它们�
 
 | 动作 | 字段 | 要知道的 |
 |---|---|---|
-| `approveAgent` | `agentAddress, agentName, validUntil` | 放一把钥匙进来，最长 180 天，同时最多 4 把。撤销是 `agentAddress` 写零地址、`agentName` 写它的名字、`validUntil` 0；撤销过的不能再放进来 |
+| `approveAgent` | `agentAddress, agentName, validUntil` | 放一把钥匙进来，最长 180 天，同时最多 12 把（你自己的几把，加 Desk 的八个席位）。撤销是 `agentAddress` 写零地址、`agentName` 写它的名字、`validUntil` 0；撤销过的不能再放进来 |
 | `approveSpend` | `agent, scope, allow, perPayment, budget, windowHours, validUntil`，可选 `intent` | `scope` 是 `trade`（下单）· `venues`（在你自己的账户之间挪钱）· `payees`（从 agent 钱包付给别人）· `earn`（放进 earn 产品）。`allow` 逗号隔开：场所 id，`payees` 是域名；`trade` / `venues` 的 `*` 在签的那一刻写成当时的全部场所，之后接的不算；`payees` 的 `*` 只在勾了 "any payee" 时；`earn` 从不收 `*`，写场所或 `场所:产品`。每个 agent 每个 scope 只留一份，新的替换旧的；`budget` "0" 是收回；`windowHours` > 0 是每个场所（`payees` 是每个收款方）每个窗口一笔，改单不算第二笔；`intent` 是这份额度回答的开着的意图的 id（给这个 agent 或给所有 agent 的），带了才签进去，不带就和以前一样 |
 | `createSubAccount` | `name, agent, float` | 在真实账户上是建一个 agent 钱包：钥匙在本机生成（`<home>/agent-wallets/`），agent 拿不到 |
 | `setIntent` | `id, agent, venue, symbol, side, usd, text, validUntil` | `id` 空是新的；`agent` 是地址或 `*`；`validUntil` 0 是收回。什么都不授予 |
