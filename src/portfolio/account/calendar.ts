@@ -13,7 +13,14 @@
  * Day). The cut-off and settlement times are the ones the rails publish
  * (same-day ACH 3:00pm, standard ACH 8:30pm, NAV 4:00pm); they are quotes of
  * the rule, not measurements.
+ *
+ * The stock market's EARLY CLOSES are computed by rule too, from NYSE's own
+ * calendar (https://www.nyse.com/trade/hours-calendars, read 2026-10-14; the
+ * older /markets/hours-calendars answers HTTP 302 to it): see earlyCloseDate
+ * below.
  */
+import type { MarketSession, SessionClock, SessionPhase } from "../live/trade.ts";
+
 const NY = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", weekday: "short" });
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -174,34 +181,74 @@ export function settlementArrival(nowMs: number): number {
 
 export type Session = "overnight" | "pre-market" | "regular" | "after-hours" | "closed";
 
-/** Alpaca's sessions: overnight 8pm–4am from Sunday evening to Friday morning, pre-market 4:00–9:30, regular 9:30–4:00, after-hours 4:00–8:00 */
+// the stock market's day, in minutes after midnight New York: pre-market from 04:00, the regular session 09:30 to 16:00 (13:00 on an early
+// close), after-hours to 20:00 (17:00 on an early close), and the overnight session from 20:00 to 04:00 ahead of a market day
+const PRE_START = 4 * 60;
+const REGULAR_OPEN = 9 * 60 + 30;
+const REGULAR_CLOSE = 16 * 60;
+const EARLY_CLOSE = 13 * 60;
+const AFTER_END = 20 * 60;
+const EARLY_AFTER_END = 17 * 60;
+const OVERNIGHT_START = 20 * 60;
+
+/** Whether a New York date is one of the market's EARLY CLOSES, when it is a market day at all (isMarketDay says that). NYSE's calendar
+ * (https://www.nyse.com/trade/hours-calendars, read 2026-10-14; /markets/hours-calendars answers HTTP 302 to it) lists them in its
+ * footnotes, each "Each market will close early at 1:00 p.m. (1:15 p.m. for eligible options)" and "NYSE American Equities, NYSE Arca
+ * Equities, NYSE National, and NYSE Texas late trading sessions will close at 5:00 p.m.": Friday 27 November 2026, Friday 26 November 2027 and Friday 24 November 2028 ("the day after
+ * Thanksgiving"), Thursday 24 December 2026, and Monday 3 July 2028. It lists none on Thursday 2 July 2026 (Independence Day is observed on
+ * Friday 3 July that year), none on 23 or 24 December 2027 (Christmas falls on a Saturday and Friday 24 December is the observed holiday)
+ * and none on Friday 2 July 2027 (3 July is a Saturday). The rule that gives exactly those dates: the Friday after Thanksgiving, and 24
+ * December and 3 July when either is a market day — not when it is the observed holiday itself or a weekend, and then no other day closes
+ * early in its place */
+function earlyCloseDate(y: number, m: number, d: number): boolean {
+  if (m === 11) return d === nthDow(y, 11, 4, 4) + 1;
+  return (m === 12 && d === 24) || (m === 7 && d === 3);
+}
+/** the regular session's close and the after-hours session's end on a New York date, in minutes after midnight */
+const closeOf = (y: number, m: number, d: number): number => (earlyCloseDate(y, m, d) ? EARLY_CLOSE : REGULAR_CLOSE);
+const afterEndOf = (y: number, m: number, d: number): number => (earlyCloseDate(y, m, d) ? EARLY_AFTER_END : AFTER_END);
+/** `minutes` after midnight on a New York date, as the UTC instant */
+const atMinutes = (y: number, m: number, d: number, minutes: number): number => fromEt(y, m, d, Math.floor(minutes / 60), minutes % 60);
+/** the New York date `i` days after `t`'s, counted in UTC so that no daylight-saving change skips or repeats one */
+function dateAfter(t: EtTime, i: number): { y: number; m: number; d: number } {
+  const day = new Date(Date.UTC(t.y, t.m - 1, t.d + i));
+  return { y: day.getUTCFullYear(), m: day.getUTCMonth() + 1, d: day.getUTCDate() };
+}
+
+/** a day the stock market closes early (13:00 New York, after-hours to 17:00): a market day that is one of NYSE's early closes (see
+ * earlyCloseDate) */
+export function isEarlyClose(ms: number): boolean {
+  const t = et(ms);
+  return isMarketDay(ms) && earlyCloseDate(t.y, t.m, t.d);
+}
+
+/** Alpaca's sessions: overnight 8pm–4am from Sunday evening to Friday morning, pre-market 4:00–9:30, regular 9:30–4:00, after-hours 4:00–8:00.
+ * On an early close the regular session ends at 1:00pm and after-hours at 5:00pm (NYSE's late trading sessions "will close at 5:00 p.m."),
+ * and from then until 8pm the market is closed */
 export function marketSession(ms: number): Session {
   const t = et(ms);
   const open = isMarketDay(ms);
-  if (open && t.minutes >= 4 * 60 && t.minutes < 9 * 60 + 30) return "pre-market";
-  if (open && t.minutes >= 9 * 60 + 30 && t.minutes < 16 * 60) return "regular";
-  if (open && t.minutes >= 16 * 60 && t.minutes < 20 * 60) return "after-hours";
+  const close = closeOf(t.y, t.m, t.d);
+  if (open && t.minutes >= PRE_START && t.minutes < REGULAR_OPEN) return "pre-market";
+  if (open && t.minutes >= REGULAR_OPEN && t.minutes < close) return "regular";
+  if (open && t.minutes >= close && t.minutes < afterEndOf(t.y, t.m, t.d)) return "after-hours";
   // the overnight session belongs to the NEXT trading day: Sunday to Thursday evening before a market day, and until 4am on one
-  if (t.minutes >= 20 * 60 && t.dow <= 4 && isMarketDay(ms + DAY)) return "overnight";
-  if (t.minutes < 4 * 60 && open) return "overnight";
+  if (t.minutes >= OVERNIGHT_START && t.dow <= 4 && isMarketDay(ms + DAY)) return "overnight";
+  if (t.minutes < PRE_START && open) return "overnight";
   return "closed";
 }
 
-/** The REGULAR SESSION (9:30 to 16:00 New York, on a market day) under way at `ms`, or else the next one: whether it is under way, and the
- * instants it opens and closes. A market day is isMarketDay's, so the market's holidays are closed days. The market's early closes (13:00 on
- * the day after Thanksgiving, and on some days before a holiday) are not known here: every session here closes at 16:00 */
+/** The REGULAR SESSION (9:30 to 16:00 New York — to 13:00 on an early close — on a market day) under way at `ms`, or else the next one:
+ * whether it is under way, and the instants it opens and closes. A market day is isMarketDay's, so the market's holidays are closed days;
+ * an early close is isEarlyClose's */
 export function nextRegularSession(ms: number): { open: boolean; opensAt: number; closesAt: number } {
   const t = et(ms);
-  // the New York dates from this one on, counted in UTC so that no daylight-saving change skips or repeats one; a market day is never more
-  // than four days away (a weekend beside a holiday)
+  // the New York dates from this one on; a market day is never more than four days away (a weekend beside a holiday)
   for (let i = 0; i < 10; i++) {
-    const day = new Date(Date.UTC(t.y, t.m - 1, t.d + i));
-    const y = day.getUTCFullYear();
-    const m = day.getUTCMonth() + 1;
-    const d = day.getUTCDate();
-    const closesAt = fromEt(y, m, d, 16);
+    const { y, m, d } = dateAfter(t, i);
+    const closesAt = atMinutes(y, m, d, closeOf(y, m, d));
     if (ms >= closesAt || !isMarketDay(closesAt)) continue;
-    const opensAt = fromEt(y, m, d, 9, 30);
+    const opensAt = atMinutes(y, m, d, REGULAR_OPEN);
     return { open: ms >= opensAt, opensAt, closesAt };
   }
   throw new Error(`no market day within ten days of ${new Date(ms).toISOString()}`);
@@ -213,6 +260,60 @@ export function nextRegularSession(ms: number): { open: boolean; opensAt: number
 export function regularSession(ms: number): { open: boolean; opensAt?: string; closesAt?: string } {
   const s = nextRegularSession(ms);
   return marketSession(ms) === "regular" ? { open: true, closesAt: new Date(s.closesAt).toISOString() } : { open: false, opensAt: new Date(s.opensAt).toISOString() };
+}
+
+const PHASE: Record<Session, SessionPhase> = { "pre-market": "pre", regular: "regular", "after-hours": "after", overnight: "overnight", closed: "closed" };
+
+/** the US stock market's phase at `ms` (live/trade.ts SessionPhase), from marketSession: pre-market "pre", the regular session "regular",
+ * after-hours "after", the overnight session "overnight", anything else "closed" — the instant asked, which may be a quote's own time and
+ * not now */
+export function usPhaseAt(ms: number): SessionPhase {
+  return PHASE[marketSession(ms)];
+}
+
+/** when the phase under way at `ms` ends: the first of the day's turns (04:00, 09:30, the close, the end of after-hours, 20:00 New York, on
+ * this date and the ones after it) at which usPhaseAt says another phase. A weekend's closed phase ends on Sunday 20:00 when Monday is a
+ * market day, or at a later evening's 20:00 or morning's 04:00 when it is not */
+export function usPhaseEndsAt(ms: number): number {
+  const now = usPhaseAt(ms);
+  const t = et(ms);
+  for (let i = 0; i < 10; i++) {
+    const { y, m, d } = dateAfter(t, i);
+    for (const minutes of [PRE_START, REGULAR_OPEN, closeOf(y, m, d), afterEndOf(y, m, d), OVERNIGHT_START]) {
+      const at = atMinutes(y, m, d, minutes);
+      if (at > ms && usPhaseAt(at) !== now) return at;
+    }
+  }
+  throw new Error(`no change of the market's phase within ten days of ${new Date(ms).toISOString()}`);
+}
+
+/** When a DAY order placed at `ms` ends (Alpaca's rule, its orders page: a day order is canceled after the close, one sent after the close
+ * waits for the next day; with extended hours it carries through pre-market, the regular session and after-hours and is canceled at 8:00pm
+ * — one placed in the overnight session too): the regular close of the market day it is placed in or before — the next market day's when it
+ * is placed after that close, or in the overnight session ahead of it — or, `extended`, that market day's end of after-hours, 20:00 New York
+ * (17:00 on an early close), the next market day's when placed after it */
+export function usDayEndAt(ms: number, extended: boolean): number {
+  const t = et(ms);
+  for (let i = 0; i < 10; i++) {
+    const { y, m, d } = dateAfter(t, i);
+    const end = atMinutes(y, m, d, extended ? afterEndOf(y, m, d) : closeOf(y, m, d));
+    if (ms >= end || !isMarketDay(end)) continue;
+    return end;
+  }
+  throw new Error(`no market day within ten days of ${new Date(ms).toISOString()}`);
+}
+
+/** the US stock market's clock (live/trade.ts SessionClock), from this calendar: a public source of US stocks carries it, so a paper account
+ * judges a quote's own time by it and ends a DAY order at its close */
+export const usClock: SessionClock = { city: "New York", zone: "America/New_York", phaseAt: usPhaseAt, dayEndAt: usDayEndAt };
+
+/** The US stock market's session at `ms` IN FULL, as a market carries it (live/trade.ts MarketSession): the regular session as
+ * regularSession says it (in session now, and its close, or the next open), which phase is on and when it ends, and whether a limit order
+ * may be sent for the session that is on (`extendedHours`): in pre-market and after-hours always, in the overnight session only where
+ * `overnight` says the market is traded overnight (a source with a price in that session: Robinhood's 24-hour market) */
+export function usSessionFull(ms: number, overnight: boolean): MarketSession {
+  const phase = usPhaseAt(ms);
+  return { ...regularSession(ms), phase, phaseEndsAt: new Date(usPhaseEndsAt(ms)).toISOString(), extendedHours: phase === "pre" || phase === "after" || (phase === "overnight" && overnight) };
 }
 
 /** `Tue 6 Oct` — a New York date as a person reads it */

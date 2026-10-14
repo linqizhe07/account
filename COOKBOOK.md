@@ -161,7 +161,7 @@ Markets 只管看和挑，不管账户：接上、拔掉、对 agent 开关、�
 - **★**：关注一个市场，是一次签名（`setWatch`，最多 50 个）；agent 读得到你关注什么（第 8b 条）。"Watching" tab 是你关注的全部，★ 悬停写 "Watching since <日期>"。
 - 点一行打开**那一个抽屉**（Portfolio 的资产行打开的也是它）：价格（pre-IPO 是隐含估值）、24h（只说一次）、买卖价、成交量；永续的资金费率和杠杆；事件的倒计时和每个结果（各有 "Buy Yes" 这样的按钮）；代币化股票和 pre-IPO 的 Issuer 一栏；"Buy" / "Sell" / "Hand to agent" / ★。下面几段：K 线（接上的场所用它自己的，没接的用公开数据，5m / 1h / 1d）· Across venues（每个场所的价格，能下的有 "Trade"，只有公开行情的有 "Connect to trade"）· IPO markets（只在 pre-IPO 公司里）· You hold（你在各场所持有多少、持仓和 "Close…"、挂单和 "Cancel"、平均成本）· Agents on it（agent 在这里的卡和 "Review"、它们的单、你的意图）· On the statement（流水里相关的最近八行，"Open the Statement →"）。
 
-agent 读同样的东西：`portfolio_explore {tab, q, sort, limit}`（`tab` 是 all · crypto · stocks · rwas · perps · preipo · predictions；pre-IPO 的行带 `implied`）、`portfolio_candles {venue, symbol, interval}`。
+agent 读同样的东西：`portfolio_explore {tab, q, sort, limit}`（`tab` 是 all · crypto · stocks · rwas · perps · preipo · predictions；pre-IPO 的行带 `implied`）、`portfolio_candles {venue, symbol, interval}`、`portfolio_book {venue, symbol, depth}`（盘口和最新成交，Trade 中间那栏）。
 
 ## 3 · 让一个 agent 进来，给它交易额度
 
@@ -259,29 +259,39 @@ Account 的头上（rail 最下面的 Account 打开的三页）：Guard | Beast
 
 rail 上点 "Trade"（或按 `t`、Markets 一行的 "Trade"、市场抽屉里的 "Buy" / "Sell"、Portfolio 的快捷操作 "Trade"、Account 抽屉里的 "Trade…"）。Trade 只做一件事：在一个市场里建一个仓位。手里的钱的事都在 Portfolio：Move 和 Receive 是快捷操作（第 7、2b 条），Earn 从 Cash ready（第 7c 条），Sell many 从 Assets（第 5b 条）。
 
-屏顶一排是**市场的种类**：Crypto · Stocks · RWAs · Perps · Pre-IPO · Predictions，和 Markets 的 tab 同样的词、同样的顺序。一种只在有东西时出现：你接上的场所交易这一种，或者公开行情里有这一种（那些行写 "Connect to trade"）。地址栏是 `#/trade?kind=perps` 这样，再带 `venue`、`symbol`、`side`、`outcome` 就直接打开那张票。种类下面是这一种的**选市场**：一个只搜这一种的搜索框，下面三组：**You hold**（这一种你持有的；永续和 Pre-IPO 是你的持仓）、**Recent**（这个浏览器里最近挑过的，每种最多 12 个）、**Most traded**（这一种最忙的 6 个；Pre-IPO 每家公司一行，先写隐含估值）。价格在原地跳。点一个，右边就是它的票。
+Trade 屏照 Hyperliquid 的交易屏排（[docs/account.md](docs/account.md) 的「交易终端」）：
 
-下单票在右边那块面板里，刷新不会把它重画掉；一张票，六面，头上是这一面的标签。**先选市场，再选在哪**：
+- **顶上一条市场栏**：市场名（点开是选市场的面板）、价格、24h 涨跌、24h 成交额、买一卖一；永续加资金费率（下一次几点）和最高杠杆，股票加时段（Pre-market / Open / After-hours / Overnight，到几点），事件加收盘时间，纸上账户加报价来自哪家。只写源说过的，这一屏在前台时 5 秒一读。
+- **左边 K 线**：5m / 1h / 1d，带成交量，悬停看每根。纸上账户的图写的是它市场的公开源（Kraken、US stocks……）。
+- **中间盘口和成交**：Order book（卖在上、买在下、中间一行价差，按 1× / 10× / 100× 跳动单位合并）和 Trades（最新的在前）。点盘口的一档，票就变成那个价格的限价单。美股的公开报价没有深度：只画买一卖一，一行小字说明。
+- **右边下单面板**：下面的那张票。
+- **最下面三个 tab**：Positions（Size、Value、Entry、Mark、P&L、Liq.，"Close…" / "Sell…"）· Open orders（下面的 Under way）· Trade history（Statement 里的成交，最新的 40 行）。
 
-1. 在票的 Market 里打几个字母（BTC、AAPL、FED）：搜的是这一种在 Markets 那张表里的行，接上没接的场所都在。选一个，下面马上是它的价格；挑到另一种的市场，票和屏顶的种类跟着它换。
+窗口窄于 1360px 时盘口挪到图下面，窄于 860px 时一栏，面板紧跟在图后面。
+
+**选市场**：点市场栏上的名字，面板里是**市场的种类**：Crypto · Stocks · RWAs · Perps · Pre-IPO · Predictions，和 Markets 的 tab 同样的词、同样的顺序。一种只在有东西时出现：你接上的场所交易这一种，或者公开行情里有这一种（那些行写 "Connect to trade"）。地址栏是 `#/trade?kind=perps` 这样，再带 `venue`、`symbol`、`side`、`outcome` 就直接打开那张票。种类下面是这一种的选市场：一个只搜这一种的搜索框（打几个字母：BTC、AAPL、FED；搜的是这一种在 Markets 那张表里的行，接上没接的场所都在），下面三组：**You hold**（这一种你持有的；永续和 Pre-IPO 是你的持仓）、**Recent**（这个浏览器里最近挑过的，每种最多 12 个）、**Most traded**（这一种最忙的 6 个；Pre-IPO 每家公司一行，先写隐含估值）。价格在原地跳。点一个，面板收起，图、盘口和票都换成它。还没挑时，屏开在这一种最忙的那一个上。
+
+下单票在右边那块面板里，刷新不会把它重画掉；一张票，六面。**先选市场，再选在哪**：
+
+1. 市场从市场栏挑（上面）；挑到另一种的市场，票的种类跟着它换。
 2. **Where**：交易这个东西的、你接上的场所，按这一单在那里会成交的价格排（买看卖一，卖看买一；同一个东西在别处叫 XBT、WBTC、cbBTC 也算），最好的标 "Best"、默认选它，可以换。只在 Crypto、Stocks、RWAs 三面比价，每面只列自己种类的场所（一只股票的 Where 里不会混进同名的代币）；Pre-IPO 每家写它自己的隐含估值和单位。不能在那里下的写场所的话和怎么修；没接的写 "Public"，只有你哪个账户都不交易它时才给 "Connect to trade"，点了接上以后票自动换到它。场所的地区规矩照它的原话写。
 3. Where 下面是**这一面的说明块**：这种市场下单之前该知道的（第 5b 条）。
-4. Buy / Sell（Perps、Pre-IPO 是 Long / Short；Predictions 先选结果），数量按美元（Dollars）或按单位（币、股、合约；只做整股的写 "Shares (whole)"）。Crypto 的买单有得选时多一行 **Pay with**（第 5b 条）。Order 里只有这个市场接受的：Market、Limit、Stop（价格到了 Stop price 按市价成交）、Stop limit（到了按 Limit price 挂限价）。永续多一行 Leverage（第 5b 条）。**Advanced ▸** 折着，里面是这个市场接受的 Time in force（Until canceled / Fill now, rest canceled / All now or nothing / Today only）、Post-only（只做 maker）、Reduce-only（只减仓）；折着时摘要一行写已经设了什么，没设就写这个场所对这种单的规矩（例如 Kalshi 的市价单："A market order here fills now or is cancelled (ioc/fok)"）；一样都不接受的市场没有 Advanced。
+4. 单子的种类在面板顶上：**Market · Limit** 两个 tab，**Pro** 下拉里是这个市场接受的其余几种：Stop（价格到了 Stop price 按市价成交）、Stop limit（到了按 Limit price 挂限价）、Trailing stop（离最高价（卖）或最低价（买）一个百分比或一个价差就触发）。然后 Buy / Sell（Perps、Pre-IPO 是 Long / Short；Predictions 先选结果），下面一行 **Available to trade**（买：这个场所的现金；卖现货：你持有的数量）和 **Current position**。数量按美元（Dollars）或按单位（币、股、合约；只做整股的写 "Shares (whole)"），下面一条**百分比滑杆**：买单和永续按可用现金的百分比，卖现货按持有数量的百分比（按步长向下取整）。Crypto 的买单有得选时多一行 **Pay with**（第 5b 条）。永续的 Leverage 在面板最上面（第 5b 条）。市场接受时有两个勾：**Reduce only**（只减仓）和 **Take profit / Stop loss**（只在市价或限价的开仓单上；勾了才出两个价格，成交后账户替你挂上这两张平仓单，一张成交另一张撤掉）。**Advanced ▸** 折着，里面是这个市场接受的 Time in force（Until canceled / Fill now, rest canceled / All now or nothing / Today only）、Post-only（只做 maker）；折着时摘要一行写已经设了什么，没设就写这个场所对这种单的规矩（例如 Kalshi 的市价单："A market order here fills now or is cancelled (ioc/fok)"）；一样都不接受的市场没有 Advanced。
 5. 预览：确切数量（按美元下的单向下取整到这个市场的步长）、按什么价格估的值、市价买单最多花多少。"What you sign" 展开是要签的每个字段（预测市场的限价旁写成 "limit 62¢ ($0.62 a contract)"）；十分钟的有效期在倒数，到了自动重新准备。
 6. 点 "Sign and place"。从钱包换币的，钱包会请你确认（要先授权的，先确认授权、等它上链，再确认换币）。不想自己下："Hand to agent instead" 把这张票的种类、场所、市场、方向、结果和美元数带进交给 agent 的那张表（第 8b 条）。
 
 没签完的票存在这个浏览器里一天：刷新以后，场所还接着、还能交易、市场还在，就原样放回来（不抢焦点），否则丢掉。
 
-Trade 屏下面是 **Under way**，按 Lens 筛，一张表给所有种类（Order · Status · 动作）：
+Trade 屏下面的 **Open orders** tab 是 Under way，按 Lens 筛，一张表给所有种类（Order · Status · 动作）：
 
 - 挂着的单每十秒最多问一次场所，有 "Cancel"（撤 agent 的单先问你一次："Cancel an agent's order"；撤自己的一下就撤），场所能改单的（Alpaca、Kalshi、一部分交易所）还有 "Change"：改数量、限价、触发价，账户按现在的价格重新估值，签了就改；改成比原来更值钱的，算一笔差额的新单（agent 也一样：Beast 下额度内直接改，Guard 下出卡；你把 agent 的单改大到超过它的额度，账户拒绝并说 "give it a bigger limit under Agents, or grow the order by less"）。钱包要发的单是 "Send from wallet…"。
 - 在途的钱，和放进 / 取出 earn 还没完的。
 - agent 等你批的卡是一行 "Waiting for you"，唯一的按钮是 **"Review"**：去 Portfolio，那张卡滚到眼前、描一圈边（第 8 条）。批只在那一处。
 - 两单以上有 "Cancel all N"（先确认，每单一次签名）。成交、撤掉之后它落进 Statement。
 
-Trade 屏没有 Positions 和 Recent fills：持仓在 Portfolio › Positions 和市场抽屉里，成交在 Statement。**Close** 在哪里点（Portfolio › Positions、市场抽屉的 You hold）都是同一个对话框：全部或一部分，写明现在值多少、最差成交价；超过服务的单笔上限时，账户自己的拒绝写在 "Sign and close"（卖掉持有的是 "Sign and sell"）上方，按钮不让按，下面给一个按市场步长取整、刚好在上限以内的数量。你点的 Close 是你自己签名，直接执行。agent 平仓：卖掉现货持有（币、股票、事件合约）的平仓就是一张卖单，按每单、总额、窗口算进它的交易额度，超了拒绝并说 "A close that sells a holding is a sell order, and counts against the trading limit like one"，Guard 出卡；只减仓的衍生品平仓不占预算（它只会减少持有），但持仓可能是你自己的，所以仍看模式：Guard 出卡等你批，Beast 在它的每单上限以内直接平，超过也出卡。场所有自己的平仓接口就用它，没有就发一张 reduce-only 市价单；市场不接受 reduce-only 的，不发（免得反向开仓）。
+**Close** 在哪里点（Trade 的 Positions tab、Portfolio › Positions、市场抽屉的 You hold）都是同一个对话框：全部或一部分，写明现在值多少、最差成交价；超过服务的单笔上限时，账户自己的拒绝写在 "Sign and close"（卖掉持有的是 "Sign and sell"）上方，按钮不让按，下面给一个按市场步长取整、刚好在上限以内的数量。你点的 Close 是你自己签名，直接执行。agent 平仓：卖掉现货持有（币、股票、事件合约）的平仓就是一张卖单，按每单、总额、窗口算进它的交易额度，超了拒绝并说 "A close that sells a holding is a sell order, and counts against the trading limit like one"，Guard 出卡；只减仓的衍生品平仓不占预算（它只会减少持有），但持仓可能是你自己的，所以仍看模式：Guard 出卡等你批，Beast 在它的每单上限以内直接平，超过也出卡。场所有自己的平仓接口就用它，没有就发一张 reduce-only 市价单；市场不接受 reduce-only 的，不发（免得反向开仓）。
 
-**Statement**（顶栏的时钟图标；Portfolio 的 Agents at work 也有一个 "Statement"）是银行流水的样子：一行一笔交易（成交、提现、划转、跨链、换币、Earn），日期、说明、账户、金额（买入 −、卖出 +，挪钱和 earn 照原数）、状态，下一行小字是谁做的、手续费、场所的编号或交易哈希。还没完的单不在这里，在 Trade 的 Under way。四个下拉按月份、账户、类型（有 earn 时多一个 Earn）、Who（你，或哪个 agent，按钥匙认）筛；最后一行是这一屏的合计（买了多少、卖了多少、挪了多少、into earn / out of earn、手续费；被拒的不算）。"Download CSV" 下载这一屏（带 agent 一列），"Print" 只打印流水。流水从账本文件读，重启以后还在。
+**Statement**（顶栏的时钟图标；Portfolio 的 Agents at work 也有一个 "Statement"）是银行流水的样子：一行一笔交易（成交、提现、划转、跨链、换币、Earn），日期、说明、账户、金额（买入 −、卖出 +，挪钱和 earn 照原数）、状态，下一行小字是谁做的、手续费、场所的编号或交易哈希。还没完的单不在这里，在 Trade 的 Open orders。四个下拉按月份、账户、类型（有 earn 时多一个 Earn）、Who（你，或哪个 agent，按钥匙认）筛；最后一行是这一屏的合计（买了多少、卖了多少、挪了多少、into earn / out of earn、手续费；被拒的不算）。"Download CSV" 下载这一屏（带 agent 一列），"Print" 只打印流水。流水从账本文件读，重启以后还在。
 
 几条规矩：只交易美元计价的市场（USD、USDC、USDT、USDG 这类）；每单不超过 `--live-cap`；签名十分钟内有效；下单前再问一次价格，买单涨过你签的价值、市价卖单跌了 2% 以上就不下；撤单要等场所说撤掉了才算，期间成交的照算。
 
@@ -293,7 +303,7 @@ Trade 屏没有 Positions 和 Recent fills：持仓在 Portfolio › Positions �
 
 每一面是同一张票，签的还是同样那几种动作；不同的是 Where 下面那一块说明，和几行只在这一面有的字段：
 
-- **Crypto**：买一卖一和 24h；从钱包换的，路线、滑点和 gas 用钱包那边的话；在交易所不多说。**Pay with**（只在买单、有得选时出现）：先是这个币在这个场所对的几种美元（换一种美元就是换到那个市场），再是你在那里持有的别的币。挑一个币是**两步、两次签名**：先把它卖成两个市场共有的那种美元（钱包的话在同一条链上），等它成交（每两秒问一次，最多一分半钟），按实际到手的钱（扣掉手续费）准备买的那一腿，给你看过以后第二次签名；按钮先是 "Sign the sale (1 of 2)"，再是 "Sign the buy (2 of 2)"。一分半钟里没成交，买就等着：卖单在 Under way 里，成交以后再买一次。一种美元换另一种美元不是交易：Move 的 "Swap stablecoins"（第 7 条）。
+- **Crypto**：买一卖一和 24h；从钱包换的，路线、滑点和 gas 用钱包那边的话；在交易所不多说。**Pay with**（只在买单、有得选时出现）：先是这个币在这个场所对的几种美元（换一种美元就是换到那个市场），再是你在那里持有的别的币。挑一个币是**两步、两次签名**：先把它卖成两个市场共有的那种美元（钱包的话在同一条链上），等它成交（每两秒问一次，最多一分半钟），按实际到手的钱（扣掉手续费）准备买的那一腿，给你看过以后第二次签名；按钮先是 "Sign the sale (1 of 2)"，再是 "Sign the buy (2 of 2)"。一分半钟里没成交，买就等着：卖单在 Open orders 里，成交以后再买一次。一种美元换另一种美元不是交易：Move 的 "Swap stablecoins"（第 7 条）。
 - **Stocks**：第一行是交易时段，场所报了才有（市场的 `session`：Alpaca 按它自己的时钟 `/v2/clock` 和日历 `/v2/calendar` 分段；Robinhood 的单子都送常规时段，按市场日历，节假日算休市）："Open now · closes 16:00 New York (04:00 your time)"、"Closed · opens Wed 7 Oct, 09:30 New York"，或者 Alpaca 常规时段之外的一段——"Pre-market"、"After-hours"、"Overnight session · until 04:00 New York (16:00 your time) · a limit order with extended hours trades now"（括号里是你自己时区的时间；这时 Advanced 里多一个 "Extended hours" 勾，默认勾上，限价单就下进这一段；Alpaca 不隔夜交易的股票写 orders wait for the regular session）；后面是场所的原话（Alpaca 收盘时写它把单子留到开盘、为什么这时不下市价单：会按开盘价成交，可能离现在很远；限价、止损单等开盘）。场所没报时段就只有原话，不写 Open / Closed；这只股票此刻根本不收单（停牌、不可交易）时写 "Closed now." 和场所的话。只做整股的场所（Robinhood）写 "Whole shares only here."，单位是 "Shares (whole)"；同一只股票也有代币（RWAs 里有同名的行）时一行 "Also as a token: … → RWAs"。Where 里只有券商，不混进同名的代币。
 - **Predictions**：先选结果（Yes / No，或场所列的几个），价格用 ¢，也就是市场认为的概率，再 Buy / Sell。说明块写这一单到期最多赔多少："N contracts pay $N if Yes · cost ≈ $X · the market gives it 62%"（还没填数量时说一份多少 ¢，每份到期兑 $1 或 $0）、离收盘多久（每秒走）和纽约时间；只卖得了持有的场所写 "Sells only what you hold · N held"。场所只让你那里平仓的（Polymarket 对美国），卖持有的照常，买会被它的原话拒掉。限价按 ¢ 填（62 就是 $0.62；到小数点后一位，62.5¢；0 到 100 以外的不是价格，票上会说），"What you sign" 里写成 "limit 62¢ ($0.62 a contract)"；页面上事件的价格到处都是一位小数的 ¢。
 - **Perps**：Long / Short，标记价、资金费率和下次支付的时间、"up to Nx here"，填了数量和杠杆时 "Margin ≈ $X for $Y at Nx."，你在这个市场的持仓（方向、倍数、强平价、开仓价）。Leverage 一行一直在票上（它是永续的主控件，不折进 Advanced）：场所能从这里设的，填倍数（场所说了上限就提示 "up to 50"，没说就是 "a whole number"），Margin 只在这个市场列出保证金模式时出现（市场的 `marginModes`：OKX 只有 Cross，Binance 有 Cross / Isolated，Bybit 统一账户是整个账户的、不列，经典账户两种；mm 的 Hyperliquid 永续按 Hyperliquid 自己的来，不画），点 "Set leverage…"，是下单之前单独的一次签名（`liveLeverage`，和动钱的指令一样只在签名后十分钟内有效）；场所不让从这里设的，这一行写 "As set at the venue" 和你持仓的倍数。agent 设杠杆不超过你在 Settings 里签的倍数（默认 1 倍，即不让加杠杆）。Hyperliquid 的永续有两条路：Hyperliquid 的 API 钱包连接（第 2 条）直接下；或经 MetaMask Agent Wallet 的 `mm perps`（市场写 `BTC-PERP`，写操作还要 `PORTFOLIO_MM_WRITES=1`）。两条路每一单、每次平仓、每次改杠杆之前，都先查这台机器此刻在哪，按 Hyperliquid 使用条款 §1.6（美国、安大略、受制裁地区不服务）判：位置来自 Polymarket 的公开位置查询（mm 那条路先用 `mm predict geoblock`），它不答时用 Cloudflare 的 trace；一个只关一部分的国家（加拿大、乌克兰）不知道省份时，再问一次 ipapi.co。在里面、或者哪处都说不出在哪，什么都不发。
@@ -333,8 +343,8 @@ agent 只能撤自己下的单；你能撤任何单（撤单从不出卡；你�
 **Paper account（什么都不用接）**
 
 - 开：Connect an account → "Paper account"（Portfolio 空着的时候那句 "start a paper account" 也是它）→ 起个名（Momentum）、写一笔起始资金（空着是 $10,000）→ Connect（一次签名，不问任何场所）。可以开好几个，各有各的名字和账本：`~/.buyer-agent-demo/paper/<id>/book.json`，id 是 `paper-<名字>`（没起名就是 `paper-1`、`paper-2`）；同一个 id 再接是接着记，不是重开；重启照旧。
-- 它交易什么：Markets 不带钥匙读到的全部公开行情，四类都有——**美股**（Cboe 自己的延迟报价，比市场晚 15 分钟，Stocks tab 里不接券商也能看到；行上写着 delayed）、**crypto**（Kraken、Coinbase、OKX、Binance、Bybit 的现货，Hyperliquid 的永续，pre-IPO 永续）、**RWA**（Robinhood 的 Stock Tokens，Gate 上的 xStocks，Ondo 的股票代币按 LI.FI 的报价）、**预测市场**（Kalshi、Polymarket、Polymarket US 的事件合约；Polymarket 搜任何市场都能搜到——Gamma 的全站搜索）。市场的写法是那家公开源自己的（Cboe 的 `AAPL`、Kraken 的 `BTC/USD`、Hyperliquid 的 `BTC-PERP`、Gate 的 `AAPLX/USDT`、Kalshi 的 ticker、Polymarket 的 `<slug>:Yes`）；两家都列的同一个符号，排在前面的那家说了算。
-- 成交规则是账户自己定的，票上、Details 里、MCP 答复里都写着：市价单按公开报价的卖一（买）/ 买一（卖）整单成交，受门给的最差价约束；限价单挂着，报价穿过限价时按限价成交——"穿过"是在账户看它的时候判的（读余额、查单、看持仓、页面每次刷新），没人看就不判；IOC 没穿过就撤；手续费 0.10%；不模拟深度、部分成交和滑点；挂单不冻结资金，穿过时钱不够就拒。**美股**只在 Cboe 的延迟报价来自盘中的那段时间成交——纽约时间 09:45 到 16:15（常规时段往后挪 15 分钟），这段之外不收市价单（票上只剩 Limit），限价单挂着等窗口开了再判，和券商持单等开盘一个意思。现货、代币、股票、事件合约只能卖持有的。**永续**是逐仓：杠杆按市场设（`portfolio_live_leverage` / 票上的 Leverage，1 倍起、最多到那家源公布的上限），名义额除以杠杆作保证金、按报价标记未实现盈亏、只减仓或反向单平仓（超过仓位的反向单拒掉，不翻仓）；**资金费**每整小时按那家源当时显示的费率、按标记价的名义额从保证金里扣（Hyperliquid 的费率按小时，别家是 8 小时一期，按八分之一算；多头在费率为正时付、空头收）；**强平**：保证金减亏损减已付资金费跌到维持保证金（标记价名义额除以两倍最大杠杆，即最大杠杆下初始保证金的一半）就按标记价平掉，剩下的扣掉手续费退回现金，成交记录写 "liquidated"（1 倍多头永远不会被强平，1 倍空头涨三分之一会）。**事件合约**按价格标记，场所结算后按场所付的钱付掉（赢的一边每张 $1、输的 $0，Polymarket 看 Gamma 的 resolved 和 outcomePrices，Kalshi 看 result，Polymarket US 看它的 settlement 接口；每十分钟问一次，截止后每分钟一次），合约从账本里拿掉；截止了还没结算的标 "waiting for its settlement"。
+- 它交易什么：Markets 不带钥匙读到的全部公开行情，四类都有——**美股**（实时报价：Robinhood 公开的 194 只股票的买一卖一、其余从 Nasdaq 的实时报价读，都读不到才退回 Cboe 的 15 分钟延迟报价；行上写着价格是谁给的、晚多少）、**crypto**（Kraken、Coinbase、OKX、Binance、Bybit 的现货，Hyperliquid 的永续，pre-IPO 永续）、**RWA**（Robinhood 的 Stock Tokens，Gate 上的 xStocks，Ondo 的股票代币按 LI.FI 的报价）、**预测市场**（Kalshi、Polymarket、Polymarket US 的事件合约；Polymarket 搜任何市场都能搜到——Gamma 的全站搜索）。市场的写法是那家公开源自己的（Cboe 的 `AAPL`、Kraken 的 `BTC/USD`、Hyperliquid 的 `BTC-PERP`、Gate 的 `AAPLX/USDT`、Kalshi 的 ticker、Polymarket 的 `<slug>:Yes`）；两家都列的同一个符号，排在前面的那家说了算。
+- 成交规则是账户自己定的，票上、Details 里、MCP 答复里都写着：市价单按公开报价的卖一（买）/ 买一（卖）整单成交，受门给的最差价约束；限价单下单时就穿过的按当时报价成交（比限价好就按好的），挂着的等报价碰到时按限价成交；止损单在卖单的买一 / 买单的卖一碰到止损价时触发、按报价成交，止损限价触发后变成限价单，追踪止损跟着下单后的最好价走、回撤到设定的百分比或价差时触发；开仓单带止盈止损的，成交那一刻挂上两个退出单，一个成交另一个撤掉。挂单、止损、到期、资金费、强平由服务每 5 秒自己看一遍（读余额、查单、看持仓、页面刷新也会看）；IOC / FOK 当场成交不了就撤（没有部分成交，两者一样）；DAY 单随那个市场的时段结束（盘前盘后单到 20:00）；手续费：美股不收，其他 0.10%；不模拟深度、部分成交和滑点；挂单不冻结资金，成交时钱不够就拒。**美股**只按时间戳落在可交易时段里的报价成交：常规时段任何单，盘前（04:00–09:30）、盘后（16:00–20:00）、隔夜（20:00–04:00，只限 Robinhood 有报价的那些股票）只成交勾了 extended hours 的限价单；时段外的市价单排队等开盘，止损只在常规时段触发；报价比它的源声明的延迟再旧 15 分钟就不成交（报价停了不算数）。现货、代币、股票、事件合约只能卖持有的。**永续**是逐仓：杠杆按市场设（`portfolio_live_leverage` / 票上的 Leverage，1 倍起、最多到那家源公布的上限），名义额除以杠杆作保证金、按报价标记未实现盈亏、只减仓或反向单平仓（超过仓位的反向单拒掉，不翻仓）；**资金费**每整小时按那家源当时显示的费率、按标记价的名义额从保证金里扣（Hyperliquid 的费率按小时，别家是 8 小时一期，按八分之一算；多头在费率为正时付、空头收）；**强平**：保证金减亏损减已付资金费跌到维持保证金（标记价名义额除以两倍最大杠杆，即最大杠杆下初始保证金的一半）就按标记价平掉，剩下的扣掉手续费退回现金，成交记录写 "liquidated"（1 倍多头永远不会被强平，1 倍空头涨三分之一会）。**事件合约**按价格标记，场所结算后按场所付的钱付掉（赢的一边每张 $1、输的 $0，Polymarket 看 Gamma 的 resolved 和 outcomePrices，Kalshi 看 result，Polymarket US 看它的 settlement 接口；每十分钟问一次，截止后每分钟一次），合约从账本里拿掉；截止了还没结算的标 "waiting for its settlement"。
 - 页面：Venues 一行标 Paper，余额不进净值（标题写 "paper account not counted"）；Trade 的 Where 里它排在真场所后面，公开行照样给 "Connect to trade"；只有它一家有的市场整行标 Paper、按钮写 "Paper trade"；Statement 标 Paper。
 - agent：第 3 条给额度时场所填它的 id（`paper-momentum`）；`portfolio_venues` 里 `live:paper` 永远 connectable、`needs: none`，agent 可以用 `portfolio_ask {kind: "venue", venue: "paper"}` 请你开一个。
 
@@ -365,7 +375,11 @@ portfolio_live_order     {venue: "paper-momentum", symbol: "BTC/USD", side: "buy
 portfolio_live_leverage  {venue: "paper-momentum", symbol: "BTC-PERP", leverage: 5}      逐仓；有仓位时保证金随之进出现金
 portfolio_live_positions {venue: "paper-momentum"}     永续仓位，每条带 paper: true、杠杆、强平价、已付资金费（native.fundingUsd）
 portfolio_live_close     {venue: "paper-momentum", symbol: "BTC-PERP"}
-portfolio_live_order     {venue: "paper-momentum", symbol: "AAPL", side: "buy", orderType: "market", usd: 500}   美股：纽约时间 09:45–16:15 之外只收限价单
+portfolio_live_order     {venue: "paper-momentum", symbol: "AAPL", side: "buy", orderType: "market", usd: 500}   美股：时段外排队等开盘
+portfolio_live_order     {venue: "paper-momentum", symbol: "AAPL", side: "buy", orderType: "limit", limitPrice: 340, qty: 2, extendedHours: true, tif: "day"}   盘前 / 盘后 / 隔夜
+portfolio_live_order     {venue: "paper-momentum", symbol: "BTC/USD", side: "buy", orderType: "market", usd: 500, takeProfit: 90000, stopLoss: 75000}   带止盈止损
+portfolio_live_order     {venue: "paper-momentum", symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: 0.005, trailPercent: 3}
+portfolio_history        {range: "1w", paper: true}       纸上账户自己的曲线：从开户那天起、从账本的成交和公开 K 线复原，sinceStartUsd 是自开户以来的盈亏
 ```
 
 测试网的市场写法和主网一样：`BTC/USDC:USDC` 永续、`HYPE/USDC` 现货、`XYZ-NVDA/USDC:USDC` HIP-3；测试网上有些市场主网没有，反过来也是。
@@ -432,7 +446,7 @@ agent 付 API 调用、按次计费的服务，用的是一个 **agent 钱包**�
 
 ## 8 · 批卡、拒卡
 
-Portfolio 右边一栏最上面的 **Waiting for you**：卡按 agent 分组，每张写着它要做什么、值多少、几点前要答（"answer by 16:42"，一张卡只说一次）；Trade 屏的 Under way 和市场抽屉的 Agents on it 里，agent 的卡也是一行，按钮只有 "Review"：带你回到这里，那张卡滚到眼前、描一圈边（`#/portfolio?card=<id>`）。批只在这一处。rail 最下面 Account 旁边的数和浏览器标签页的标题带着等你的张数，比如 "(1) Account"。Lens 选一个 agent 就只看它的。
+Portfolio 右边一栏最上面的 **Waiting for you**：卡按 agent 分组，每张写着它要做什么、值多少、几点前要答（"answer by 16:42"，一张卡只说一次）；Trade 屏的 Open orders 和市场抽屉的 Agents on it 里，agent 的卡也是一行，按钮只有 "Review"：带你回到这里，那张卡滚到眼前、描一圈边（`#/portfolio?card=<id>`）。批只在这一处。rail 最下面 Account 旁边的数和浏览器标签页的标题带着等你的张数，比如 "(1) Account"。Lens 选一个 agent 就只看它的。
 
 - 两个圆键（第七轮的）：✗ 是 Reject，蓝的 ✓ 是 Approve；悬停和读屏器都说它的字。
 - "What it asks" 展开是你将要签的每个字段：市场、数量、价格、价值；挪钱的是目的地址和网络。
@@ -520,13 +534,13 @@ portfolio_forget {id}                                   # 忘掉它学的一条
 
 | 想做的 | 怎么做 |
 |---|---|
-| 只停这一单 | 那张卡点 "Reject"；已经下了的，Trade 屏 Under way 里 "Cancel"（agent 的单先问你一次） |
+| 只停这一单 | 那张卡点 "Reject"；已经下了的，Trade 屏 Open orders 里 "Cancel"（agent 的单先问你一次） |
 | 收回一句话 | Portfolio › Agents at work 里那条意图的 "Withdraw"（连同随它给的额度） |
 | 以后每一单都先问你 | rail 上切到 "Guard"，不用签名 |
 | 这个场所不让 agent 碰 | Account › Venues 那一行关掉 "Open to agents"，不用签名（重新打开要签） |
 | 收紧或收回它的额度 | Agents 弹层里那一行 "Change limit"；只收回 earn 的用 "End earn limit" |
 | 停掉这把钥匙 | Agents 弹层里那一行 "Revoke" |
-| 撤掉所有挂着的单 | Trade 屏 Under way 右上 "Cancel all N" |
+| 撤掉所有挂着的单 | Trade 屏 Open orders 右上 "Cancel all N" |
 
 钥匙撤销之后：
 

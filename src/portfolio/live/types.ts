@@ -70,6 +70,9 @@ export interface LiveSource {
    * takes no row's price from it, the comparison leaves it out), and its orders are rehearsals: held to the owner's signature or an agent's
    * limit and to the owner's mode as every order is, and not to the server's real-money cap */
   paper?: true | undefined;
+  /** a paper account the account keeps itself: one look at its book between the page's reads — resting orders judged, stops watched, a
+   * day's orders ended, funding paid — true when the book changed (service.ts watches every paper account so, every few seconds) */
+  settle?: (() => Promise<boolean>) | undefined;
 }
 
 export interface HttpReply {
@@ -82,7 +85,9 @@ export interface HttpReply {
   /** a redirect's target, its host only — never followed, and never its path, which may carry a place or an address */
   location?: string | undefined;
 }
-export type Http = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }) => Promise<HttpReply>;
+/** `charset`: the body's encoding where it is not UTF-8 (Tencent's quotes are GBK), decoded so; `full`: the whole text is kept (a text feed
+ * that is not JSON, read by its fields), not the first 2000 characters a refusal's words need */
+export type Http = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; charset?: string; full?: boolean }) => Promise<HttpReply>;
 
 /** the real network: one request, a timeout (the body's too), no redirect followed — a redirect comes back as the answer it is, with the
  * host it pointed at, so it is told as the venue answering and not as "did not answer" */
@@ -94,14 +99,14 @@ export const realHttp: Http = async (url, init = {}) => {
     const host = hostOf(r.headers.get("location"), url);
     return { status: r.status, body: undefined, text: "", ...(host ? { location: host } : {}), ...(wait ? { retryAfterMs: wait } : {}) };
   }
-  const text = await r.text();
+  const text = init.charset ? new TextDecoder(init.charset).decode(await r.arrayBuffer()) : await r.text();
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
     body = undefined;
   }
-  return { status: r.status, body, text: text.slice(0, 2000), ...(wait ? { retryAfterMs: wait } : {}) };
+  return { status: r.status, body, text: init.full ? text : text.slice(0, 2000), ...(wait ? { retryAfterMs: wait } : {}) };
 };
 
 /** a Retry-After header — seconds, or an HTTP date — as milliseconds from now; nothing when it says nothing usable. An hour at most */

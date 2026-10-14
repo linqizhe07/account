@@ -78,6 +78,86 @@ const pageOf = (venues: unknown[], writes = true) => ({ now: "2026-10-06T12:00:0
 const ROW = (kind: string, base: string, more: Record<string, unknown> = {}) => ({ key: `${kind}:${base}`, kind, name: base, base, price: 10, tabs: [], at: [{ venue: "ex", venueName: "Exchange", symbol: `${base}/USDT`, connected: true, canTrade: true, public: false, price: 10 }], ...more });
 const ANTH = { key: "preipo:anthropic", kind: "perp", name: "Anthropic", base: "ANTHROPIC", category: "Pre-IPO", price: 2080, implied: { perPoint: 1e9, unit: "1 contract = 1/1,000,000,000 of the implied company valuation", usd: 2.08e12 }, group: { id: "preipo:anthropic", title: "Anthropic" }, issuer: "Anthropic", eligibility: "Anthropic, 29 June 2026: transfers of its shares it has not approved are void", tabs: ["all", "preipo"], at: [{ venue: "okx-preipo", venueName: "OKX", symbol: "ANTHROPIC/USDT:USDT", connected: false, canTrade: false, public: true, price: 214.5, implied: { perPoint: 1e10, unit: "OKX: 1/10,000,000,000 since its 30 June 2026 rebase", usd: 2.145e12 }, connectTo: "okx", connector: "live:exchange:okx" }, { venue: "ex", venueName: "Exchange", symbol: "ANTHROPIC/USDT:USDT", connected: true, canTrade: true, public: false, price: 2080, implied: { perPoint: 1e9, unit: "1 contract = 1/1,000,000,000 of the implied company valuation", usd: 2.08e12 } }] };
 
+describe("the trade terminal (ui/terminal.js): the market bar's figures, its session words, its tabs", () => {
+  const p = page();
+  /* a stand-in for the bar: two parts that take HTML */
+  const bar = () => p.run('var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) }; EL');
+
+  it("names the market as a trader reads it: a perpetual as BASE-PERP, a share or a coin by its base, an event by its short name", () => {
+    expect(p.out('[ttLabel(null), ttLabel({ kind: "perp", base: "BTC", name: "BTC perpetual" }), ttLabel({ kind: "coin", base: "ETH", name: "ETH" }), ttLabel({ kind: "stock", base: "AAPL", name: "Apple Inc" })]')).toEqual(["Pick a market", "BTC-PERP", "ETH", "AAPL"]);
+  });
+
+  it("says only what the venue's market and the row said: price, the day's change, volume, bid and ask, funding with its next payment, where the order goes", () => {
+    p.set("A", pageOf([{ ...HL, paper: true, name: "Paper account" }]));
+    bar();
+    p.run('TT.item = { kind: "perp", base: "BTC", name: "BTC perpetual", changePct24h: -1.73, change24h: -1443, volumeUsd24h: 2794956106.72 }; TT.at = { venue: "hl", symbol: "BTC-PERP" }; TT.mk = { kind: "perp", base: "BTC", quote: "USDC", price: 81900, bid: 81899, ask: 81901, fundingRate: 0.0000125, nextFundingAt: "2026-10-06T13:00:00.000Z", maxLeverage: 40 }');
+    p.run("ttStats(EL)");
+    const html = p.out<string>("BOX.innerHTML");
+    expect(html).toContain("81,900");
+    expect(html).toContain("−1,443 / −1.73%");
+    expect(html).toContain("Funding");
+    expect(html).toContain("0.0013%");
+    expect(html).toContain("81,899 · 81,901");
+    expect(html).not.toContain("Session");
+    expect(p.out<string>("TAGS.innerHTML")).toContain("40x");
+    expect(p.out<string>("TAGS.innerHTML")).toContain('<span class="tag paper">Paper</span>');
+    // nothing a source did not give: no volume, no change, no funding line
+    p.run('TT.item = { kind: "stock", base: "AAPL", name: "Apple Inc" }; TT.mk = { kind: "stock", base: "AAPL", quote: "USD", price: 342.55, session: { open: false, phase: "after", phaseEndsAt: "2026-10-07T00:00:00.000Z", extendedHours: true }, quoteFrom: "Robinhood · real time" }');
+    p.run("ttStats(EL)");
+    const stock = p.out<string>("BOX.innerHTML");
+    expect(stock).toContain("After-hours until 20:00");
+    expect(stock).toContain("Robinhood · real time");
+    expect(stock).not.toContain("24h volume");
+    expect(stock).not.toContain("24h change");
+    expect(stock).not.toContain("Funding");
+  });
+
+  it("says a stock's session in a few words: the phase and until when, open until the close, closed with when it opens", () => {
+    expect(p.out('ttSessionWord({ open: true, closesAt: "2026-10-06T20:00:00.000Z" })')).toBe("Open until 16:00");
+    expect(p.out('ttSessionWord({ open: false, phase: "overnight", phaseEndsAt: "2026-10-07T08:00:00.000Z" })')).toBe("Overnight until 04:00");
+    expect(p.out('ttSessionWord({ open: false, phase: "closed", opensAt: "2026-10-09T13:30:00.000Z" })')).toBe("Closed · opens Fri 9 Oct 09:30");
+  });
+
+  it("shows the chart and the book of the market showing and no other: a new market drops the last one's place and figures; until an account is chosen for it, its public listing's; with neither, says so", () => {
+    p.set("A", pageOf([EX]));
+    p.run(`var MOUNTS = [];
+      var TT_CH = { innerHTML: "" }; var TT_BKP = { innerHTML: "" };
+      var PANE = { querySelector: (s) => (s === "[data-tt-chart]" ? TT_CH : s === "[data-tt-book]" ? TT_BKP : null) };
+      document.getElementById = (id) => (id === "pane-trade" ? PANE : null);
+      chMount = (el, o) => MOUNTS.push(["chart", o.venue, o.symbol]);
+      bkMount = (el, o) => MOUNTS.push(["book", o.venue, o.symbol]);
+      chRelease = () => MOUNTS.push(["release"]);
+      bkRelease = () => {};
+      ttPoll = () => {};
+      TT.item = null; TT.at = null; TT.mk = null; TT.mounted = "";`);
+    // a coin traded at the exchange connected: once the ticket chooses it, the chart and the book are that venue's
+    p.run(`ttSetItem(${JSON.stringify(ROW("coin", "BTC"))}, "crypto"); ttSetMarket({ venue: "ex", symbol: "BTC/USDT" }, { kind: "coin", base: "BTC", quote: "USDT", priceStep: 0.1, price: 81900 })`);
+    expect(p.out("MOUNTS.filter((m) => m[1] === 'ex')")).toEqual([["chart", "ex", "BTC/USDT"], ["book", "ex", "BTC/USDT"]]);
+    // a share no account of yours trades, listed publicly: the last market's place and price are dropped at once, its public listing shows
+    const nvda = { key: "stock:NVDA", kind: "stock", base: "NVDA", name: "NVIDIA", at: [{ venue: "cboe", venueName: "US stocks", symbol: "NVDA", public: true, connected: false, price: 221.09 }] };
+    p.run(`MOUNTS.length = 0; ttSetItem(${JSON.stringify(nvda)}, "stocks")`);
+    expect(p.out("[TT.at, TT.mk]")).toEqual([null, null]);
+    expect(p.out("MOUNTS")).toEqual([["chart", "cboe", "NVDA"], ["book", "cboe", "NVDA"]]);
+    // the same market again (the ticket read it anew): nothing is mounted twice
+    p.run(`MOUNTS.length = 0; ttSetItem(${JSON.stringify(nvda)}, "stocks")`);
+    expect(p.out("MOUNTS")).toEqual([]);
+    // a market with no public listing and no account: the panels say so, nothing is read
+    p.run(`MOUNTS.length = 0; ttSetItem({ key: "coin:ZZZ", kind: "coin", base: "ZZZ", name: "ZZZ", at: [] }, "crypto")`);
+    expect(p.out("MOUNTS")).toEqual([["release"]]);
+    expect(p.out<string>("TT_CH.innerHTML")).toContain("No chart is read for it here");
+    expect(p.out<string>("TT_BKP.innerHTML")).toContain("No order book is read for it here");
+    // nothing picked: the panels wait for a market
+    p.run("ttSetItem(null)");
+    expect(p.out<string>("TT_CH.innerHTML")).toContain("Pick a market");
+  });
+
+  it("offers three tabs under the panels — Positions, Open orders (with how many are open in the lens), Trade history", () => {
+    expect(p.out("TT_TABS.map((t) => t[1])")).toEqual(["Positions", "Open orders", "Trade history"]);
+    p.set("A", { ...pageOf([EX]), orders: [{ id: "ord-1", venue: "ex", status: "open" }, { id: "ord-2", venue: "ex", status: "filled" }] });
+    expect(p.out("ttOpenCount()")).toBe(1);
+  });
+});
+
 describe("the six kinds, as the page runs them", () => {
   const p = page();
 
@@ -120,7 +200,13 @@ describe("the six kinds, as the page runs them", () => {
   });
 
   it("drafts an order from the ticket: in dollars or in the market's units, an event contract's limit typed in cents, only the flags the type takes", () => {
-    expect(p.out('tkOrderDraft({ amount: " 50 ", unit: "usd", orderType: "market" }, { venue: "ex", symbol: "BTC/USDT", side: "buy", event: false })')).toEqual({ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "50", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "", extendedHours: "" });
+    expect(p.out('tkOrderDraft({ amount: " 50 ", unit: "usd", orderType: "market" }, { venue: "ex", symbol: "BTC/USDT", side: "buy", event: false })')).toEqual({ type: "liveOrder", venue: "ex", symbol: "BTC/USDT", side: "buy", orderType: "market", usd: "50", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: "", extendedHours: "", trailPercent: "", trailPrice: "", takeProfit: "", stopLoss: "" });
+    // a trailing stop trails by a percent or a price; a market or limit entry carries its exits where typed
+    expect(p.out('tkOrderDraft({ amount: "1", unit: "qty", orderType: "trailing_stop", trail: "3", trailBy: "percent", takeProfit: "99" }, { venue: "paper-1", symbol: "AAPL", side: "sell", event: false })')).toMatchObject({ orderType: "trailing_stop", trailPercent: "3", trailPrice: "", takeProfit: "" });
+    expect(p.out('tkOrderDraft({ amount: "1", unit: "qty", orderType: "trailing_stop", trail: "2.5", trailBy: "price" }, { venue: "paper-1", symbol: "AAPL", side: "sell", event: false })')).toMatchObject({ trailPercent: "", trailPrice: "2.5" });
+    expect(p.out('tkOrderDraft({ amount: "10", unit: "qty", orderType: "limit", limitPrice: "420", tpsl: "on", takeProfit: " 460 ", stopLoss: "400" }, { venue: "paper-1", symbol: "MSFT", side: "buy", event: false })')).toMatchObject({ takeProfit: "460", stopLoss: "400" });
+    // the exits go only with Take profit / Stop loss ticked
+    expect(p.out('tkOrderDraft({ amount: "10", unit: "qty", orderType: "limit", limitPrice: "420", takeProfit: "460", stopLoss: "400" }, { venue: "paper-1", symbol: "MSFT", side: "buy", event: false })')).toMatchObject({ takeProfit: "", stopLoss: "" });
     expect(p.out('tkOrderDraft({ amount: "26", unit: "qty", orderType: "limit", limitPrice: "38", postOnly: "on", tif: "gtc" }, { venue: "predict", symbol: "SI-FEDCUT-DEC:NO", side: "buy", event: true })')).toMatchObject({ qty: "26", limitPrice: "0.38", postOnly: "true", tif: "gtc" });
     // a stop has no limit and is never post-only; reduce-only rides along where ticked
     expect(p.out('tkOrderDraft({ amount: "0.01", unit: "qty", orderType: "stop", limitPrice: "9", stopPrice: "60000", postOnly: "on", reduceOnly: "on" }, { venue: "ex", symbol: "BTC/USDT:USDT", side: "sell", event: false })')).toMatchObject({ limitPrice: "", stopPrice: "60000", postOnly: "", reduceOnly: "true" });
@@ -308,8 +394,12 @@ describe("the six kinds, as the page runs them", () => {
     const details = src.indexOf('<details class="tk-adv" data-adv hidden>');
     expect(details).toBeGreaterThan(0);
     const inside = src.slice(details, src.indexOf("</details>", details));
-    for (const f of ["data-more", "data-tif", 'name="postOnly"', 'name="reduceOnly"', "data-adv-sum"]) expect(inside, f).toContain(f);
+    for (const f of ["data-more", "data-tif", 'name="postOnly"', "data-adv-sum"]) expect(inside, f).toContain(f);
     expect(inside).not.toContain("data-lev");
+    // reduce only and take profit / stop loss sit in view, under the size, as a trading screen holds them
+    expect(inside).not.toContain('name="reduceOnly"');
+    expect(src.indexOf('name="reduceOnly"')).toBeLessThan(details);
+    expect(src.indexOf('name="tpsl"')).toBeLessThan(details);
     expect(src.indexOf('<div class="tk-lev" data-lev hidden>')).toBeLessThan(details);
     expect(src).toContain('q("[data-adv]").hidden = more.hidden;');
     // the quote and what is signed are written through paint: a refresh never takes the focus from What you sign

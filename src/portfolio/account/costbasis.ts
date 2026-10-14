@@ -356,7 +356,8 @@ export function costBasis(orders: Iterable<LoggedOrder>, held: readonly AssetRow
     const reported = (venueParts.get(t.key) ?? []).filter((p) => p.entryPrice !== undefined && p.entryPrice > 0);
     const reportedQty = reported.reduce((s, p) => s + p.qty, 0);
     const ofQty = Math.max(row ? row.amount : (venueParts.get(t.key) ?? []).reduce((s, p) => s + p.qty, 0), reportedQty);
-    const parts: CostPart[] = reported.map((p) => ({ source: "venue", venue: p.venue, ...(p.venueName ? { venueName: p.venueName } : {}), qty: units(p.qty), costUsd: p.entryPrice! * p.qty }));
+    // the venue's own dollars paid where it keeps them (a paper account: a share priced in HKD has its entry in HKD), else entry × qty
+    const parts: CostPart[] = reported.map((p) => ({ source: "venue", venue: p.venue, ...(p.venueName ? { venueName: p.venueName } : {}), qty: units(p.qty), costUsd: p.costUsd !== undefined && p.costUsd > 0 ? p.costUsd : p.entryPrice! * p.qty }));
     // what the venues do not speak for is covered by the account's own pile, as far as it goes
     const pile = t.piles.get("*");
     const fromOrders = pile && pile.qty > 0 ? Math.min(pile.qty, Math.max(0, ofQty - reportedQty)) : 0;

@@ -25,7 +25,15 @@
 .pf-skel-curve { height: 140px; border-radius: var(--radius-s); }
 .pf-plot { position: relative; }
 .pf-curve { height: 140px; }
-.pf-curve .pf-ev { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+/* a connection on the curve: a short mark at its foot, quiet; the pointer on it raises it */
+.pf-curve .pf-ev { stroke: var(--dim); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: stroke; }
+.pf-curve .pf-ev:hover { stroke: var(--text); }
+/* the figure's right side: the book switch (Real money | Paper) above the range */
+.pf-worth-c { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.pf-aside { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.pf-aside .link { font-size: 13px; }
+.pf-aside .tag.paper { font-size: 11px; }
+@media (max-width: 560px) { .pf-worth-c { align-items: flex-start; } }
 /* the cursor: a hairline over the curve on a layer of its own, moved by a transform as the pointer moves (portfolio.js pfHoverDraw) */
 .pf-plot .pf-cursor { position: absolute; top: 0; left: 0; width: 1px; height: 140px; background: var(--dim); opacity: 0; transform: translateX(-10px); will-change: transform; pointer-events: none; }
 .pf-curve:hover ~ .pf-cursor { opacity: 1; }

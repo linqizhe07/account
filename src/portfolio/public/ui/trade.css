@@ -6,26 +6,19 @@
    ui/tokens.css, so Cream and Black alike (Black drops the shadows and keeps the hairlines). Motion: transform and opacity only, 120–180 ms,
    none under prefers-reduced-motion. */
 
-/* the pane's head: its name, and one line of state (what trades from here, or read-only) */
-.tp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tp-title { font-size: 20px; }
+/* the line of state in the terminal's bar (what trades from here, or read-only) */
 .tp-state:empty { display: none; }
-/* nothing to say above the seg: no empty row between the head and it */
-.tp-main > [data-tp-note]:empty { display: none; }
 /* the kind seg: the pill track, each kind with its icon; it scrolls sideways before it wraps on a narrow card */
 .tk-seg { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
 .tk-seg button { flex: 0 0 auto; }
 .tk-seg .ico.sm { width: 16px; height: 16px; }
 .tk-seg[hidden] { display: none; }
 
-/* Under way and the picker: cards holding a list or a table, the table running nearly to the card's foot */
-.tp-main > .sec { padding: 18px 18px 8px; gap: 8px; }
-.tp-main > .sec > :last-child:not(.t-wrap) { margin-bottom: 10px; }
-/* the pane's table: the first column (what it is) keeps room to be read; where it is and who placed it on one line under the order */
-.tp-main .t td:first-child { min-width: 190px; }
-.tp-main .t .why { max-width: 360px; }
-/* an order's buttons (Change · Cancel · Send from wallet…) wrap under each other before the table gets wider than its card */
-.tp-main .t .acts { flex-wrap: wrap; }
+/* Under way (the terminal's Open orders tab): the first column (what it is) keeps room to be read; where it is and who placed it on one
+   line under the order; an order's buttons (Change · Cancel · Send from wallet…) wrap under each other before the table gets too wide */
+.tt-low .t td:first-child { min-width: 190px; }
+.tt-low .t .why { max-width: 360px; }
+.tt-low .t .acts { flex-wrap: wrap; }
 /* a status in Under way: a word in bold, coloured by what it waits on */
 .tp-st { font-weight: 700; white-space: nowrap; }
 .tp-st.dim { color: var(--dim); }
@@ -51,12 +44,8 @@
 .tk-pick.tk-in-a .tk-pg, .tk-pick.tk-in-b .tk-pg { animation: tk-rise 180ms cubic-bezier(.2,.8,.2,1) both; }
 @keyframes tk-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-/* ---- the panel: the ticket (or the composer), a lifted card on the right (.panel), sticky, scrolling inside itself when taller than the
-   window. 340 beside the pane (shell.css .col-side); 380 once the window has the room ------------------------------------------------ */
-@media (min-width: 1520px) {
-  .cols > .tk-panel { flex-basis: 380px; }
-}
-.tk-panel { max-height: calc(100vh - 48px); overflow-y: auto; overscroll-behavior: contain; min-width: 0; }
+/* ---- the panel: the ticket (or the composer), in the terminal's order column (terminal.css .tt-order) ---------------------------- */
+.tk-panel { min-width: 0; }
 .tk-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -6px -10px -2px 0; }
 .tk-h-l { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .tk-title { font-family: var(--font-sans); font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -169,23 +158,13 @@ button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 .hta-rep { font-size: 13px; line-height: 1.45; }
 .hta-rep .tag { margin-right: 4px; }
 
-/* a window too narrow for the ticket beside the pane, yet with the rail (901 to 1243): the ticket comes right after the seg and the picker
-   that open it, at the pane's width, and Under way follows it (the main column's parts are laid out with the ticket) */
-@media (min-width: 901px) and (max-width: 1243px) {
-  .tp.cols { gap: 20px; }
-  .tp.cols > .tp-main { display: contents; }
-  .tp.cols > .tp-main > * { flex: 1 1 100%; order: 2; }
-  .tp.cols > .tp-main > .tp-head, .tp.cols > .tp-main > [data-tp-note], .tp.cols > .tp-main > [data-tp-kinds], .tp.cols > .tp-main > [data-tp-pick] { order: 0; }
-  .tp.cols > .tk-panel { order: 1; flex: 1 1 100%; max-width: none; position: static; max-height: none; overflow: visible; }
-}
-
-/* a narrower window: the panel sits under the pane, at full width (shell.css stops it being sticky) */
-@media (max-width: 900px) {
-  .tk-panel { max-height: none; overflow: visible; }
-}
-
 /* the logos' credit (core logoCredit): Elbstream's free logos ask for a link to it, clearly visible at 12pt, wherever one is shown — under
    the picker's lists, and in the ticket under the search's results or the market picked */
 .tk-credit { margin: 6px 0 0; text-align: right; }
 .tk-credit-w:empty { display: none; }
 .tk-credit-w .tk-credit { margin: 0; }
+/* the market's rule under the quote, folded: one line until it is opened */
+.tk-qnote summary { cursor: pointer; color: var(--dim); list-style: none; }
+.tk-qnote summary::-webkit-details-marker { display: none; }
+.tk-qnote summary::after { content: " ▸"; }
+.tk-qnote[open] summary::after { content: " ▾"; }

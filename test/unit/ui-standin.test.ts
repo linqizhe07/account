@@ -320,8 +320,8 @@ describe("the Stand-in Broker keeps New York's market hours: a stand-in started 
     expect(stockSession(Date.parse("2026-10-31T16:00:00Z"))).toEqual({ open: false, opensAt: Date.parse("2026-11-02T14:30:00Z"), closesAt: Date.parse("2026-11-02T21:00:00Z") });
     expect(stockSession(Date.parse("2026-11-02T14:29:00Z")).open).toBe(false);
     // the market's holidays, as the account's calendar keeps them (Robinhood's session is the same calendar's): Thanksgiving is closed, and
-    // the next session is Friday's; Columbus Day trades
-    expect(stockSession(Date.parse("2026-11-26T16:00:00Z"))).toEqual({ open: false, opensAt: Date.parse("2026-11-27T14:30:00Z"), closesAt: Date.parse("2026-11-27T21:00:00Z") });
+    // the next session is Friday's — one of NYSE's early closes, at 13:00 EST (18:00 UTC); Columbus Day trades
+    expect(stockSession(Date.parse("2026-11-26T16:00:00Z"))).toEqual({ open: false, opensAt: Date.parse("2026-11-27T14:30:00Z"), closesAt: Date.parse("2026-11-27T18:00:00Z") });
     expect(stockSession(Date.parse("2026-10-12T15:00:00Z")).open).toBe(true);
   });
 

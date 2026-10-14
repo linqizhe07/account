@@ -1,0 +1,84 @@
+/* The chart (ui/chart.js): a market's candles, its volume, its two axes, the last price and a crosshair, in the left panel of the Trade
+   terminal. A trading screen's density — small labels, tabular figures, hairline grid — in the account's own tokens (ui/tokens.css), so
+   Cream and Black alike: candles and their volume in --up and --down, the grid and the axes' edges in --border, the axes' words in --dim,
+   the last price's tag filled in its direction with the card's colour on it (5.4:1 and better in both), the crosshair's tags filled in the
+   text colour with the card's colour on them. Its height is its container's (at least 280 pixels); it reads at 320 pixels wide.
+
+   NOTHING MOVES WITH THE POINTER. The head and the foot are boxes of fixed height, and the OHLC readout is laid over the plot's top-left
+   corner, out of the flow (as a trading screen lays it): however long the words of the bar under the pointer are, and whether the readout
+   is empty while the bars are read, no box changes its size, so the plot keeps its height and the candles are never drawn again for it. */
+
+.ch { display: flex; flex-direction: column; flex: 1 1 auto; gap: 6px; height: 100%; min-height: 280px; min-width: 0; container-type: inline-size; }
+
+/* ---- the head: the bar sizes, one row of fixed height ------------------------------------------------------------------------ */
+.ch-head { display: flex; align-items: center; flex: none; flex-wrap: nowrap; gap: 12px; height: 32px; min-width: 0; overflow: hidden; }
+.ch-ivs { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.ch-iv { min-width: 38px; min-height: 32px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dim); font: 600 13px var(--font-sans); font-variant-numeric: tabular-nums; cursor: pointer; }
+.ch-iv:hover { background: var(--hover); color: var(--text); }
+.ch-iv[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.ch-iv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- the readout, laid over the plot's top-left corner (its width set by the drawing: the price pane's) ----------------------------- */
+.ch-ohlc { position: absolute; left: 6px; top: 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; pointer-events: none; font: 500 12px/15px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--dim); }
+.ch-ohlc:empty { visibility: hidden; }
+.ch-ohlc .ch-kv, .ch-ohlc .ch-d { white-space: nowrap; }
+.ch-ohlc .ch-k { color: var(--dim); }
+.ch-ohlc .ch-v { color: var(--text); }
+.ch-ohlc .ch-v.up, .ch-ohlc .ch-d.up { color: var(--up); }
+.ch-ohlc .ch-v.down, .ch-ohlc .ch-d.down { color: var(--down); }
+.ch-ohlc .ch-d { font-weight: 600; color: var(--dim); }
+
+/* ---- the plot: the picture, and the crosshair over it ------------------------------------------------------------------------ */
+.ch-plot { position: relative; flex: 1 1 auto; min-height: 220px; min-width: 0; overflow: hidden; touch-action: pan-y; cursor: crosshair; border-radius: 4px; outline: none; }
+.ch-plot:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.ch-draw, .ch-cross { position: absolute; inset: 0; }
+.ch-cross { pointer-events: none; opacity: 0; }
+.ch-cross.on { opacity: 1; }
+.ch-svg, .ch-xs { display: block; position: absolute; left: 0; top: 0; }
+.ch-svg text, .ch-xs text { font: 500 11px var(--font-sans); font-variant-numeric: tabular-nums; }
+
+/* the picture */
+.ch-grid { fill: none; stroke: var(--border); stroke-width: 1; opacity: 0.7; }
+.ch-edge, .ch-sep { fill: none; stroke: var(--border); stroke-width: 1; }
+.ch-ax { fill: var(--dim); }
+.ch-cs { shape-rendering: crispEdges; }
+.ch-cu { fill: var(--up); }
+.ch-cd { fill: var(--down); }
+.ch-vu, .ch-vd { shape-rendering: crispEdges; opacity: 0.35; }
+.ch-vu { fill: var(--up); }
+.ch-vd { fill: var(--down); }
+.ch-last { fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.ch-last.up { stroke: var(--up); }
+.ch-last.down { stroke: var(--down); }
+.ch-tagr.up { fill: var(--up); }
+.ch-tagr.down { fill: var(--down); }
+.ch-svg .ch-tagt { fill: var(--surface); font-weight: 700; }
+
+/* the crosshair */
+.ch-xl { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.8; }
+.ch-xb { fill: var(--text); }
+.ch-xs .ch-xw { fill: var(--surface); font-weight: 600; }
+
+/* ---- the words in place of the picture: reading, a refusal in the source's words, no bars yet ---------------------------------- */
+.ch-msg { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; color: var(--dim); font-size: 13px; line-height: 1.45; }
+.ch-msg.ch-no { color: var(--text); }
+.ch-msg.ch-wait { animation: ch-breathe 1.6s ease-in-out infinite; }
+@keyframes ch-breathe { 50% { opacity: 0.55; } }
+
+/* ---- the foot: whose bars, what size, whose clock — one line of fixed height (two in a narrow chart), kept while empty ------------- */
+.ch-foot { flex: none; margin: 0; height: 15px; font-size: 11px; line-height: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* a narrow chart (its own width: a phone, or a window where the book and the order panel take the rest): the readout a size smaller (the
+   same 480 pixels as chart.js's CH_SMALL_W, which reckons the room kept for it at this size), the foot on two lines of fixed height rather
+   than cut */
+@container (max-width: 480px) {
+  .ch-ohlc { font-size: 11px; gap: 0 6px; }
+  .ch-foot { height: 30px; white-space: normal; text-overflow: clip; }
+}
+@media (pointer: coarse) {
+  .ch-head { height: 40px; }
+  .ch-iv { min-width: 44px; min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ch-msg.ch-wait { animation: none; }
+}

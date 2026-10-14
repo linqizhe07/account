@@ -207,22 +207,33 @@ onRoute((tab, params) => {
 /** the Trade pane: the head and a line of state, the kind seg (drawn by hand: its buttons carry icons), the picker for the kind chosen,
  * what is under way; the panel on the right keeps the ticket (or the composer) across redraws */
 function renderTrade({ el, owner, lens, params }) {
+  // the pane is a trading screen (ui/terminal.js): the market bar, the chart, the book and trades, the order panel, and the tabs under them
   if (!el.querySelector("[data-tp]")) {
-    el.innerHTML = `<div class="cols tp" data-tp><div class="col-main tp-main"><div class="tp-head"><h2 class="h2 tp-title">Trade</h2><span class="dim small tp-state" data-tp-state></span></div><div data-tp-note></div><div class="seg tk-seg" role="group" aria-label="Market kind" data-tp-kinds></div><section class="sec tk-pick" data-tp-pick aria-labelledby="tp-pick-h"></section><section class="sec" data-tp-open aria-labelledby="tp-open-h"></section></div><aside class="col-side panel tk-panel" id="tk-panel" aria-label="Order ticket"></aside></div>`;
+    el.innerHTML = ttFrame();
+    TT.mounted = "";
+    TT.started = false;
     tkRest();
     if (!TK.pending) tkReopenDraft();
   }
   tkDrawPane(el, owner, lens);
+  ttDraw(el, owner);
   // a venue connected from the ticket's "Connect to trade" is on the account now: the ticket offers it
+  let redone = false;
   if (TK.connecting) {
     const c = TK.connecting;
     const fresh = A.venues.find((v) => v.live && !c.before.has(v.id));
     if (c.gen !== TK.gen) TK.connecting = null;
     else if (fresh) {
       TK.connecting = null;
+      redone = true;
       c.redo(fresh.id);
     }
   }
+  // the accounts that trade from here changed (one came back after a restart, one was connected elsewhere) while the ticket shows a market
+  // none of them traded: it is looked up again, so an account that trades it now is offered (no venue picked: no order was drawn to lose)
+  const traders = A.venues.filter((v) => v.live && v.trade && canTrade(v)).map((v) => v.id).sort().join(",");
+  if (TK.tradersSeen !== undefined && TK.tradersSeen !== traders && !redone && !TK.connecting && typeof TK.refindIdle === "function") TK.refindIdle();
+  TK.tradersSeen = traders;
   // what was asked for before the pane was drawn (a Markets row, a quick action, the route) opens now
   if (TK.pending) {
     const p = TK.pending;
@@ -265,6 +276,7 @@ function tkRedraw() {
   const el = $("pane-trade");
   if (!A || ROUTE.tab !== "trade" || !el || !el.querySelector("[data-tp]")) return;
   tkDrawPane(el, owns(), lensNow());
+  ttDraw(el, owns());
 }
 
 /* the seg, by hand (core seg() renumbers and escapes its labels; these carry icons): the kind pressed is the route's */
@@ -572,12 +584,12 @@ function openTicket(preset = {}) {
   tkShowPanel();
 }
 
-/* on a window too narrow for two columns the panel sits under the pane: brought into view. Beside the pane (1244 wide and more, trade.css)
-   it is sticky and always in view: nothing is measured */
+/* on a phone the order panel sits under the chart: brought into view when a market is picked. Beside the chart (861 wide and more,
+   terminal.css) it is in view already: nothing is measured */
 function tkShowPanel() {
   const p = $("tk-panel");
   if (!p || !p.getBoundingClientRect) return;
-  if (typeof matchMedia === "function" && matchMedia("(min-width: 1244px)").matches) return;
+  if (typeof matchMedia === "function" && matchMedia("(min-width: 861px)").matches) return;
   const r = p.getBoundingClientRect();
   if (r.top > window.innerHeight || r.bottom < 0) p.scrollIntoView({ behavior: tkNoMotion() ? "auto" : "smooth", block: "start" });
 }
@@ -609,7 +621,11 @@ function tkOpen(preset) {
 
 // ---- the ticket: one form, six faces -------------------------------------------------------------
 
-const TK_TYPE_NAMES = { market: "Market", limit: "Limit", stop: "Stop", stop_limit: "Stop limit" };
+const TK_TYPE_NAMES = { market: "Market", limit: "Limit", stop: "Stop", stop_limit: "Stop limit", trailing_stop: "Trailing stop" };
+/* a number as a field takes it: no float tails, no exponent */
+const tkPlain = (n) => { const t = Number(n).toFixed(10); return t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t; };
+/* down to a step: a sell never sells more than is held */
+const tkFloor = (x, step) => (step > 0 ? Number((Math.floor(x / step + 1e-9) * step).toFixed(10)) : x);
 const TK_TIF_NAMES = { gtc: "Until canceled", ioc: "Fill now, rest canceled", fok: "All now or nothing", day: "Today only" };
 const TK_LIMITED = ["limit", "stop_limit"];
 const TK_STOPPED = ["stop", "stop_limit"];
@@ -619,7 +635,10 @@ const TK_STOPPED = ["stop", "stop_limit"];
 function tkOrderDraft(f, { venue, symbol, side, event }) {
   const t = f.orderType || "market";
   const amount = String(f.amount || "").trim();
-  return { type: "liveOrder", venue, symbol, side, orderType: t, ...(f.unit === "qty" ? { qty: amount } : { usd: amount }), limitPrice: TK_LIMITED.includes(t) ? tkPriceIn(f.limitPrice, event) : "", stopPrice: TK_STOPPED.includes(t) ? tkPriceIn(f.stopPrice, event) : "", tif: f.tif || "", postOnly: t === "limit" && f.postOnly ? "true" : "", reduceOnly: f.reduceOnly ? "true" : "", extendedHours: t === "limit" && f.extendedHours ? "true" : "" };
+  const trail = String(f.trail || "").trim();
+  // a bracket's exits, on a market or limit entry, with Take profit / Stop loss ticked: each only where it is typed
+  const exits = (t === "market" || t === "limit") && !!f.tpsl;
+  return { type: "liveOrder", venue, symbol, side, orderType: t, ...(f.unit === "qty" ? { qty: amount } : { usd: amount }), limitPrice: TK_LIMITED.includes(t) ? tkPriceIn(f.limitPrice, event) : "", stopPrice: TK_STOPPED.includes(t) ? tkPriceIn(f.stopPrice, event) : "", tif: f.tif || "", postOnly: t === "limit" && f.postOnly ? "true" : "", reduceOnly: f.reduceOnly ? "true" : "", extendedHours: t === "limit" && f.extendedHours ? "true" : "", trailPercent: t === "trailing_stop" && f.trailBy !== "price" ? trail : "", trailPrice: t === "trailing_stop" && f.trailBy === "price" ? trail : "", takeProfit: exits ? String(f.takeProfit || "").trim() : "", stopLoss: exits ? String(f.stopLoss || "").trim() : "" };
 }
 
 /** THE TICKET. Find the market (at the connected venues and at the venues that publish prices without a key), pick where (the best price of
@@ -640,13 +659,20 @@ function tkTicket(panel, kind0, preset) {
     <div class="tk-where-w" data-where-w hidden><div class="label">Where</div><div class="tk-where" data-where></div></div>
     <div class="tk-kb" data-kb hidden></div>
     <div class="tk-stack" data-body hidden>
+      <div class="tk-otabs" data-otabs role="tablist" aria-label="Order type"></div>
+      <label class="fld tk-otype" hidden>Order<select name="orderType"><option value="market">Market</option><option value="limit">Limit</option></select></label>
       <div class="tk-side" data-side></div>
-      <div class="row2"><label class="fld">Amount<input name="amount" inputmode="decimal" placeholder="25" autocomplete="off" /></label><label class="fld"><span data-unit-l>In</span><select name="unit"><option value="usd">Dollars</option><option value="qty">Units</option></select></label></div>
+      <div class="tk-avail" data-avail></div>
+      <div class="row2" data-limit-row hidden><label class="fld" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /></label></div>
+      <div class="row2"><label class="fld">Size<input name="amount" inputmode="decimal" placeholder="25" autocomplete="off" /></label><label class="fld"><span data-unit-l>In</span><select name="unit"><option value="usd">Dollars</option><option value="qty">Units</option></select></label></div>
+      <div class="tk-pct" data-pct hidden><input type="range" name="pct" min="0" max="100" step="1" value="0" aria-label="Share of what is available" /><span class="tab-nums" data-pct-v>0%</span></div>
       <div class="row2" data-pay-w hidden><label class="fld">Pay with<select name="pay"></select></label><span class="dim small tk-pay-n" data-pay-n></span></div>
-      <div class="row2"><label class="fld">Order<select name="orderType"><option value="market">Market</option><option value="limit">Limit</option></select></label><label class="fld" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /></label></div>
+      <div class="tk-flags"><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce only</label><label class="chk1" data-tpsl hidden><input type="checkbox" name="tpsl" /> Take profit / Stop loss</label></div>
       <div class="row2" data-stop hidden><label class="fld"><span data-stop-l>Stop price</span><input name="stopPrice" inputmode="decimal" autocomplete="off" /></label></div>
+      <div class="row2" data-trail hidden><label class="fld">Trail by<input name="trail" inputmode="decimal" placeholder="2" autocomplete="off" /></label><label class="fld"><span>In</span><select name="trailBy"><option value="percent">Percent</option><option value="price">Price</option></select></label></div>
+      <div class="row2" data-exits hidden><label class="fld">Take profit<input name="takeProfit" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label><label class="fld">Stop loss<input name="stopLoss" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label></div>
       <div class="tk-lev" data-lev hidden></div>
-      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="dim small tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
+      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="dim small tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
       <div class="quote real" data-q><span class="dim">Type an amount.</span></div>
       <div data-sign></div>
       <div class="msg" data-msg role="status"></div>
@@ -708,6 +734,7 @@ function tkTicket(panel, kind0, preset) {
   };
   q("[data-side]").innerHTML = seg([["buy", "Buy"], ["sell", "Sell"]], side, (v) => {
     side = v;
+    drawAvail();
     panelTitle();
     drawOutcomes();
     if (item && item.kind === "event") drawWhere(picked);
@@ -750,6 +777,7 @@ function tkTicket(panel, kind0, preset) {
   const pick = (x, at) => {
     item = x;
     setKind(tkKindOf({ item: x }));
+    if (typeof ttSetItem === "function") ttSetItem(x, kind);
     q("[data-find]").hidden = true;
     const pk = q("[data-picked]");
     pk.hidden = false;
@@ -757,6 +785,7 @@ function tkTicket(panel, kind0, preset) {
     pk.innerHTML = `${avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "", x.icon || "")}<span class="tk-rn"${tkTitle(x) ? ` title="${esc(tkTitle(x))}"` : ""}><b>${esc(tkName(x))}</b><span class="dim small">${esc([tkPre(x) ? "Pre-IPO" : x.category, x.closeTime ? `closes ${nyDay(x.closeTime)} ${nyTime(x.closeTime)} New York` : "", x.kind === "perp" && !tkPre(x) && x.fundingRate !== undefined ? `funding ${(x.fundingRate * 100).toFixed(4)}%` : ""].filter(Boolean).join(" · "))}</span></span>${x.kind === "event" ? "" : `<span class="tk-rp"><span class="tab-nums">${imp && imp.usd ? `${esc(tkValuation(imp.usd))} implied` : x.price ? `$${esc(px(x.price))}` : ""}</span>${chg(x.changePct24h)}</span>`}<button type="button" class="link" data-change>Change</button>`;
     pk.querySelector("[data-change]").addEventListener("click", () => {
       tkDraftKeep(null);
+      if (typeof ttSetItem === "function") ttSetItem(null);
       item = null;
       picked = null;
       mk = null;
@@ -843,12 +872,16 @@ function tkTicket(panel, kind0, preset) {
     const hasPaper = ableRows.some((r) => r.paper);
     const pickedRow = picked ? ableRows.find((r) => r.venue === picked.venue) : null;
     const money = `<div class="tk-money-row" data-money-row>${hasReal && hasPaper ? `<div class="seg tk-money-seg" role="group" aria-label="Real money or paper"><button type="button" data-money="real" aria-pressed="${String(!!pickedRow && !pickedRow.paper)}">Real money</button><button type="button" data-money="paper" aria-pressed="${String(!!pickedRow && !!pickedRow.paper)}">Paper</button></div>` : ""}<span data-money-band>${tkMoneyBand(pickedRow)}</span></div>`;
+    // the public venues that list it are folded under one line when an account of yours trades it: the order panel stays the order's
+    const fold = !none && rows.some((r) => r.state === "public");
+    const pubCount = rows.filter((r) => r.state === "public").length;
     box2.innerHTML = `${ableRows.length ? money : ""}${!rows.length ? '<p class="dim small">No venue that lists it serves this network.</p>' : none ? `<p class="dim small">${rows.some((r) => r.state === "public" && r.connector) ? "None of your accounts trades it yet: connect one where it is listed." : nobody ? "None of the venues that list it would take you from where you are." : "None of your accounts can trade it now."}</p>` : ""}${rows.map((r, i) => {
+      if (fold && r.state === "public") return "";
       // a venue that takes the user only in part (close-only) or wants something here first: its word, its whole sentence on hover
       if (r.state === "public") return `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why"><b>${esc(r.terms.word)}</b>${r.terms.said ? ` — ${esc(r.terms.said)}` : ""}</span>` : !r.connector && r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>${r.connector ? '<span class="tk-sep"> · </span>' : ""}` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`;
       if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
       return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
-    }).join("")}`;
+    }).join("")}${fold ? `<details class="tk-pubs"><summary>${esc(plural(pubCount, "other venue"))} list it <span class="dim">· connect one to trade there</span></summary>${rows.map((r, i) => (r.state !== "public" ? "" : `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why" title="${esc(r.terms.said || "")}"><b>${esc(r.terms.word)}</b></span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`)).join("")}</details>` : ""}`;
     for (const b of box2.querySelectorAll("button[data-at]")) b.addEventListener("click", () => choose(rows[Number(b.dataset.at)]));
     // the switch: the best (else the first) account of that kind, the form kept as it is
     for (const b of box2.querySelectorAll("button[data-money]")) b.addEventListener("click", () => {
@@ -887,6 +920,9 @@ function tkTicket(panel, kind0, preset) {
     ranked = null;
     drawWhere(picked);
     rank();
+  };
+  TK.refindIdle = () => {
+    if (live() && item && !picked) void refind();
   };
   /* the same thing at your other accounts, by the price this order would take there: the best is one click away. Coins, shares and tokens
      only — a perpetual's venues are not one market, and a pre-IPO contract's prices differ by unit */
@@ -936,9 +972,17 @@ function tkTicket(panel, kind0, preset) {
     const t = form.elements.orderType.value;
     const ev = !!mk && mk.kind === "event";
     q("[data-limit]").hidden = !TK_LIMITED.includes(t);
+    q("[data-limit-row]").hidden = !TK_LIMITED.includes(t);
+    // Take profit / Stop loss: offered on a market or limit entry where the market takes exits; its two prices show once it is ticked
+    const brackets = !!(mk && mk.brackets && (t === "market" || t === "limit"));
+    q("[data-tpsl]").hidden = !brackets;
+    if (!brackets) form.elements.tpsl.checked = false;
+    drawTypes();
     q("[data-stop]").hidden = !TK_STOPPED.includes(t);
     q("[data-limit-l]").textContent = ev ? "Limit (¢)" : "Limit price";
     q("[data-stop-l]").textContent = ev ? "Stop (¢)" : "Stop price";
+    q("[data-trail]").hidden = t !== "trailing_stop";
+    q("[data-exits]").hidden = !(brackets && form.elements.tpsl.checked);
     q("[data-post]").hidden = !(mk && mk.postOnly && t === "limit");
     q("[data-eh]").hidden = !(mk && mk.session && mk.session.extendedHours && t === "limit");
     // the times in force this order type takes here (a venue may take "Today only" for a stop and not for a limit); the select's options
@@ -960,6 +1004,7 @@ function tkTicket(panel, kind0, preset) {
       positions = b && b.ok !== false ? b.positions || [] : [];
       levLine();
       drawKind();
+      drawAvail();
     });
   };
   const held = () => (positions || []).find((x) => picked && x.venue === picked.venue && mk && x.symbol === mk.symbol && x.qty > 0) || null;
@@ -991,7 +1036,7 @@ function tkTicket(panel, kind0, preset) {
     if (!takesEh) form.elements.extendedHours.checked = false;
     else if (!ehTouched) form.elements.extendedHours.checked = true;
     const more = q("[data-more]");
-    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly && !m.reduceOnly && !takesEh;
+    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly && !takesEh;
     // Advanced is folded and holds only what the market takes; a market that takes none of it has no Advanced
     q("[data-adv]").hidden = more.hidden;
     if (!pay || isDollar(pay)) form.elements.unit.options[1].textContent = unitName(m);
@@ -1025,6 +1070,86 @@ function tkTicket(panel, kind0, preset) {
     levLine();
     drawKind();
     shape();
+    drawAvail();
+    // the terminal's chart, book and bar follow the market and where the order goes
+    if (typeof ttSetMarket === "function") ttSetMarket(picked, m);
+  };
+
+  /* ORDER TYPE as tabs: Market and Limit where the market takes them, the rest (stop, stop-limit, trailing stop) under Pro — the select
+     the account reads stays the one source of the type */
+  const drawTypes = () => {
+    const box2 = q("[data-otabs]");
+    const sel = form.elements.orderType;
+    const types = [...sel.options].map((o) => o.value);
+    const t = sel.value;
+    const pro = types.filter((x) => x !== "market" && x !== "limit");
+    const html = `${["market", "limit"].filter((x) => types.includes(x)).map((x) => `<button type="button" role="tab" data-otype="${x}" aria-selected="${String(t === x)}">${esc(TK_TYPE_NAMES[x])}</button>`).join("")}${pro.length ? `<label class="tk-pro${pro.includes(t) ? " on" : ""}"><span class="sr">More order types</span><select data-pro>${[["", "Pro"], ...pro.map((x) => [x, TK_TYPE_NAMES[x] || x])].map(([v, w]) => `<option value="${v}"${v === (pro.includes(t) ? t : "") ? " selected" : ""}>${esc(w)}</option>`).join("")}</select></label>` : ""}`;
+    paint(box2, html);
+  };
+  q("[data-otabs]").addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("button[data-otype]");
+    if (!b || form.elements.orderType.value === b.dataset.otype) return;
+    form.elements.orderType.value = b.dataset.otype;
+    form.elements.orderType.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  q("[data-otabs]").addEventListener("change", (e) => {
+    const sel = e.target.closest && e.target.closest("select[data-pro]");
+    if (!sel || !sel.value) return;
+    e.stopPropagation();
+    form.elements.orderType.value = sel.value;
+    form.elements.orderType.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  /* WHAT IS AVAILABLE: the dollars at the venue the order goes to (what a buy, or a perpetual's margin, is paid from) and what is held of
+     this market there (a sell sells only that); the percent slider sizes the order from it */
+  const availOf = () => {
+    const v = venueOf();
+    if (!v.id || !mk) return null;
+    const perp = mk.kind === "perp" || mk.kind === "future";
+    const h = held();
+    const base = String(mk.base || "").toUpperCase();
+    const holding = !perp && mk.kind !== "event" ? (v.holdings || []).filter((x) => String(x.asset).toUpperCase() === base && !x.inTransit && x.amount > 0).reduce((s2, x) => s2 + x.amount, 0) : 0;
+    const qty = perp || mk.kind === "event" ? (h ? h.qty : 0) : holding;
+    return { cash: num(v.cashUsd), qty, side: h ? h.side : qty > 0 ? "long" : "", perp };
+  };
+  const drawAvail = () => {
+    const a = availOf();
+    const box2 = q("[data-avail]");
+    const pct = q("[data-pct]");
+    if (!a) {
+      pct.hidden = true;
+      return void paint(box2, "");
+    }
+    const unit = mk.kind === "event" ? "contracts" : mk.base;
+    const pos = a.qty > 0 ? `${a.perp ? `${a.side === "short" ? "Short" : "Long"} ` : ""}${qtyOf(a.qty)} ${unit}` : `0 ${unit}`;
+    paint(box2, `<div><span class="dim">Available to trade</span><span class="tab-nums">${side === "sell" && !a.perp ? `${esc(qtyOf(a.qty))} ${esc(unit)}` : money(a.cash)}</span></div><div><span class="dim">Current position</span><span class="tab-nums">${esc(pos)}</span></div>`);
+    // the slider sizes from what is there: dollars for a buy (or a perpetual either way), the holding for a sell
+    pct.hidden = !(side === "sell" && !a.perp ? a.qty > 0 : a.cash > 0);
+  };
+  form.elements.pct.addEventListener("input", () => {
+    const a = availOf();
+    const share = Number(form.elements.pct.value) / 100;
+    setText(q("[data-pct-v]"), `${form.elements.pct.value}%`);
+    if (!a) return;
+    if (side === "sell" && !a.perp) {
+      form.elements.unit.value = "qty";
+      form.elements.amount.value = share > 0 ? tkPlain(tkFloor(a.qty * share, mk.qtyStep)) : "";
+    } else {
+      form.elements.unit.value = "usd";
+      form.elements.amount.value = share > 0 ? String(Math.floor(a.cash * share * 100) / 100) : "";
+    }
+    form.elements.amount.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  /* a price pressed in the order book: the order becomes a limit at it (where the market takes limits) */
+  TK.setLimit = (p) => {
+    if (!live() || !mk || !(p > 0)) return;
+    const types = [...form.elements.orderType.options].map((o) => o.value);
+    if (!types.includes("limit")) return;
+    if (!TK_LIMITED.includes(form.elements.orderType.value)) form.elements.orderType.value = "limit";
+    form.elements.limitPrice.value = mk.kind === "event" ? String(Number((p * 100).toFixed(2))) : tkPlain(p);
+    shape();
+    keep();
+    later(0);
   };
 
   // ---- Pay with (Crypto, a buy): the venue's dollars for it first, then coins held there — a coin is two steps, two signatures ----
@@ -1191,8 +1316,9 @@ function tkTicket(panel, kind0, preset) {
     // a prediction's limit or stop typed in cents is a chance: outside 0–100 it is no price, and the ticket says so instead of asking
     const typed = formFields(form);
     const noChance = mk.kind === "event" && ((TK_LIMITED.includes(d.orderType) && tkCentsBad(typed.limitPrice)) || (TK_STOPPED.includes(d.orderType) && tkCentsBad(typed.stopPrice)));
-    if (noChance || !(amount > 0) || (!two && TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0)) || (!two && TK_STOPPED.includes(d.orderType) && !(Number(d.stopPrice) > 0))) {
-      show(`<div class="big"><span>${esc(mk.name)}</span><span>${mk.kind === "event" ? esc(tkCents(mk.price)) : mk.price ? `${esc(px(mk.price))} ${esc(mk.quote)}` : "no price"}</span></div><div class="path">${two ? `${esc(tkSwapHow(payPlan))} ` : ""}${noChance ? "A price in cents is between 0 and 100: a contract pays $1.00 at most." : !(amount > 0) ? "Type an amount." : TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0) ? "Type the limit price." : "Type the stop price."}</div>`);
+    const noTrail = !two && d.orderType === "trailing_stop" && !(Number(d.trailPercent || d.trailPrice) > 0);
+    if (noChance || !(amount > 0) || noTrail || (!two && TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0)) || (!two && TK_STOPPED.includes(d.orderType) && !(Number(d.stopPrice) > 0))) {
+      show(`<div class="big"><span>${esc(mk.name)}</span><span>${mk.kind === "event" ? esc(tkCents(mk.price)) : mk.price ? `${esc(px(mk.price))} ${esc(mk.quote)}` : "no price"}</span></div><div class="path">${two ? `${esc(tkSwapHow(payPlan))} ` : ""}${noChance ? "A price in cents is between 0 and 100: a contract pays $1.00 at most." : !(amount > 0) ? "Type an amount." : noTrail ? "Type how far the stop trails: a percent or a price." : TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0) ? "Type the limit price." : "Type the stop price."}</div>`);
       return;
     }
     show(`<span class="dim">Asking ${esc(picked.venueName || nameOf(picked.venue))}…</span>`);
@@ -1481,11 +1607,13 @@ function tkOrderWords(p, m) {
   const ev = q.kind === "event";
   const unit = UNITS[q.kind] || q.base;
   const at = (n) => (ev ? tkCents(n) : `${px(n)} ${q.quote}`);
-  const how = a.orderType === "stop" ? `when the price reaches ${esc(at(a.stopPrice))}, at market` : a.orderType === "stop_limit" ? `when the price reaches ${esc(at(a.stopPrice))}, a limit at ${esc(at(a.limitPrice))}` : `at ${esc(at(a.limitPrice || q.price))}`;
-  const flags = [a.tif ? TK_TIF_NAMES[a.tif] : "", a.postOnly ? "post-only" : "", a.reduceOnly ? "reduce-only" : "", a.extendedHours ? "extended hours" : ""].filter(Boolean).join(" · ");
+  const trail = a.trailPercent ? `${a.trailPercent}%` : a.trailPrice ? at(a.trailPrice) : "";
+  const how = a.orderType === "stop" ? `when the price reaches ${esc(at(a.stopPrice))}, at market` : a.orderType === "stop_limit" ? `when the price reaches ${esc(at(a.stopPrice))}, a limit at ${esc(at(a.limitPrice))}` : a.orderType === "trailing_stop" ? `at market once the price ${a.side === "sell" ? "falls" : "rises"} ${esc(trail)} from its ${a.side === "sell" ? "highest" : "lowest"} since now` : `at ${esc(at(a.limitPrice || q.price))}`;
+  const exits = [a.takeProfit ? `take profit at ${at(a.takeProfit)}` : "", a.stopLoss ? `stop loss at ${at(a.stopLoss)}` : ""].filter(Boolean).join(", ");
+  const flags = [a.tif ? TK_TIF_NAMES[a.tif] : "", a.postOnly ? "post-only" : "", a.reduceOnly ? "reduce-only" : "", a.extendedHours ? "extended hours" : "", exits ? `then ${exits} (one cancels the other)` : ""].filter(Boolean).join(" · ");
   const n = Number(a.qty);
   const what = ev ? `${m && m.outcome ? m.outcome : q.name}` : unit === q.base ? q.base : `${unit} · ${q.base}`;
-  return `<div class="big"><span>${a.side === "buy" ? "Buy" : "Sell"} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${esc(q.name)} ${how}${(a.orderType === "market" || a.orderType === "stop") && a.side === "buy" ? ` · up to ${money(q.maxUsd)} if the price moves` : ""}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(q.notionalUsd)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(q.notionalUsd)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<div class="path">${esc(q.note)}</div>` : ""}`;
+  return `<div class="big"><span>${a.side === "buy" ? "Buy" : "Sell"} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${esc(q.name)} ${how}${(a.orderType === "market" || a.orderType === "stop" || a.orderType === "trailing_stop") && a.side === "buy" ? ` · up to ${money(q.maxUsd)} if the price moves` : ""}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(q.notionalUsd)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(q.notionalUsd)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<details class="path tk-qnote"><summary>How it fills here</summary>${esc(q.note)}</details>` : ""}`;
 }
 
 /** a ticket opened on one market at one venue: the row it would be on Markets, with its outcomes (an event) and the other places it is

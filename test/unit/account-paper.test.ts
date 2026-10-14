@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { byAsset } from "../../src/portfolio/account/holdings.ts";
-import { networthPath } from "../../src/portfolio/account/networth.ts";
+import { networthPath, paperNetworthPath } from "../../src/portfolio/account/networth.ts";
 import { fromEt } from "../../src/portfolio/account/calendar.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
@@ -198,7 +198,7 @@ describe("a paper account beside a real one", () => {
     const page = (await svc.accountView())!;
     const alpha = page.venues.find((v) => v.id === "paper-alpha")!;
     const second = page.venues.find((v) => v.id === "paper-2")!;
-    expect([alpha.name, alpha.paper, alpha.usd, second.name, second.paper, second.usd]).toEqual(["Alpha · paper", true, 25000, "Paper account · paper", true, 10000]);
+    expect([alpha.name, alpha.paper, alpha.usd, second.name, second.paper, second.usd]).toEqual(["Alpha · paper", true, 25000, "Paper account", true, 10000]);
     expect([page.totalUsd, page.liveUsd]).toEqual([0, 0]);
     // the connection the agents and the page are offered: nothing to connect, always connectable
     const here = await svc.venuesHere();
@@ -226,6 +226,119 @@ describe("a paper account beside a real one", () => {
     expect(back.venues.find((v) => v.id === "paper-alpha")!.usd).toBeCloseTo(book.cashUsd + 0.049011 * 60000, 1);
     expect(back.venues.find((v) => v.id === "paper-2")).toMatchObject({ paper: true, usd: 10000 });
     expect(back.venues.find((v) => v.id === "paper-alpha")!.holdings.find((h) => h.asset === "BTC")).toMatchObject({ amount: 0.049011 });
+  });
+
+  it("the paper accounts' own curve: told again from the book's fills and the public bars since it started, its points and connections on a log of its own, never on the net worth's", async () => {
+    // the clock: Wednesday 14 October 2026, 15:00 UTC; the paper account starts at 12:00 and buys at 13:00
+    const T0 = Date.parse("2026-10-14T12:00:00Z");
+    let at = T0;
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    // five-minute bars from 11:00: 60,000 until 13:30, 63,000 after
+    const bars = Array.from({ length: 60 }, (_, i) => {
+      const t = Date.parse("2026-10-14T11:00:00Z") + i * 300_000;
+      const c = t < Date.parse("2026-10-14T13:30:00Z") ? 60000 : 63000;
+      return { t, o: c, h: c, l: c, c };
+    });
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())), candles: async (symbol, _i, since) => (symbol === "BTC/USD" ? bars.filter((b) => b.t >= since && b.t + 300_000 <= at) : []) };
+    const home = mkdtempSync(join(tmpdir(), "account-paper-"));
+    homes.push(home);
+    const liveDeps: Partial<LiveDeps> = { clock: () => at, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
+    const svc = await PortfolioService.create({ home, now: () => new Date(START).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [kraken], liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
+    let n = 0;
+    const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: START + ++n } as OwnerAction));
+    expect(code(await own({ type: "connectVenue", venue: "real", connector: "live:standin-paper-real", label: "Real Ex", credentialRef: "" }))).toBe("account");
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    // its connection goes on the paper accounts' log, not the net worth's
+    await svc.snapshot({ kind: "connect", venue: "paper-1", name: "Paper account", paper: true });
+    at = Date.parse("2026-10-14T13:00:00Z");
+    const p = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.1" });
+    if (isRefusal(p)) throw new Error(p.message);
+    const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveOrder" }>;
+    const placed = await own(rest as NoNonce<OwnerAction>);
+    if (isRefusal(placed) || placed.kind !== "order") throw new Error(`expected an order, got ${code(placed)}`);
+    btc.price = 63000;
+    btc.bid = 62990;
+    btc.ask = 63010;
+    at = Date.parse("2026-10-14T15:00:00Z");
+    await svc.snapshot();
+    // the net worth's log holds the real venue alone, and no paper connection; the paper log holds the paper account
+    const rows = (path: string) => readFileSync(path, "utf8").split("\n").filter(Boolean).map((x) => JSON.parse(x) as { usd?: number; byVenue?: Record<string, number>; event?: { venue: string } });
+    const real = rows(networthPath(home));
+    expect(real.some((r) => r.event?.venue === "paper-1")).toBe(false);
+    expect(real.filter((r) => r.byVenue).every((r) => !("paper-1" in r.byVenue!))).toBe(true);
+    const paper = rows(paperNetworthPath(home));
+    expect(paper.some((r) => r.event?.venue === "paper-1")).toBe(true);
+    const lastPaper = paper.filter((r) => r.byVenue).pop()!;
+    // 10,000 − 6,001 − 6.001 fee + 0.1 × 63,000
+    expect(lastPaper.byVenue!["paper-1"]).toBeCloseTo(10000 - 6001 - 6.001 + 6300, 1);
+    // the curve: from what it started with at noon, flat to the buy, the bars after; the figure now is its last point
+    const h = await svc.paperHistory("1d", "paper-1");
+    if (isRefusal(h)) throw new Error(h.message);
+    expect(h).toMatchObject({ paper: true, venue: "paper-1", startUsd: 10000, rebuilt: true, bucket: "5m" });
+    expect(h.points[0]).toEqual({ at: "2026-10-14T12:00:00.000Z", usd: 10000 });
+    const value = (iso: string) => h.points.find((x) => x.at === iso)?.usd;
+    // 13:05: bought at the ask (60,010) with the fee, marked at the bar's close (60,000)
+    expect(value("2026-10-14T13:05:00.000Z")).toBeCloseTo(10000 - 6001 - 6.001 + 6000, 1);
+    expect(value("2026-10-14T14:00:00.000Z")).toBeCloseTo(10000 - 6001 - 6.001 + 6300, 1);
+    expect(h.points[h.points.length - 1]!.at).toBe("2026-10-14T15:00:00.000Z");
+    expect(h.sinceStartUsd).toBeCloseTo(6300 - 6001 - 6.001, 1);
+    expect(h.changeUsd).toBeCloseTo(6300 - 6001 - 6.001, 1);
+    expect(h.events.map((e) => [e.kind, e.venue])).toEqual([["connect", "paper-1"]]);
+    // every paper account, and the route's refusal of one that is not one
+    const all = await svc.paperHistory("1w");
+    expect(!isRefusal(all) && all.paper).toBe(true);
+    expect(code(await svc.paperHistory("1d", "real") as Refusal)).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await svc.paperHistory("3m") as Refusal)).toBe("E_ACCOUNT_BAD_ACTION");
+    // the real holdings' cost knows nothing of the paper buy; the paper view's does
+    const realHold = await svc.holdings({ cost: true });
+    const paperHold = await svc.holdings({ cost: true, paper: true });
+    if (isRefusal(realHold) || isRefusal(paperHold)) throw new Error("holdings");
+    expect((realHold.cost ?? []).some((c) => c.key === "crypto:BTC")).toBe(false);
+    expect((paperHold.cost ?? []).find((c) => c.key === "crypto:BTC")).toMatchObject({ coveredQty: 0.1 });
+  });
+
+  it("a bracket through the door: the entry signed with its exits, the exits placed by the paper account when it fills, the one that fills on the Statement as that order's, by whoever placed it", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    // the wrong way round is refused before anything is signed
+    const wrong = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.01", takeProfit: "50000" });
+    expect(isRefusal(wrong) && wrong.message).toContain("take-profit");
+    const placed = await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.01", takeProfit: "66000", stopLoss: "57000" });
+    if (isRefusal(placed) || placed.kind !== "order") throw new Error(`expected an order, got ${code(placed)}`);
+    expect(placed.order).toMatchObject({ status: "filled", takeProfit: 66000, stopLoss: 57000, paper: true });
+    // the price falls through the stop-loss: the paper account's own look sells, and the take-profit goes with it
+    btc.price = 56000;
+    btc.bid = 55990;
+    btc.ask = 56010;
+    expect(await svc.lookAtPaper()).toEqual(["paper-1"]);
+    const line = svc.statement().find((l) => l.description.includes("stop-loss of"));
+    expect(line).toMatchObject({ type: "trade", kind: "sell", account: "paper-1", status: "filled", paper: true, by: "You", amountUsd: 559.9 });
+    expect(line!.description).toContain(`stop-loss of ${placed.order.id}`);
+    // the take-profit was an order of the account's too: canceled when the stop-loss filled
+    expect(svc.statement().find((l) => l.description.includes("take-profit of"))).toMatchObject({ status: "canceled", amountUsd: 0, paper: true });
+    // both exits were followed as the account's own orders, named as the entry's
+    const page = (await svc.accountView())!;
+    expect(page.orders.filter((o) => o.exitOf?.order === placed.order.id).map((o) => [o.exitOf!.kind, o.type, o.status])).toEqual([["stop-loss", "stop", "filled"], ["take-profit", "limit", "canceled"]]);
+  });
+
+  it("a trailing stop through the door: signed with its trail, valued where it would trigger now", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const bought = await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.02" });
+    expect(code(bought)).toBe("order");
+    const p = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.02", trailPercent: "3" });
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.action).toMatchObject({ orderType: "trailing_stop", trailPercent: "3", trailPrice: "" });
+    // a sell worth what it holds now, at the bid
+    expect(p.quote?.order?.notionalUsd).toBeCloseTo(0.02 * 59990, 1);
+    const trail = await order("paper-1", { symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.02", trailPercent: "3" });
+    if (isRefusal(trail) || trail.kind !== "order") throw new Error(`expected an order, got ${code(trail)}`);
+    expect(trail.order).toMatchObject({ status: "open", type: "trailing_stop", trailPercent: 3 });
+    expect(code((await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.02" })) as Refusal)).toBe("E_ACCOUNT_BAD_ACTION");
   });
 
   it("a US stock in a paper account: priced at the public stocks line, filled inside its window through the same door; the Stocks tab's row carries the public line's session and the paper leg", async () => {

@@ -233,7 +233,7 @@ function lensMenu(open) {
   // the switch between real money and paper: Real money is every account but the paper ones; Paper the paper accounts (offered once one
   // is open; before that, the Portfolio offers to start one)
   const papers = L.filter((v) => v.paper);
-  const money2 = papers.length ? `${item("real", "Real money", money(L.filter((v) => !v.paper).reduce((s, v) => s + num(v.usd), 0)))}${item("paper", "Paper", `${plural(papers.length, "paper account")} · no real money`)}` : "";
+  const money2 = papers.length ? `${item("real", "Real money", money(L.filter((v) => !v.paper).reduce((s, v) => s + num(v.usd), 0)))}${item("paper", "Paper", `${money(papers.reduce((s, v) => s + num(v.usd), 0))} · ${plural(papers.length, "paper account")}, no real money`)}` : "";
   m.innerHTML = `${item("", "All accounts", money(A.liveUsd))}${money2}${L.length ? `<div class="menu-h" role="presentation">Accounts</div>${L.map((v) => item(`venue:${v.id}`, v.name, v.paper ? `${money(v.usd)} paper` : money(v.usd))).join("")}` : ""}${keys.length ? `<div class="menu-h" role="presentation">Agents</div>${keys.map((k) => item(`agent:${k.address}`, k.name, k.status === "expired" ? "expired" : short(k.address))).join("")}` : ""}`;
   m.hidden = false;
   (m.querySelector('[aria-checked="true"]') || m.querySelector("button")).focus();
