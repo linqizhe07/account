@@ -5,6 +5,12 @@
  * The page hands over WHERE the file is, never what is in it; the ledger records the path. Three things are checked before a byte of it is
  * used: the path stays inside the home directory, the file is readable by its owner only, and it holds the fields this venue needs. The
  * values go to the venue's client and nowhere else — not into a refusal, a log line or a view.
+ *
+ * One exception, and only one: a BRAIN's key (account/brain-keys.ts) may be typed on the page. The owner signs its fingerprint — never the
+ * key — and the key travels once, over this machine's loopback, beside that signature to POST /api/account/brain-key, which checks it
+ * against the fingerprint, takes it through the ordinary door and writes <home>/credentials/brains/<provider>.json (0600 in a 0700 folder,
+ * never through a link). From then on it is a key file like any other here, read by these same checks; it is never stored anywhere else,
+ * never echoed, and never in the ledger, a log line or a view. A venue's key is never taken from the page.
  */
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";

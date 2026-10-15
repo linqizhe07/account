@@ -2,8 +2,8 @@
    signs what the owner asks for; it decides nothing the account did not. */
 /* THE CONTRACT. The page is plain scripts sharing one global scope, run in this order after owner.js (the device key: Owner.prepare ·
    Owner.submit · Owner.act · Owner.why · Owner.role):
-     core (this file) · connect · money · asset · intent · portfolio · memory · earn · markets · trade · statement · agents-mount · shell
-     (draws and starts it).
+     core (this file) · connect · money · asset · intent · live · portfolio · memory · earn · markets · trade · chart · book · terminal ·
+     brains · desk · floor · superagent · statement · agents-mount · shell (draws and starts it).
    Each top-level name is declared once across them all (test/unit/page-scripts.test.ts). Declare what the shell calls as top-level
    `function` declarations.
 
@@ -61,6 +61,8 @@
                                   under still()) · whenStill(fn) once the page is not scrolling · paneLater(tab, fn) once a pane coming in
                                   has come in
      field · select · formFields(form) · setOptions(select, opts, value)   the form helpers;  download(name, rows) a CSV;  copyText(text, button)
+     formKeep(form) → restore(formDrawnAgain)   what was typed in a form, put back after it is drawn again (never a password field; a
+                                  select put back to another choice is told so with a change event, so what that choice shows agrees)
      whatYouSign(prepared, { open, notes })   the fields the owner signs, exactly as Owner.submit signs them (prepared.shown); notes a word
                                   beside a field, by name
    Sheets, the drawer, asking
@@ -93,7 +95,8 @@
      openHandToAgent(preset) [intent.js] · openReceive(venue) [money.js] · openLiveMove(venueId, preset) [money.js] · openAsset(key)
      [asset.js] · declineAsk(ask) [portfolio.js] · openMarket(item) [markets.js] · openPicker() / openConnect(option, opts) / connectVia(connector,
      opts) [connect.js] · openStatement() [statement.js] · openAgents() / openSettings() / openMode() [agents-mount.js; only the rail's
-     "What changes ›" opens the Mode sheet] · openEarn(preset) / openSellMany(preset) [earn.js]. Ask before calling one: typeof
+     "What changes ›" opens the Mode sheet] · openEarn(preset) / openSellMany(preset) [earn.js] · openBrains(ctx) [brains.js: the desk's
+     brains, their keys typed once and never kept on the page]. Ask before calling one: typeof
      openTicket === "function". A pane that throws says so in its place.
    The classes the panes draw with (ui/shell.css; colours, radii, shadows and fonts only from ui/tokens.css, Cream and Black alike). The
    look is Clean cards (M2): Manrope everywhere, labels in sentence case, numbers in Manrope 800 with tabular figures (.num .num-m), IBM
@@ -435,6 +438,41 @@ function setOptions(sel, opts, value) {
   const v = value === undefined || value === null ? "" : String(value);
   if (opts.some(([x]) => String(x) === v)) sel.value = v;
   else if (opts.length) sel.value = String(opts[0][0]);
+}
+/** What the owner typed into a form, kept across the form being drawn again: formKeep(form) reads each named field as it stands (a box's
+ * text, a select's choice, a checkbox's tick, by name and place) → a function that, given the form drawn again, puts each back where a
+ * field of that name still is. A form drawn again because what it offers changed (a brain's key saved in the Brains sheet meanwhile, a paper
+ * account opened) then loses nothing that was typed. A password field is never kept: what is secret is typed again, never carried.
+ * A select whose choice it changes is told so at once — a change event that bubbles, as if the owner had picked it — before the fields after
+ * it are put back: whatever a choice shows or offers (the Brain select shows that provider's own block and offers that provider's own
+ * efforts, ui/desk.js) then agrees with the choice put back, never with the one the form was drawn with, and a field after it is put back
+ * into what that choice offers */
+function formKeep(form) {
+  const kept = [];
+  for (const el of (form && form.querySelectorAll ? form.querySelectorAll("[name]") : [])) {
+    if (el.type === "password" || el.type === "file") continue;
+    kept.push([el.name, el.type === "checkbox" || el.type === "radio" ? { checked: el.checked, value: el.value } : { value: el.value }]);
+  }
+  return (next) => {
+    if (!next || !next.querySelectorAll) return;
+    const seen = new Map();
+    const fields = [...next.querySelectorAll("[name]")];
+    for (const [name, v] of kept) {
+      const n = seen.get(name) || 0;
+      seen.set(name, n + 1);
+      const el = fields.filter((f) => f.name === name)[n];
+      if (!el) continue;
+      if ("checked" in v && (el.type === "checkbox" || el.type === "radio")) {
+        if (el.value === v.value) el.checked = v.checked;
+      } else if (el.type !== "password" && el.type !== "file") {
+        // a choice the form no longer offers is left as the form drew it, never set to nothing
+        if (el.tagName === "SELECT" && ![...(el.options || [])].some((o) => o.value === v.value)) continue;
+        const was = el.value;
+        el.value = v.value;
+        if (el.tagName === "SELECT" && el.value !== was && typeof el.dispatchEvent === "function" && typeof Event === "function") el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+  };
 }
 /* a function that runs `fn` a little later, once, however often it is asked: later(ms) asks (350 ms unless said) */
 const debounce = (fn, ms = 350) => {

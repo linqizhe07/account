@@ -12,11 +12,14 @@
  * Watch) are bounded by the limit's size per order, its budget and its venues, and by the objective's own rules this file keeps (the most at
  * risk per lead, the day's loss at which the floor halts). The words in a charter steer the brain; they are not authority.
  *
- * A seat is HOUSE — the account runs it, with a brain (a Claude model through the Anthropic API, brain-claude.ts, or any OpenAI-format chat endpoint — OpenAI, DeepSeek, a local server — brain-openai.ts; a scripted one in
- * tests) — or OUTSIDE: an agent of the owner's own (Claude Code over MCP, any program with a key) holding the seat: it reads the desk and
- * its charter (portfolio_desk) and says things in the room (portfolio_desk_say, a signed agentDeskSay). The two kinds are the same seat at
- * the door; the Flow and Sentiment seats are outside-only, since they need data the account does not have (a wallet-flow feed, a
- * sentiment feed) and the account never pretends to.
+ * A seat is HOUSE — the account runs it, with a brain — or OUTSIDE. The brains are every provider the account knows at once (brains.ts:
+ * Claude through the Anthropic API, brain-claude.ts; OpenAI, DeepSeek, Grok, Muse, Kimi, Qwen, OpenRouter, Gemini, Groq, Together, a
+ * local Ollama or vLLM, an endpoint the owner names — each its own OpenAI-format brain, brain-openai.ts; a scripted one in tests), each
+ * with its own key, and the hired one thinks: a desk hired with a provider the account does not hold is said not to have a brain, and
+ * no other is ever asked — or billed — in its place. OUTSIDE: an agent of the owner's own (Claude Code over MCP, any program with a key)
+ * holding the seat: it reads the desk and its charter (portfolio_desk) and says things in the room (portfolio_desk_say, a signed
+ * agentDeskSay). The two kinds are the same seat at the door; the Flow and Sentiment seats are outside-only, since they need data the
+ * account does not have (a wallet-flow feed, a sentiment feed) and the account never pretends to.
  *
  * What a cycle does (every `everyMin` minutes while the session runs, or when the owner asks for one): the leads' orders are read back
  * from the account (fills, cards answered); EXIT reviews the open leads — the plan closes a lead at its take-profit, its stop or its time
@@ -65,7 +68,7 @@ import type { Exploration, ExploreItem } from "../live/explore.ts";
 import type { LiveOrder } from "./live-orders.ts";
 import { ceilTo, floorTo, type Market, type Position, type Side } from "../live/trade.ts";
 import type { AccountPage, Outcome } from "./exchange.ts";
-import { isKeyRejected, type BrainKeyRejected } from "./brain-key.ts";
+import { isKeyRejected, keyShaped, plainFieldName, type BrainKeyRejected } from "./brain-key.ts";
 import { seatKey, slugOf } from "./keystore.ts";
 import { signAgent, type Action, type AgentAction, type Envelope, type Hex, type SimKey } from "./sign.ts";
 import type { AgentKey } from "./state.ts";
@@ -164,8 +167,9 @@ export interface DeskObjective {
 }
 
 export interface BrainConfig {
-  /** which brain thinks: the id of one the desk holds — "claude" (the Anthropic API, brain-claude.ts), "openai" (an OpenAI-format
-   * endpoint, brain-openai.ts); a stand-in's "scripted" */
+  /** which brain thinks: the id of one the desk holds — "claude" (the Anthropic API, brain-claude.ts), or one of the OpenAI-format presets
+   * ("openai", "deepseek", "xai", "meta", "moonshot", "qwen", "openrouter", "gemini", "groq", "together", "ollama", "vllm", "custom";
+   * brains.ts, brain-openai.ts); a stand-in's "scripted" */
   provider: string;
   model: string;
   effort: "low" | "medium" | "high";
@@ -505,6 +509,70 @@ export interface Brain {
    * from its key file too (the form's wins: with it, the file may name none) */
   ready(model?: string): BrainStatus;
   decide<T>(r: BrainRequest<T>): Promise<BrainAnswer<T>>;
+  /** what the Brains place shows of it besides its standing (BrainAbout): where it is reached, what it suggests, the key's masked tail —
+   * never the key. Read without reaching the provider. A brain without one (a test's script) is shown by its standing alone */
+  about?(): BrainAbout;
+  /** "Test the key": the one call that bills nothing (the provider's list of models), answered in words — never the key (BrainTest).
+   * `model`: the model the owner means to use, said to be among what the provider lists or not */
+  test?(model?: string): Promise<BrainTest>;
+}
+
+/** Model ids to offer as SUGGESTIONS: read from the provider's own page (`source`) on the day `checked` — never the whole list, never
+ * promised current; the owner may type any id the endpoint serves. `prices`: the per-million-token prices (in, out) that page gave that
+ * day for some of them, where it gave one — the owner's own number is the one the desk counts (BrainConfig.price) */
+export interface BrainSuggestions {
+  models: string[];
+  source: string;
+  checked?: string | undefined;
+  prices?: Record<string, { inUsd: number; outUsd: number }> | undefined;
+}
+
+/** What the Brains place shows of a brain beside its standing, read from its preset and its key file without reaching the provider:
+ *   kind          "model-api" (a provider's API), "local" (a server on this machine), "custom" (an endpoint the owner names)
+ *   format        the request's format: "anthropic" (brain-claude.ts) or "openai" (chat completions, brain-openai.ts)
+ *   baseUrl       where it would call now: the environment's or the key file's base URL, else the preset's own ("" where the owner must
+ *                 name one: Qwen's per-workspace URL, a custom endpoint); baseRequired says so, baseHint shows the provider's pattern
+ *   keyOptional   a local server that ignores the key: none is needed
+ *   suggested     model ids to suggest, with where they were read and when (BrainSuggestions)
+ *   efforts       the efforts the provider takes of the desk's three (one it does not take is not sent: its own default applies)
+ *   tail          "…" and the last four characters of the key in use, where one is set (keyTail, brain-key.ts) — never the key
+ *   envWins       the environment variable that holds the key instead of the file, when it is set: the file is not read while it is
+ *   envBlocks     the environment variable that the brain does NOT use and that keeps it from reading the file too, when it is set:
+ *                 Claude's ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN beside an ANTHROPIC_BASE_URL that points away from Anthropic (a
+ *                 gateway's credential, brain-claude.ts). Never with envWins: a variable either wins or blocks
+ *   keyFile       the key file a key typed on the page is written to, relative to the home (credentials/brains/<id>.json)
+ *   keyFrom       where the key in use is read now: "env", "file" (keyFile), "older-file" (the older path still read), or "none"
+ *   docs, keyPage the provider's own pages (from the research, dated with `suggested.checked`); note: one plain fact the owner should know */
+export interface BrainAbout {
+  kind: "model-api" | "local" | "custom";
+  format: "anthropic" | "openai";
+  baseUrl: string;
+  baseRequired?: boolean | undefined;
+  baseHint?: string | undefined;
+  keyOptional?: boolean | undefined;
+  suggested?: BrainSuggestions | undefined;
+  efforts: ReadonlyArray<BrainConfig["effort"]>;
+  tail?: string | undefined;
+  envWins?: string | undefined;
+  envBlocks?: string | undefined;
+  keyFile: string;
+  keyFrom: "env" | "file" | "older-file" | "none";
+  docs?: string | undefined;
+  keyPage?: string | undefined;
+  note?: string | undefined;
+}
+
+/** "Test the key", answered: `ok` when the provider took the key (or, for a local server, answered); `words` the provider's answer in a
+ * sentence — its own refusal words scrubbed of anything key-shaped, never the key; `status` the HTTP status when one came back; `models`
+ * the ids the provider listed (each checked to look like a model's name, at most 200), for the owner's model field; `fix` when the brain
+ * could not even be asked (no key, a file it cannot use) — then nothing was sent anywhere */
+export interface BrainTest {
+  ok: boolean;
+  provider: string;
+  words: string;
+  status?: number | undefined;
+  models?: string[] | undefined;
+  fix?: BrainFix | undefined;
 }
 export interface BrainModel {
   id: string;
@@ -513,13 +581,15 @@ export interface BrainModel {
   outUsd: number;
 }
 
-/** a brain that answers from a script: tests and the stand-in (`id`, `label`, `models` and the tokens it claims are the test's) */
-export function scriptedBrain(script: (r: { role: RoleId; input: string }) => unknown, model = "scripted", o: { id?: string | undefined; label?: string | undefined; models?: ReadonlyArray<BrainModel> | undefined; usage?: BrainAnswer<unknown>["usage"] | undefined } = {}): Brain {
+/** a brain that answers from a script: tests and the stand-in (`id`, `label`, `models`, what it says of itself for the Brains place
+ * (`about`) and the tokens it claims are the test's) */
+export function scriptedBrain(script: (r: { role: RoleId; input: string }) => unknown, model = "scripted", o: { id?: string | undefined; label?: string | undefined; models?: ReadonlyArray<BrainModel> | undefined; usage?: BrainAnswer<unknown>["usage"] | undefined; about?: (() => BrainAbout) | undefined } = {}): Brain {
   const usage = () => ({ ...(o.usage ?? { inputTokens: 0, outputTokens: 0 }) });
   return {
     id: o.id ?? "scripted",
     label: o.label ?? "a script",
     models: o.models ?? [],
+    ...(o.about ? { about: o.about } : {}),
     ready: () => ({ ok: true, model, how: "a script" }),
     async decide(r) {
       const raw = script({ role: r.role, input: r.input });
@@ -536,6 +606,44 @@ export const BRAIN_MODELS: ReadonlyArray<BrainModel> = [
   { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", inUsd: 0.1, outUsd: 0.5 },
 ];
 export const DEFAULT_BRAIN: BrainConfig = { provider: "claude", model: "claude-opus-5-5", effort: "medium" };
+/** a model's name as an endpoint names it: a letter or digit first, then letters, digits and . _ - : / — 80 at most */
+export const MODEL_ID = /^[A-Za-z0-9][\w.\-:/]{0,79}$/;
+
+/** A KEY WHERE A BRAIN'S NAME OR MODEL GOES. Many real keys fit MODEL_ID (eighty characters or fewer: DeepSeek's and Kimi's sk-<hex>,
+ * Groq's gsk_…, Gemini's AIza…, OpenRouter's sk-or-v1-…), so a key pasted into the model field — beside the key field on the page — would
+ * otherwise be taken as a model's name: written in desk.json, said in the room ("You changed the brain: … · <the key> · …", which any
+ * local process reads through the seat's view, and outside agents through MCP), and sent as the request's model to whichever provider the
+ * desk thinks with. So a provider or a model that looks like an API key (keyShaped, brain-key.ts — the one check the page, the key route
+ * and the door share) is refused in these words, which NEVER repeat the value: hire, brain, objective and resume alike (parseBrain). The
+ * door refuses the same before it writes the instruction it took (brain-keys.ts, in its own words); this is the desk's own refusal, for
+ * whatever reaches it */
+export const KEY_IN_MODEL = "the model's name looks like an API key, so it is refused and not repeated here: a key goes only in the Brains place's key field, never in the model — name the model as the endpoint names it (gpt-6-luna, deepseek-flash, grok-4.3…)";
+export const KEY_IN_PROVIDER = "the brain named looks like an API key, so it is refused and not repeated here: a key goes only in the Brains place's key field — name the brain by its id (claude, openai, deepseek, xai…)";
+/** the fields a brain is named with — the provider, the model, the effort, the owner's price — and nothing else */
+const BRAIN_FIELDS = ["provider", "model", "effort", "price"] as const;
+/** the words for a brain that is not one object: fixed, so they never repeat what was sent in its place */
+export const BRAIN_NOT_OBJECT = "the desk's brain is one object, {provider, model, effort, price}: what was sent in its place is not one, and it was not kept";
+/** the words for a brain carrying a key-shaped provider or model, or undefined when it carries none */
+function brainKeyProblem(b: Record<string, unknown>): string | undefined {
+  if (b.provider !== undefined && b.provider !== null && keyShaped(String(b.provider))) return KEY_IN_PROVIDER;
+  if (b.model !== undefined && b.model !== null && keyShaped(String(b.model))) return KEY_IN_MODEL;
+  return undefined;
+}
+
+/** The brain a desk was hired with when the account does not hold it now (a desk file written beside other brains — a stand-in's script,
+ * a provider since removed): never ready, and it says so in those words; asked, it answers no decision and bills nothing. It stands in so
+ * the desk never quietly thinks — and spends — with another provider than the one the owner signed for: the owner chooses one it holds
+ * (Brain…), with a signature */
+export function absentBrain(id: string): Brain {
+  const why = `the desk was hired with the brain "${id.slice(0, 40)}", which this account does not hold now: choose one it holds (Brain…) — no other brain is asked in its place`;
+  return {
+    id,
+    label: `${id.slice(0, 40)} (not on this account)`,
+    models: [],
+    ready: () => ({ ok: false, model: "", why }),
+    decide: async () => ({ out: null, why, usage: { inputTokens: 0, outputTokens: 0 } }),
+  };
+}
 /** what a call cost: the owner's price for the model, else the brain's listed one; undefined when neither is known (the tokens are
  * still counted, as unpriced) */
 export const costOf = (brain: BrainConfig, listed: ReadonlyArray<BrainModel>, inputTokens: number, outputTokens: number): number | undefined => {
@@ -645,7 +753,11 @@ const fig = (n: number, places?: number): string => {
 };
 /** the places a market's price step gives its prices, or undefined where it names none */
 const stepPlaces = (step: number | undefined): number | undefined => (step !== undefined && step > 0 ? placesOf(step) : undefined);
-/** the room's line for the owner's autonomy on paper, one sentence wherever it is signed (autonomyChange, or a hire that carries it) */
+/** the autonomy a hire or a resume carries: undefined when it carries none, the value of `paper` when it is an object (a boolean, or
+ * something else the caller refuses), null when `autonomy` is not an object at all */
+const autonomySaid = (v: Record<string, unknown>): unknown => (v.autonomy === undefined ? undefined : v.autonomy && typeof v.autonomy === "object" && !Array.isArray(v.autonomy) ? (v.autonomy as Record<string, unknown>).paper : null);
+/** the room's line for the owner's autonomy on paper, one sentence wherever it is signed (autonomyChange, a hire or a resume that carries
+ * it) */
 const autonomyWords = (venue: string): string => `You let the desk trade on its own at ${venue}, paper money: the orders of its own seats there go at once, without cards, each inside its seat's trading limit. Every other agent and every other venue is answered as before.`;
 /** dollars in the large, as a listing says a day's volume: $603.9M, $2B */
 const USD_COMPACT = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
@@ -828,8 +940,10 @@ export interface DeskCatalog {
   seats: Partial<Record<RoleId, Hex>>;
   /** the brain the form starts from: the hired one, else the first that is ready */
   brain: BrainStatus & { provider: string; label: string; models: ReadonlyArray<BrainModel>; effort: string };
-  /** every brain the desk may think with, each with its standing and the models it lists */
-  brains: Array<BrainStatus & { id: string; label: string; models: ReadonlyArray<BrainModel> }>;
+  /** every brain the desk may think with, each with its standing, the models it lists and — where it says it (Brain.about) — where it is
+   * reached, the models it suggests with where and when they were read, the efforts it takes, the key's masked tail, whether a variable in
+   * the environment wins over its file (BrainAbout). Never a key */
+  brains: Array<BrainStatus & { id: string; label: string; models: ReadonlyArray<BrainModel> } & Partial<BrainAbout>>;
   universes: typeof UNIVERSES;
   defaults: Omit<DeskObjective, "venue" | "text">;
   hired: boolean;
@@ -890,10 +1004,13 @@ export class Desk {
   get brains(): Brain[] {
     return Array.isArray(this.opts.brain) ? this.opts.brain : [this.opts.brain];
   }
-  /** the one that thinks: the hired desk's (the first, until a desk is hired) */
+  /** The one that thinks: the hired desk's — or, when the account does not hold the provider the desk was hired with, absentBrain, which is
+   * never ready and never bills: no other provider is asked in its place. Before a desk is hired, the first held (what the form starts
+   * from) */
   get brain(): Brain {
     const want = this.file?.brain.provider;
-    return this.brains.find((b) => b.id === want) ?? this.brains[0]!;
+    if (want === undefined) return this.brains[0]!;
+    return this.brains.find((b) => b.id === want) ?? absentBrain(want);
   }
 
   hired(): boolean {
@@ -1018,7 +1135,7 @@ export class Desk {
       case "pause":
       case "resume":
       case "end":
-        return this.session(action.change);
+        return this.session(action.change, v);
       case "cycle": {
         if (!this.file) return bad("no desk is hired");
         // a cycle runs inside a session: with none, or one that ended, it would stop at its first line and nothing would reach the room, so
@@ -1045,7 +1162,8 @@ export class Desk {
         return { ok: true, kind: "account", summary: "a cycle started: its steps are in the room as they happen" };
       }
       case "brain":
-        return this.brainChange(v);
+        // the value itself, not the object made of it: a brain sent as an array, a string or null is refused, never read as "no change"
+        return this.brainChange(value);
       case "autonomy":
         return this.autonomyChange(v);
       case "report": {
@@ -1080,12 +1198,30 @@ export class Desk {
     return { owns: plainText(c.owns, CHARTER_MAX) || base.owns, good: plainText(c.good, CHARTER_MAX) || base.good, never: plainText(c.never, CHARTER_MAX) || base.never };
   }
 
-  /** the brain, as the owner names it: a provider the desk holds; a model it lists, or — for one that lists none — the model's name as
-   * the endpoint knows it; the effort; the owner's price (null clears it) */
+  /** The brain, as the owner names it: a provider the desk holds — one it does not hold is refused in words, never swapped for another
+   * (the owner pays for the brain they signed for, and only that one); named by none, the one the desk has now (the hire's: Claude, the
+   * default) if the account holds it, else the only one it holds, else the owner is asked to name it. A model it lists, or — for one that
+   * lists none — the model's name as the endpoint knows it (a name that is not one is refused, not replaced; none named: the one the desk
+   * has, else the key file's); the effort; the owner's price (null clears it). FIRST of all, a provider or a model that looks like an API
+   * key (keyShaped: a key pasted into the wrong field) is refused in fixed words that never repeat it (KEY_IN_MODEL, KEY_IN_PROVIDER) —
+   * before any refusal below could say the value back, and before anything is kept: the same for a hire, a change of the brain, an
+   * objective and a resume, which all name their brain through here. And the brain is ONE OBJECT of those four fields: anything else in
+   * its place (an array, a string, a number, null — BRAIN_NOT_OBJECT) or a field beside them is refused, in words that name such a field
+   * only when its name is a plain identifier that does not look like a key (plainFieldName) — never read as "no change", never kept.
+   * Undefined is a brain not named (a hire that names none: the default) */
   private parseBrain(v: unknown, base: BrainConfig): BrainConfig | Refusal {
-    const b = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+    if (v !== undefined && (!v || typeof v !== "object" || Array.isArray(v))) return bad(BRAIN_NOT_OBJECT);
+    const b = (v ?? {}) as Record<string, unknown>;
+    // a key where the provider or the model goes: refused before anything below can say it back (brainKeyProblem)
+    const keyed = brainKeyProblem(b);
+    if (keyed) return bad(keyed);
+    const extra = Object.keys(b).find((k) => !(BRAIN_FIELDS as readonly string[]).includes(k));
+    if (extra !== undefined) return bad(`a brain is named with ${BRAIN_FIELDS.join(", ")}: ${plainFieldName(extra) ? `"${extra}"` : "a field it was sent"} is not one of them, and nothing was kept`);
     const ids = this.brains.map((x) => x.id);
-    const provider = ids.includes(String(b.provider)) ? String(b.provider) : ids.includes(base.provider) ? base.provider : ids[0]!;
+    const asked = b.provider === undefined || b.provider === null || b.provider === "" ? undefined : String(b.provider);
+    if (asked !== undefined && !ids.includes(asked)) return bad(`"${plainText(asked, 40)}" is not a brain this account holds: ${ids.join(", ")}`);
+    const provider = asked ?? (ids.includes(base.provider) ? base.provider : ids.length === 1 ? ids[0] : undefined);
+    if (provider === undefined) return bad(`name the brain: the desk's "${plainText(base.provider, 40)}" is not one this account holds — ${ids.join(", ")}`);
     const brain = this.brains.find((x) => x.id === provider)!;
     const same = base.provider === provider;
     let model: string;
@@ -1094,8 +1230,9 @@ export class Desk {
       if (named !== undefined && !brain.models.some((m) => m.id === named)) return bad(`${brain.label} lists ${brain.models.map((m) => m.id).join(", ")}: "${named.slice(0, 40)}" is not one of them`);
       model = named ?? (same && brain.models.some((m) => m.id === base.model) ? base.model : brain.models[0]!.id);
     } else {
-      const named = plainText(b.model, 80);
-      model = /^[A-Za-z0-9][\w.\-:/]{0,79}$/.test(named) ? named : same && base.model ? base.model : brain.ready().model;
+      const named = b.model === undefined || b.model === null ? "" : String(b.model).trim();
+      if (named && !MODEL_ID.test(named)) return bad(`"${plainText(named, 40)}" is not a model's name as an endpoint names it (letters, digits and . _ - : / — 80 at most)`);
+      model = named || (same && base.model ? base.model : brain.ready().model);
       if (!model) return bad(`${brain.label}: name the model, as the endpoint names it (or "model" in its key file)`);
     }
     const effort = b.effort === "low" || b.effort === "medium" || b.effort === "high" ? b.effort : base.effort;
@@ -1111,16 +1248,52 @@ export class Desk {
     return { provider, model, effort, ...(price ? { price } : {}) };
   }
 
-  /** the brain, changed: which one thinks, the model, the effort, the owner's price */
-  private brainChange(v: Record<string, unknown>): Outcome {
+  /** the brain, changed: which one thinks, the model, the effort, the owner's price — `v` the value as it was sent (parseBrain refuses one
+   * that is not an object) */
+  private brainChange(v: unknown): Outcome {
     if (!this.file) return bad("no desk is hired");
     const b = this.parseBrain(v, this.file.brain);
     if (isRefusal(b)) return b;
     this.file.brain = b;
     this.save();
-    const st = this.standingOf();
-    this.room("you", "you", `You changed the brain: ${this.brain.label} · ${b.model} · ${b.effort} effort${b.price ? ` · $${b.price.inUsd}/$${b.price.outUsd} per M tokens` : ""}${st.ok ? "" : ` — not ready: ${st.why ?? "no key"}`}.`);
+    this.room("you", "you", this.brainLine(b));
     return { ok: true, kind: "account", summary: `the desk thinks with ${b.model} (${this.brain.label})` };
+  }
+
+  /** The room's line for a brain the owner chose (a change, an objective or a resume that carries one): who thinks, the model, the effort
+   * as it is SENT — the desk's effort when the provider takes it; else the provider's own default, said so (a preset whose provider's docs
+   * name no effort takes none, and DeepSeek takes low and high, not medium: brain-openai.ts leaves an effort it does not take out of the
+   * request) — the owner's price, and the standing when it is not ready. A brain that says nothing of its efforts (a script) keeps the
+   * desk's word for it */
+  private brainLine(b: BrainConfig): string {
+    const st = this.standingOf();
+    const takes = this.brain.about?.().efforts;
+    const effort = !takes || takes.includes(b.effort) ? `${b.effort} effort` : takes.length ? `the provider's own effort (it takes ${takes.join(" or ")}, not ${b.effort})` : "the provider's own effort (its docs name no effort setting)";
+    return `You changed the brain: ${this.brain.label} · ${b.model} · ${effort}${b.price ? ` · $${b.price.inUsd}/$${b.price.outUsd} per M tokens` : ""}${st.ok ? "" : ` — not ready: ${st.why ?? "no key"}`}.`;
+  }
+
+  /** A BRAIN'S KEY CHANGED (the owner's setBrainKey, written or taken away — account/brain-keys.ts, called by the service once the file
+   * changed). A refusal the provider gave the OLD key (brainFault) stops being that brain's standing at once: the page, the floor's feed,
+   * the catalog and the key route's answer then read the brain's own word about its new key with no cycle in between — a paused or ended
+   * desk runs none, and the owner who just fixed the key would otherwise read "Key refused" beside "Saved" until one did. The room says it
+   * in one line from the owner, by the key's FINGERPRINT only (the first eight hex of the hash the owner signed; anything else given as a
+   * fingerprint is left out, so nothing key-shaped can ride in): which brain, set or taken away, whether a refusal was cleared, and how the
+   * brain stands now. Not when a variable in the service's environment wins over the file (the brain's about().envWins): the brain still
+   * uses that key, so a refusal of it stands, and the line says so. A provider the desk does not hold: nothing. No desk hired: the fault
+   * (there is none without a desk's call) has nothing to clear, and there is no room to write in. `keyless`: a local server's base URL and
+   * model were saved with no key (brain-keys.ts applyBrainKey) — said as that, not as a key taken away */
+  keyChanged(provider: string, fingerprint: string, o: { keyless?: boolean | undefined } = {}): void {
+    const b = this.brains.find((x) => x.id === provider);
+    if (!b || !this.file) return;
+    const fp = /^[0-9a-f]{8}$/.test(fingerprint) ? fingerprint : "";
+    const envWins = b.about?.().envWins;
+    const had = this.brainFault?.provider === provider;
+    if (had && !envWins) this.brainFault = undefined;
+    const st = this.standingOf(b);
+    const what = o.keyless ? `You saved ${b.label}'s address and model, with no key` : fingerprint === "" ? `You took away the key saved for ${b.label}` : `You saved a new key for ${b.label}${fp ? ` (fingerprint ${fp})` : ""}`;
+    const cleared = !had ? "" : envWins ? ` — but ${envWins} in the service's environment wins over the file, so the refused key is still the one in use` : " — the refusal of the old key no longer stands";
+    const now = st.ok ? "it is ready" : `it is not ready: ${st.why ?? "no key"}`;
+    this.room("you", "you", `${what}${cleared}; ${now}.`);
   }
 
   /** THE SUPERAGENT, switched by the owner's signature: {paper: true} lets the desk's own trading seats place their orders at its venue
@@ -1159,7 +1332,7 @@ export class Desk {
     if (this.file && this.file.session && !this.file.session.endedAt) return bad("a desk is hired and its session runs: end it first (end), or change its objective (objective)");
     const asked = this.parseObjective((v.objective && typeof v.objective === "object" && !Array.isArray(v.objective) ? v.objective : {}) as Record<string, unknown>);
     if (isRefusal(asked)) return asked;
-    const said = v.autonomy === undefined ? undefined : v.autonomy && typeof v.autonomy === "object" && !Array.isArray(v.autonomy) ? (v.autonomy as Record<string, unknown>).paper : null;
+    const said = autonomySaid(v);
     if (said !== undefined && typeof said !== "boolean") return bad('a hire\'s autonomy is {"paper": true} or {"paper": false}: whether the desk\'s own seats place their orders at its paper account without cards');
     const page = await this.world.page();
     const venue = page?.venues.find((x) => x.id === asked.venue);
@@ -1257,6 +1430,14 @@ export class Desk {
     if (!this.file) return bad("no desk is hired");
     const o = this.parseObjective(v, this.file.objective);
     if (isRefusal(o)) return o;
+    // the brain it carries, checked whole BEFORE anything is changed: a refused brain (one the account does not hold, a model's name that is
+    // not one, a key where the model goes) refuses the whole change — the objective stays as it was, in memory and in desk.json
+    let brain: BrainConfig | undefined;
+    if (v.brain !== undefined) {
+      const b = this.parseBrain(v.brain, this.file.brain);
+      if (isRefusal(b)) return b;
+      brain = b;
+    }
     if (o.venue !== this.file.objective.venue) {
       const page = await this.world.page();
       const venue = page?.venues.find((x) => x.id === o.venue);
@@ -1268,14 +1449,11 @@ export class Desk {
       o.venueName = venue.name;
     }
     this.file.objective = o;
-    if (v.brain !== undefined) {
-      const b = this.parseBrain(v.brain, this.file.brain);
-      if (isRefusal(b)) return b;
-      this.file.brain = b;
-    }
+    if (brain) this.file.brain = brain;
     this.save();
     this.room("you", "you", `You changed the objective: “${o.text}” · target ${pct(o.targetPct)} · at most ${o.maxRiskPct}% a lead · halt at -${o.maxDailyLossPct}% · every ${o.everyMin} min · report ${o.reportAt}.`);
-    return { ok: true, kind: "account", summary: "the desk's objective changed" };
+    if (brain) this.room("you", "you", this.brainLine(brain));
+    return { ok: true, kind: "account", summary: `the desk's objective changed${brain ? `, thinking with ${brain.model} (${this.brain.label})` : ""}` };
   }
 
   private charter(v: Record<string, unknown>): Outcome {
@@ -1327,7 +1505,13 @@ export class Desk {
     return { ok: true, kind: "account", summary: `the ${spec.name} seat is filled ${kind === "house" ? "from the house" : `by ${name}`}` };
   }
 
-  private async session(change: "pause" | "resume" | "end"): Promise<Outcome> {
+  /** Pause, resume, end. A RESUME may carry, in the same signature, what the desk starts again with: `autonomy` ({"paper": true} or
+   * {"paper": false}) and `brain` (a BrainConfig, as a hire names it) — so an ended session starts again with its autonomy on paper in one
+   * step ("Start again · auto on paper"), and its first cycle never runs without it. Both are taken exactly as a hire takes them: the
+   * autonomy on only where the desk's venue is a paper account, connected; the brain only one the account holds, with a model it serves —
+   * anything else and the WHOLE resume is refused in those words, nothing changed, nothing started. Left out (the value "", as before),
+   * the desk resumes with what it had. A pause and an end take no value: one given is not read */
+  private async session(change: "pause" | "resume" | "end", v: Record<string, unknown> = {}): Promise<Outcome> {
     if (!this.file) return bad("no desk is hired");
     const s = this.file.session;
     const now = this.world.now();
@@ -1346,25 +1530,54 @@ export class Desk {
       await this.report("end");
       return { ok: true, kind: "account", summary: "the session ended" };
     }
-    if (s && !s.endedAt && s.pausedAt) {
-      delete s.pausedAt;
+    const paused = !!s && !s.endedAt && !!s.pausedAt;
+    if (s && !s.endedAt && !paused) return bad("the session runs already");
+    // what the resume carries, checked whole before anything changes
+    const said = autonomySaid(v);
+    if (said !== undefined && typeof said !== "boolean") return bad('a resume\'s autonomy is {"paper": true} or {"paper": false}: whether the desk\'s own seats place their orders at its paper account without cards');
+    let brain: BrainConfig | undefined;
+    if (v.brain !== undefined) {
+      const b = this.parseBrain(v.brain, this.file.brain);
+      if (isRefusal(b)) return b;
+      brain = b;
+    }
+    const needPage = !paused || said === true;
+    const page = needPage ? await this.world.page() : undefined;
+    const venue = page?.venues.find((x) => x.id === this.file!.objective.venue);
+    if (!paused && (!venue || !venue.live)) return bad(`${this.venueLabel(this.file.objective.venue)} is not connected: connect it, then start a session`);
+    if (said === true) {
+      if (!venue || !venue.live) return bad(`${this.venueLabel(this.file.objective.venue)} is not connected: the desk trades on its own only at a paper account that is`);
+      if (venue.paper !== true) return bad(`${venue.name} is real money: the desk places orders without cards only at a paper account. Resume it without the autonomy, or move it to one first (objective)`);
+    }
+    // taken: the brain and the autonomy first, so the first cycle (soon) already has them
+    const f = this.file;
+    if (brain) f.brain = brain;
+    const was = f.autonomy?.paper === true;
+    if (said !== undefined) f.autonomy = { paper: said, at: now };
+    const venueName = venue?.name ?? this.venueLabel(f.objective.venue);
+    const sayCarried = () => {
+      if (brain) this.room("you", "you", this.brainLine(brain));
+      if (said === true) this.room("you", "you", autonomyWords(venueName));
+      else if (said === false) this.room("you", "you", was ? "You turned the desk's autonomy off: its orders wait for you on cards again (Guard), unless the account is in Beast." : "You kept the desk's autonomy off: its orders wait for you on cards (Guard), unless the account is in Beast.");
+    };
+    const carried = `${brain ? `, thinking with ${brain.model} (${this.brain.label})` : ""}${said === true ? `, trading on its own at ${venueName} (paper money)` : said === false ? ", its orders on cards" : ""}`;
+    if (paused) {
+      delete s!.pausedAt;
       this.save();
       this.room("you", "you", "You resumed the desk.");
+      sayCarried();
       this.soon();
-      return { ok: true, kind: "account", summary: "the desk runs again" };
+      return { ok: true, kind: "account", summary: `the desk runs again${carried}` };
     }
-    if (s && !s.endedAt) return bad("the session runs already");
-    const page = await this.world.page();
-    const venue = page?.venues.find((x) => x.id === this.file!.objective.venue);
-    if (!venue || !venue.live) return bad(`${this.venueLabel(this.file.objective.venue)} is not connected: connect it, then start a session`);
-    this.file.session = this.newSession(venue.usd, now, this.file.objective.hours);
-    this.file.equity = [];
+    f.session = this.newSession(venue!.usd, now, f.objective.hours);
+    f.equity = [];
     this.reportsDoneBefore(now);
     this.save();
-    this.room("you", "you", `You started a new session of ${this.file.objective.hours} h from ${usd(venue.usd)}.`);
+    this.room("you", "you", `You started a new session of ${f.objective.hours} h from ${usd(venue!.usd)}.`);
+    sayCarried();
     await this.report("start");
     this.soon();
-    return { ok: true, kind: "account", summary: `a new session of ${this.file.objective.hours} h` };
+    return { ok: true, kind: "account", summary: `a new session of ${f.objective.hours} h${carried}` };
   }
 
   /** an outside seat's words in the room, under its key */
@@ -2388,7 +2601,9 @@ export class Desk {
       if (!isRefusal(k)) seats[r] = k.address as Hex;
     }
     const b = this.file?.brain;
-    const brains = this.brains.map((x) => ({ ...this.standingOf(x), id: x.id, label: x.label, models: x.models }));
+    // each brain with its standing and what it says of itself for the Brains place (BrainAbout: where it is reached, what it suggests, the
+    // key's masked tail — never the key)
+    const brains = this.brains.map((x) => ({ ...this.standingOf(x), id: x.id, label: x.label, models: x.models, ...(x.about ? x.about() : {}) }));
     const pick = b ? this.brain : (this.brains.find((x) => x.ready().ok) ?? this.brains[0]!);
     const st = this.standingOf(pick);
     return { roles: ROLES.map((r) => ROLE_SPECS[r]), seats, brain: { ...st, provider: pick.id, label: pick.label, model: b && b.provider === pick.id ? b.model : st.model || pick.models[0]?.id || "", models: pick.models, effort: b?.effort ?? DEFAULT_BRAIN.effort }, brains, universes: UNIVERSES, defaults: { universe: "all", targetPct: 3, maxRiskPct: 1, maxDailyLossPct: 5, hours: 22, everyMin: 15, reportAt: "21:00", maxOpen: 3 }, hired: this.file !== undefined, autonomy: this.file?.autonomy ?? null, bounds: OBJECTIVE_BOUNDS };

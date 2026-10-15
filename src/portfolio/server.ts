@@ -73,6 +73,28 @@
  *                                                        objective, the brain's standing with its fix — the room's tail only, all of one
  *                                                        moment
  *   GET  /api/account/desk/seat?address=                 the desk as one seat reads it (portfolio_desk): its charter, the room's last lines
+ *   POST /api/account/brain-key {envelope, apiKey}       A BRAIN'S KEY, typed by the owner on the page (account/brain-keys.ts): the owner's
+ *                                                        signed setBrainKey (provider, base URL, model, the key's fingerprint — never the
+ *                                                        key) and the key beside it, once. Its own small reader (the server's JSON parser
+ *                                                        skips this path, and a body it cannot read is answered with one fixed sentence,
+ *                                                        never logged or echoed); before the door, the key checked against the signed
+ *                                                        fingerprint, and the model and base URL checked to hold neither the key nor anything
+ *                                                        shaped like one (a fixed 400: nothing staged, nothing spent); then staged in memory
+ *                                                        by the action's hash, the envelope through the ordinary door, the provider's key file
+ *                                                        written 0600 in a 0700 folder, and the desk told the key changed; the answer: the
+ *                                                        provider, the key's masked tail, its fingerprint, the brain's standing now as the
+ *                                                        desk reads it, and the variable in the service's environment that wins over the
+ *                                                        file (envWins) or blocks it (envBlocks), if one does. A local server's base URL
+ *                                                        and model saved with no key (keyHash "") are answered {keyless: true}. The key
+ *                                                        reaches no ledger, room, desk.json, log line or answer
+ *   POST /api/account/brain-test {provider, model?}      "Test the key": the brain's own test (desk.ts Brain.test) — the one call that
+ *                                                        bills nothing, to the provider's own base URL — answered in words; one in flight per
+ *                                                        provider and model. Unsigned: it changes nothing and spends nothing, and it is
+ *                                                        behind the same origin guard as every route (another site's page is turned away). It
+ *                                                        also asks for a browser's own headers — Sec-Fetch-Site: same-origin, or an Origin
+ *                                                        the guard checked is this server's — which keeps a program that sends neither from
+ *                                                        asking by accident. That is not authentication: a program on this machine that
+ *                                                        sends the header is answered, and what it gets is the provider's list call, scrubbed
  *   GET  /api/account/memory                             what each agent remembers about the owner (account/memory.ts), as the owner
  *                                                        reads it: its notes (the waiting ones too), the switches, what its limits say
  *   GET  /api/account/memory/agent?address=&q=           one agent's memory as that agent reads it (portfolio_memory): its notes kept,
@@ -116,7 +138,10 @@ import { isRefusal, type Refusal } from "../core/errors.ts";
 import { parseIntent, parseOrder } from "./intents.ts";
 import { no } from "./refuse.ts";
 import { cardHash, type AccountPage } from "./account/exchange.ts";
-import type { Envelope } from "./account/sign.ts";
+import { actionHash, type Envelope } from "./account/sign.ts";
+import { BODY_WORDS, BRAIN_KEY_BODY_LIMIT, checkBeforeDoor, fingerprintOf, isBrainKeyPath, KEY_SHAPED_WORDS, keyTail, parseBrainKeyBody } from "./account/brain-keys.ts";
+import { MODEL_ID } from "./account/desk.ts";
+import { BRAIN_ID, keyShaped } from "./account/brain-key.ts";
 import { agentCode, PRICES, type AgentId, type Intent } from "./accounts.ts";
 import { AgentSession, PRESETS } from "./agent.ts";
 import { BRIDGE_CHAINS } from "./live/bridge.ts";
@@ -273,13 +298,64 @@ function signedInPage(error?: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Robinhood sign-in</title><style>:root{--paper:#f6f1e7;--ink:#1d1a16;--dim:#6b6358}@media (prefers-color-scheme:dark){:root{--paper:#17150f;--ink:#ece4d4;--dim:#a39a8a}}body{margin:0;padding:56px 16px;background:var(--paper);color:var(--ink);font:17px/1.55 Georgia,"Times New Roman",serif}main{max-width:520px;margin:0 auto}h1{font-weight:400;font-size:28px;margin:0 0 12px}p{color:var(--dim);margin:0}</style></head><body><main><h1>${error ? "The sign-in did not finish" : "Signed in at Robinhood"}</h1><p>${error ? esc(error) : "Go back to the account page: it carries on from here. This tab can be closed."}</p></main>${error ? "" : "<script>setTimeout(() => window.close(), 1500)</script>"}</body></html>`;
 }
 
+/** the refusals that say the signer is not one the account takes: answered 401, every other refusal 409 */
+const SIGNER_CODES = ["E_ACCOUNT_BAD_SIGNATURE", "E_ACCOUNT_UNKNOWN_SIGNER", "E_ACCOUNT_AGENT_EXPIRED", "E_ACCOUNT_AGENT_REVOKED"];
+
+/** A request's body, read here and by nothing else, up to `limit` bytes: "large" past it (said before reading, when the request declares
+ * its length), "broken" when the request ends badly. What was read is zeroed once it is copied out, and on every early end */
+function readSmall(req: express.Request, limit: number): Promise<Buffer | "large" | "broken"> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    const wipe = () => {
+      for (const c of chunks) c.fill(0);
+      chunks.length = 0;
+    };
+    const finish = (v: Buffer | "large" | "broken") => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    if (req.readableEnded) return finish("broken");
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > limit) {
+      req.resume();
+      return finish("large");
+    }
+    req.on("data", (c: Buffer) => {
+      if (done) return;
+      size += c.length;
+      if (size > limit) {
+        wipe();
+        req.resume();
+        return finish("large");
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (done) return;
+      const b = Buffer.concat(chunks);
+      wipe();
+      finish(b);
+    });
+    req.on("error", () => {
+      wipe();
+      finish("broken");
+    });
+    req.on("close", () => {
+      if (!done) wipe();
+      finish("broken");
+    });
+  });
+}
+
 export async function startPortfolioServer(opts: PortfolioServerOptions): Promise<PortfolioServerHandle> {
   const svc = opts.service;
   const agent = new AgentSession(svc);
   /** this server's own origin, once it listens: what an agent's seat is pointed at */
   let origin = "";
   const app = express();
-  app.use(express.json());
   // the account's answers are never stored by the browser (balances, keys, cards); the page's own files are kept and revalidated by their
   // ETag, which express puts on every answer it sends whole
   app.use((req, res, next) => {
@@ -362,6 +438,13 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (!local || foreignOrigin || foreignSite) return void res.status(403).json({ ok: false, error: "this server answers only its own pages on this machine" });
     next();
   });
+  // JSON bodies are read only once the request is known to be this machine's own (above): a foreign page's body is never parsed. The one
+  // route that takes a secret, a brain's key, reads its own body (account/brain-keys.ts): the parser skips it in every spelling express
+  // routes to it (case, a trailing slash), so that a body it could not read never becomes an error that carries the key's own characters.
+  // No body is inflated (inflate: false): the page never compresses one, and a body declared gzip that is not would otherwise end in zlib's
+  // error — an HTML page with a stack, logged — instead of the one fixed sentence below
+  const json = express.json({ inflate: false });
+  app.use((req, res, next) => (isBrainKeyPath(req.path) ? next() : json(req, res, next)));
 
   /** the owner's routes and the agents' routes are closed to an unsigned caller once the account layer is mounted */
   const layer = () => svc.account !== undefined;
@@ -723,8 +806,71 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
 
   app.post("/api/exchange", wrap(async (req, res) => {
     const r = await svc.exchange(req.body as Envelope);
-    if (isRefusal(r)) return void res.status(["E_ACCOUNT_BAD_SIGNATURE", "E_ACCOUNT_UNKNOWN_SIGNER", "E_ACCOUNT_AGENT_EXPIRED", "E_ACCOUNT_AGENT_REVOKED"].includes(r.code) ? 401 : 409).json({ ok: false, refusal: r });
+    if (isRefusal(r)) return void res.status(SIGNER_CODES.includes(r.code) ? 401 : 409).json({ ok: false, refusal: r });
     res.status(r.kind === "card" ? 202 : 200).json(r);
+  }));
+
+  // A BRAIN'S KEY, typed by the owner on the page (account/brain-keys.ts, where every step is said). This route reads its own body, at most
+  // 4 KB of application/json, and answers anything it cannot take with one of the fixed sentences there — nothing sent is logged or said
+  // back. BEFORE the door: the model and the base URL the owner signed hold neither the key nor anything shaped like one (a key pasted into
+  // the wrong field would be signed into the ledger, which cannot be cleaned), and the key is checked against the fingerprint the owner
+  // signed — a refusal there writes nothing, stages nothing and spends no nonce. Then the key is staged in memory under the action's hash
+  // while the envelope goes through the ordinary door — whose handler takes it, writes the provider's key file and tells the desk the key
+  // changed — and deleted from memory when this answers, whatever happened. The standing in the answer is the desk's own (the catalog's and
+  // the feed's), so the page never reads "ready" here beside "Key refused" there
+  app.post("/api/account/brain-key", wrap(async (req, res) => {
+    if (!svc.account) return void res.status(404).json({ ok: false, error: "the account layer is not mounted" });
+    const type = String(req.headers["content-type"] ?? "").toLowerCase();
+    const encoding = String(req.headers["content-encoding"] ?? "identity").toLowerCase();
+    if (!/^application\/json\s*(;\s*charset="?utf-8"?\s*)?$/.test(type) || encoding !== "identity") {
+      req.resume();
+      return void res.status(415).json({ ok: false, error: BODY_WORDS.type });
+    }
+    const raw = await readSmall(req, BRAIN_KEY_BODY_LIMIT);
+    if (raw === "large") return void res.status(413).json({ ok: false, error: BODY_WORDS.large });
+    if (raw === "broken") return void res.status(400).json({ ok: false, error: BODY_WORDS.malformed });
+    const body = parseBrainKeyBody(raw);
+    if (!body.ok) return void res.status(body.status).json({ ok: false, error: body.error });
+    const before = checkBeforeDoor(body.action, body.apiKey);
+    if (before) return void res.status(before.status).json({ ok: false, error: before.error });
+    const { action, apiKey } = body;
+    const hash = actionHash(action);
+    // staged for the door's handler (a clearing signature stages nothing to write, only that it was sent here): the same signed key sent
+    // twice at once is taken once
+    if (!svc.brainKeys.stage(hash, apiKey ?? "")) return void res.status(409).json({ ok: false, error: BODY_WORDS.busy });
+    try {
+      const r = await svc.exchange(body.envelope);
+      if (isRefusal(r)) return void res.status(SIGNER_CODES.includes(r.code) ? 401 : 409).json({ ok: false, refusal: r });
+      // the door answered it as the same envelope again (its first answer, kept): its handler did not run, and nothing was written now
+      if (svc.brainKeys.has(hash)) return void res.status(409).json({ ok: false, error: BODY_WORDS.replay });
+      const now = svc.brainStanding(action.provider);
+      const tail = action.keyHash ? keyTail(apiKey) : undefined;
+      // what was done: a key set (its fingerprint and masked tail), a local server's settings saved with no key (keyless), or the key taken
+      // away (cleared) — and how the brain stands now, with the variable that wins over the file or blocks it, where one does
+      const keyless = (r as { keyless?: unknown }).keyless === true;
+      res.json({ ok: true, provider: action.provider, ...(action.keyHash ? { fingerprint: fingerprintOf(action.keyHash), ...(tail ? { tail } : {}) } : keyless ? { keyless: true } : { cleared: true }), ...(now ? { label: now.label, standing: now.standing, ...(now.envWins ? { envWins: now.envWins } : {}), ...(now.envBlocks ? { envBlocks: now.envBlocks } : {}) } : {}) });
+    } finally {
+      svc.brainKeys.drop(hash);
+    }
+  }));
+
+  // "Test the key": the brain's own test, one call that bills nothing, to the provider's own base URL (desk.ts Brain.test). Unsigned — it
+  // changes nothing and spends nothing — and behind the origin guard above like every route. It also asks for a browser's own headers:
+  // Sec-Fetch-Site: same-origin, or (a browser that sends no Fetch Metadata) the Origin a browser puts on every POST, which the guard has
+  // already checked is this server's. That keeps a program that sends neither from asking by accident; it is NOT authentication — a
+  // program on this machine that sends the header is answered. A model shaped like a key is refused without being said back: the test's
+  // words name the model ("… X is listed"), and it is sent to the provider
+  app.post("/api/account/brain-test", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    if (req.headers["sec-fetch-site"] !== "same-origin" && typeof req.headers.origin !== "string") return void res.status(403).json({ ok: false, error: "Testing a brain's key is asked from the account's own page: a request without a browser's headers is not taken." });
+    const { provider, model } = (req.body ?? {}) as { provider?: unknown; model?: unknown };
+    if (typeof provider !== "string" || !BRAIN_ID.test(provider)) return void bad(res, "need {provider: a brain's id, as the Brains place names it (deepseek, openai, claude …)}");
+    if (typeof model === "string" && keyShaped(model.trim())) return void bad(res, KEY_SHAPED_WORDS.model);
+    if (model !== undefined && (typeof model !== "string" || (model !== "" && !MODEL_ID.test(model)))) return void bad(res, "model is its name as the provider gives it (letters, digits and . _ - : /, at most 80), or empty");
+    const r = await svc.brainTest(provider, typeof model === "string" ? model : "");
+    if (!r) return void res.status(404).json({ ok: false, error: "that is not a brain this desk holds: the Brains place lists the ones it does" });
+    res.json(r);
   }));
   app.get("/api/read", wrap(async (req, res) => void res.json({ ok: true, holdings: await svc.read(typeof req.query.account === "string" ? req.query.account : undefined) })));
 
@@ -810,6 +956,19 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     svc.reset();
     res.json({ ok: true });
   });
+
+  // A body the JSON parser could not read — not JSON, too large, an encoding it does not take — is answered with one fixed sentence and is
+  // neither logged nor said back: the parser's own message quotes what it could not read, and its error carries the body whole, which may
+  // hold a secret a page meant for another route. Every other error goes on to express as before
+  const unreadBody: express.ErrorRequestHandler = (err, _req, res, next) => {
+    const e = err as { type?: unknown; status?: unknown; code?: unknown } | null;
+    // the parser's own errors carry a type ("entity.parse.failed", "encoding.unsupported" …); zlib's, had a body been inflated, a Z_ code
+    const fromParser = !!e && (typeof e.type === "string" || (typeof e.code === "string" && e.code.startsWith("Z_")));
+    if (!e || !fromParser || typeof e.status !== "number" || e.status < 400 || e.status > 499) return next(err);
+    if (res.headersSent) return;
+    res.status(e.status).json({ ok: false, error: "The body of this request could not be read as JSON; it was not kept." });
+  };
+  app.use(unreadBody);
 
   const server: Server = await new Promise((resolve, reject) => {
     const s = app.listen(opts.port, "127.0.0.1", () => resolve(s));

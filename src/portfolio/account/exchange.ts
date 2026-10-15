@@ -31,6 +31,23 @@
  * may land. If the route, the fee or the arrival has changed by the time it runs, it is refused
  * and has to be signed again. An approval of a card names the card AND the hash of what it
  * releases, and releasing it runs every check again.
+ *
+ * One owner action carries a secret beside it: a brain's key (setBrainKey, account/brain-keys.ts).
+ * The signature covers the key's fingerprint, never the key; the key arrives beside the envelope
+ * at its own route, is staged in memory by the action's hash, and this door's handler hands it to
+ * the host, which writes the provider's key file. The ledger keeps that instruction the way it keeps
+ * one about memory (ledgered): the fingerprint, not the full hash or its salt; and it is good for
+ * ten minutes around its date, like a money instruction. A model or a base URL shaped like a key —
+ * the key pasted into the wrong field, in a base URL's path or its host — is refused before the
+ * instruction is taken, for setBrainKey and for the desk's brain in a setDesk alike, and so is a
+ * desk's brain that is not one object, and a key that says what it is (sk-…, gsk_…, AIza…) anywhere
+ * in a setDesk's own words — its name, the objective, a charter: the "taken" row would otherwise
+ * write it down (brain-keys.ts deskBrainKeyProblem). A field no signature covers is refused by name
+ * only when its name is plain and not a key (sign.ts malformed).
+ *
+ * Whatever is sent BESIDE an instruction is never kept: the door reduces every envelope, first thing,
+ * to its own four fields (sign.ts ownEnvelope), and every row, state entry and venue record after
+ * that holds the reduced copy.
  */
 import { keccak256, stringToHex } from "viem";
 import type { LedgerRowInput } from "../../agent/ledger.ts";
@@ -45,7 +62,8 @@ import { parseIntent, parseOrder } from "../intents.ts";
 import { achArrival, etDate, whenLabel } from "./calendar.ts";
 import { doorOf, plan, type Door, type Leg, type Rail, type Route, type RouteRequest, type VenueView, whyWatchOnly } from "./doors.ts";
 import { heldUsd, inFlightUsd, launch, newPayment, settleDue, type Advance, type Authority, type Money, type Payment, type PaymentKind } from "./payments.ts";
-import { actionHash, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
+import { actionHash, BRAIN_KEY_TTL_MS, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownEnvelope, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
+import { deskBrainKeyProblem, fingerprintOf, setBrainKeyProblem } from "./brain-keys.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
 import { LiveEarns, type EarnDesk, type EarnQuote, type LiveEarn } from "./live-earn.ts";
@@ -160,6 +178,11 @@ export interface Host {
   /** THE DESK (account/desk.ts): the owner's `setDesk` and a seat's `agentDeskSay` land here once the door has checked the signature, the
    * nonce and the key (absent: this account keeps no desk) */
   desk?(action: Extract<Action, { type: "setDesk" | "agentDeskSay" }>, who: { signer: string; agent?: AgentKey | undefined }): Promise<Outcome>;
+  /** A BRAIN'S KEY (account/brain-keys.ts): the owner's setBrainKey lands here once the door has checked the signature, the owner, the
+   * nonce and the ten minutes. The key itself is not in the action: the route that took it staged it under this action's `hash`, and the
+   * host takes it from there and writes the provider's key file — `summary` (what the ledger's row says) names the provider, the base
+   * URL, the model and the key's fingerprint, never the key (absent: this account keeps no desk, so no brain) */
+  brainKey?(action: Extract<OwnerAction, { type: "setBrainKey" }>, who: { signer: string; hash: Hex }): Outcome | Promise<Outcome>;
 }
 
 /** one way of connecting a real venue, as the page offers it */
@@ -308,6 +331,23 @@ export const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, 
 /** an instruction about memory as the ledger keeps it: who signed it, its nonce and which note — never the note's words, so that what the
  * owner has forgotten is not kept anywhere else (account/memory.ts) */
 export const wordless = (e: Envelope): Envelope => (e?.action && MEMORY_TYPES.has(e.action.type) && "text" in e.action ? { ...e, action: { ...e.action, text: "", ...("how" in e.action ? { how: "" } : {}) } as Action } : e);
+/** A brain's key as the ledger keeps it (account/brain-keys.ts): who signed it, its nonce, the provider, the base URL, the model and the
+ * key's fingerprint (the first 8 hex of keyHash) — the full keyHash and its salt are not written. A key's hash with its salt beside it is
+ * nothing a person could undo, but it is more than the record needs: the nonce, which a later run remembers from this row, is what keeps
+ * the same signature from being taken twice */
+export const keyless = (e: Envelope): Envelope => (e?.action && e.action.type === "setBrainKey" ? { ...e, action: { ...e.action, keyHash: typeof e.action.keyHash === "string" ? fingerprintOf(e.action.keyHash) : "", salt: "" } } : e);
+/** An envelope as the ledger's "taken" and refusal rows carry it: its own four fields and nothing that rode in beside them (sign.ts
+ * ownEnvelope — the door has reduced every envelope to that already, at its top, so every other row and the account's state hold the same
+ * clean copy; done here again so that this stays true of these rows whoever calls it), memory's words and a brain key's hash left out */
+export const ledgered = (e: Envelope): Envelope => {
+  if (!e || typeof e !== "object") return e;
+  return keyless(wordless(ownEnvelope(e)));
+};
+/** the type a refusal row names: the instruction's, when it is one this account knows — never a value sent where a type goes */
+const typeOf = (e: Envelope | undefined): string => {
+  const t = (e?.action as { type?: unknown } | undefined)?.type;
+  return typeof t === "string" && (isOwnerAction({ type: t }) || isAgentAction({ type: t })) ? t : "?";
+};
 export const agentIdOf = (k: AgentKey): AgentId => ({ id: slug(k.name), name: k.name, code: k.code });
 const dex = (s: string): { venue: string; ledger?: string | undefined } => {
   const [venue, ledger] = s.split(":");
@@ -503,12 +543,23 @@ export class AccountEngine {
     return turn;
   }
 
-  private async take(envelope: Envelope): Promise<Outcome> {
+  private async take(sent: Envelope): Promise<Outcome> {
+    // The envelope as the account keeps it, ONCE, before anything reads it (sign.ts ownEnvelope): the action, the nonce, the signature and
+    // the cosignatures, each signature its own fields — whatever rode in beside them (a brain's key posted here by mistake, a field a program
+    // added) is dropped here, so that no row of the ledger, no entry of the account's state and no venue's record downstream can carry it,
+    // whichever instruction it came with
+    const envelope = ownEnvelope(sent);
     const action = envelope?.action as Action | undefined;
     if (!action || typeof action.type !== "string" || (!isOwnerAction(action) && !isAgentAction(action))) return this.refused(no("E_ACCOUNT_BAD_ACTION", { message: "not an instruction this account knows" }), envelope);
     // exactly what the signature covers, and nothing else: no fraction in a number, no field the type does not sign
     const wrong = malformed(action);
     if (wrong || envelope.nonce !== action.nonce) return this.refused(no("E_ACCOUNT_BAD_ACTION", { message: wrong ?? "the envelope's nonce is the action's nonce" }), envelope);
+    // A brain's model or base URL that holds an API key, a desk's brain that is not one object, a key that says what it is in a setDesk's
+    // own words (account/brain-keys.ts): refused HERE, before the instruction is taken — the "taken" row below writes the signed fields to
+    // the ledger, which is hash-chained and cannot be cleaned afterwards, and the handler that would refuse it runs only after that row.
+    // Fixed words, which never repeat the value; nothing is spent
+    const keyed = action.type === "setBrainKey" ? setBrainKeyProblem(action) : action.type === "setDesk" ? deskBrainKeyProblem(action.change, action.value) : null;
+    if (keyed) return this.refused(no("E_ACCOUNT_BAD_ACTION", { message: keyed }), envelope);
     const now = this.nowMs();
     const signer = await signerOf(action, envelope.signature, deviceKeys(this.state));
     if (!signer) return this.refused(no("E_ACCOUNT_BAD_SIGNATURE", { detail: { type: action.type } }), envelope);
@@ -563,23 +614,25 @@ export class AccountEngine {
     }
     // a money instruction is good for ten minutes around the moment it is dated: not later, and not dated ahead to be kept for later
     if (MONEY_TYPES.has(action.type) && Math.abs(now - action.nonce) > MONEY_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a money instruction is good for ${MONEY_TTL_MS / 60_000} minutes` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a money instruction is good for ${MONEY_TTL_MS / 60_000} minutes around its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
+    // a brain's key is signed and sent at once (account/brain-keys.ts): a signature kept for later is not one the owner is still waiting on
+    if (action.type === "setBrainKey" && Math.abs(now - action.nonce) > BRAIN_KEY_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of signing it — sign again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     for (const who of signers) this.nonces.use(who, action.nonce);
     // taken, on the record before anything runs: a later run of the account reads this row and does not take the same instruction again,
     // whatever became of it (a money instruction is good for ten minutes, and a restart can come inside them)
-    this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope: wordless(envelope), outcome: "taken", reason: `${action.type} taken: it is not taken again, by this run of the account or a later one`, ...(agent ? { agent: slug(agent.name) } : {}) });
+    this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope: ledgered(envelope), outcome: "taken", reason: `${action.type} taken: it is not taken again, by this run of the account or a later one`, ...(agent ? { agent: slug(agent.name) } : {}) });
 
     // an order or a cancel is not kept waiting while the account asks other venues how their orders stand
     await this.settle(["liveCancel", "agentLiveCancel", "liveOrder", "agentLiveOrder"].includes(action.type));
     const out = await this.run(action, envelope, signer, agent, hash);
     this.results.set(key, { at: now, out });
     if (!isRefusal(out) && isOwnerAction(action)) this.answered(action, envelope);
-    if (isRefusal(out)) this.host.log({ kind: "account-refusal", venue: out.venue ?? "*", tool: action.type, code: out.code, reason: out.message, detail: out.detail, native: out.native, signer, envelope: wordless(envelope), ...(agent ? { agent: slug(agent.name) } : {}) });
+    if (isRefusal(out)) this.host.log({ kind: "account-refusal", venue: out.venue ?? "*", tool: action.type, code: out.code, reason: out.message, detail: out.detail, native: out.native, signer, envelope: ledgered(envelope), ...(agent ? { agent: slug(agent.name) } : {}) });
     return out;
   }
 
   /** a refusal BEFORE the signer was accepted: it is logged, the nonce is untouched, and it is not remembered (a stranger must not be able to fill the result table) */
   private refused(r: Refusal, envelope: Envelope | undefined, signer?: string): Refusal {
-    this.host.log({ kind: "account-refusal", venue: "*", tool: String((envelope?.action as { type?: unknown } | undefined)?.type ?? "?"), code: r.code, reason: r.message, detail: r.detail, ...(signer ? { signer } : {}) });
+    this.host.log({ kind: "account-refusal", venue: "*", tool: typeOf(envelope), code: r.code, reason: r.message, detail: r.detail, ...(signer ? { signer } : {}) });
     return r;
   }
 
@@ -704,6 +757,15 @@ export class AccountEngine {
         const r = await this.host.desk(action, { signer, agent });
         if (isRefusal(r)) return r;
         this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope, outcome: "ok", reason: r.kind === "account" ? r.summary : action.type, ...(agent ? { agent: slug(agent.name) } : {}) });
+        return r;
+      }
+      case "setBrainKey": {
+        // a brain's key (account/brain-keys.ts): the host takes the key staged for this signature and writes the provider's file. The row
+        // that says it was done carries no envelope — its "taken" row above has the one the ledger keeps (ledgered: the fingerprint only)
+        if (!this.host.brainKey) return no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk, so it holds no brain's key" });
+        const r = await this.host.brainKey(action, { signer, hash });
+        if (isRefusal(r)) return r;
+        this.host.log({ kind: "action", venue: "*", tool: action.type, signer, outcome: "ok", reason: r.kind === "account" ? r.summary : action.type });
         return r;
       }
       case "agentOrder": {
@@ -1475,6 +1537,19 @@ export class AccountEngine {
       if (action.type === "approveSpend" && typeof action.intent === "string" && action.intent.trim() === "") delete action.intent;
       // an earn limit over "every account" is refused here, before it is shown and signed, as the door would refuse it
       if (action.type === "approveSpend" && action.scope === "earn" && String(action.allow).split(",").some((x) => x.trim() === "*")) return no("E_ACCOUNT_BAD_ACTION", { message: EARN_NAMES });
+      // a brain's key: its fields' shapes are said here, before the dialog shows them — the key itself is never in a draft, and a model or a
+      // base URL shaped like a key is refused without being said back (account/brain-keys.ts)
+      if (action.type === "setBrainKey") {
+        const problem = malformed(action) ?? setBrainKeyProblem(action);
+        if (problem) return no("E_ACCOUNT_BAD_ACTION", { message: problem });
+      }
+      // the desk's brain named with an API key in it (a key pasted into the hiring form's model field), a brain that is not one object, or a
+      // key that says what it is in the desk's own words (its name, the objective, a charter): refused before it is shown back to be signed,
+      // as the door would refuse it — fixed words, never the value
+      if (action.type === "setDesk" && typeof action.value === "string") {
+        const problem = deskBrainKeyProblem(String(action.change), action.value);
+        if (problem) return no("E_ACCOUNT_BAD_ACTION", { message: problem });
+      }
     } else return no("E_ACCOUNT_BAD_ACTION", { message: `"${type}" is not something the owner signs` });
     const wrong = malformed(action);
     if (wrong) return no("E_ACCOUNT_BAD_ACTION", { message: wrong });

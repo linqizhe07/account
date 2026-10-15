@@ -30,6 +30,7 @@ import { createECDH, createHash, createPrivateKey, createPublicKey, sign as node
 import { hashTypedData, keccak256, recoverTypedDataAddress, serializeSignature, stringToHex, parseSignature, type Hex, type TypedDataDomain } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { canonical } from "../../core/hash.ts";
+import { plainFieldName } from "./brain-key.ts";
 
 export type { Hex };
 
@@ -147,7 +148,14 @@ export type OwnerAction =
   /** THE DESK (account/desk.ts): the owner hires, steers, pauses, resumes and ends the account's own agents. `desk` names the desk
    * ("desk"), `change` what is changed (hire · objective · charter · pause · resume · end · cycle · report · seat), `value` the change
    * itself as JSON text. Words and settings: the authority of each role is still its key and the limit the owner signed for it */
-  | { type: "setDesk"; desk: string; change: string; value: string; nonce: number };
+  | { type: "setDesk"; desk: string; change: string; value: string; nonce: number }
+  /** A BRAIN'S KEY, typed by the owner on the page (account/brain-keys.ts): which provider it is for (a brain the desk holds — "deepseek",
+   * "claude" …), the base URL and model kept beside it ("" for the provider's own), and the key's fingerprint — never the key. `keyHash` is
+   * hex SHA-256(salt ‖ key), made in the owner's browser; `salt` the 16 random bytes it was made with, in hex. The key itself travels once,
+   * beside this signature, to POST /api/account/brain-key, and is written to the provider's key file and nowhere else: this action, the
+   * ledger's rows of it and the page hold only what is signed here. `keyHash` "" (and `salt` "") takes the key file away. Owner-only, like
+   * every type in this union: an agent key can never sign it */
+  | { type: "setBrainKey"; provider: string; baseUrl: string; model: string; keyHash: string; salt: string; nonce: number };
 
 export type AgentAction =
   | { type: "agentSendAsset"; destination: string; sourceDex: string; destinationDex: string; token: string; amount: string; fromSubAccount: string; maxFee: string; nonce: number }
@@ -197,7 +205,7 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey"] as const;
 export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
@@ -208,6 +216,9 @@ export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setIntent"
 /** what is kept in memory (account/memory.ts): their words never reach the ledger, so that what is forgotten is gone */
 export const MEMORY_TYPES: ReadonlySet<string> = new Set(["setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget"]);
 export const MONEY_TTL_MS = 10 * 60_000;
+/** A brain's key (setBrainKey) is good for as long as a money instruction, around the moment it is dated: the page signs it and sends the key
+ * beside it at once, so an envelope kept for later is not one the owner is still waiting on */
+export const BRAIN_KEY_TTL_MS = MONEY_TTL_MS;
 
 export function isOwnerAction(a: { type: string }): a is OwnerAction {
   return (OWNER_TYPES as readonly string[]).includes(a.type);
@@ -223,6 +234,31 @@ export interface Envelope {
   signature: AnySig;
   /** further owner signatures over the same action, when the account needs more than one */
   cosignatures?: AnySig[] | undefined;
+}
+
+const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+/** A signature as the account keeps it: its own fields, in their own types, and nothing beside them — {kid, es256} for a device's, {r, s, v}
+ * for a key's (a field of the wrong type is left out: the signature check reads no other, and refuses one it cannot read). Anything else
+ * that rode in on the object is dropped; what is not an object at all is kept as it is, for the signature check to refuse before any row
+ * carries it */
+function ownSig(s: unknown): AnySig {
+  if (!isObj(s)) return s as AnySig;
+  const str = (k: string) => (typeof s[k] === "string" ? { [k]: s[k] } : {});
+  if (typeof s.es256 === "string") return { ...str("kid"), es256: s.es256 } as DeviceSig;
+  return { ...str("r"), ...str("s"), ...(typeof s.v === "number" ? { v: s.v } : {}) } as Sig;
+}
+
+/** AN ENVELOPE AS THE ACCOUNT KEEPS IT: its four fields — the action, the nonce, the signature and the cosignatures, if any — each signature
+ * reduced to its own fields, and nothing else. The door (exchange.ts take) reduces every envelope to this ONCE, before anything reads it,
+ * so that whatever was sent beside an instruction — a brain's key posted to POST /api/exchange by mistake, a field a program added — never
+ * reaches the ledger, the account's state or a venue's record, whichever instruction it rode in on. The action itself is not touched here:
+ * a field inside it that its type does not sign is refused by name (malformed), never kept. Cosignatures that are not a list, or entries
+ * of it that are not signatures, sign nothing and are left out */
+export function ownEnvelope(e: Envelope): Envelope {
+  if (!e || typeof e !== "object") return e;
+  // further signatures are a list of signatures: one that is not an object signs nothing and is dropped, and so is a "list" that is not one
+  const cos = (e as { cosignatures?: unknown }).cosignatures;
+  return { action: e.action, nonce: e.nonce, signature: ownSig(e.signature), ...(Array.isArray(cos) ? { cosignatures: cos.filter(isObj).map(ownSig) } : {}) };
 }
 
 // ---- typed data ---------------------------------------------------------------
@@ -267,6 +303,9 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   forgetMemory: { primary: "AccountMemory:Forget", fields: [{ name: "scope", type: "string" }, { name: "what", type: "string" }, NONCE] },
   setMemoryRules: { primary: "AccountMemory:Rules", fields: [{ name: "scope", type: "string" }, { name: "learn", type: "string" }, { name: "ask", type: "string" }, { name: "share", type: "string" }, NONCE] },
   setDesk: { primary: "AccountDesk:Set", fields: [{ name: "desk", type: "string" }, { name: "change", type: "string" }, { name: "value", type: "string" }, NONCE] },
+  // the key's fingerprint and its salt are text (keyHash "" takes the key away, which no bytes32 could say): what the device signs and the
+  // dialog shows, field for field — never the key
+  setBrainKey: { primary: "AccountBrain:SetKey", fields: [{ name: "provider", type: "string" }, { name: "baseUrl", type: "string" }, { name: "model", type: "string" }, { name: "keyHash", type: "string" }, { name: "salt", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };
@@ -304,7 +343,9 @@ function messageOf(fields: Field[], values: Record<string, unknown>): Record<str
 
 /** Is this action exactly what its signature covers? An owner action is signed field by field, with numbers as whole uint64s: a field its type does
  * not have is something no signature covers, and a number with a fraction signs as the whole number below it (a nonce of 1000.5 would carry the
- * signature made for 1000 and still look unused). `null` when it is well formed; otherwise what is wrong. */
+ * signature made for 1000 and still look unused). `null` when it is well formed; otherwise what is wrong — a field the type does not sign
+ * named by its name only when that name is a plain identifier that does not look like a key (fieldSaid), for an owner's action and an
+ * agent's alike. */
 /** the text fields of the agent requests that reach a real venue: each has to be text, and nothing else rides along */
 const AGENT_TEXT: Partial<Record<AgentAction["type"], string[]>> = {
   agentLiveOrder: ["venue", "symbol", "side", "orderType", "qty", "usd", "limitPrice"],
@@ -335,7 +376,7 @@ export function malformed(action: Action): string | null {
     const wrong = names.find((k) => typeof have[k] !== "string") ?? optional.find((k) => have[k] !== undefined && typeof have[k] !== "string");
     if (wrong) return `"${wrong}" is text`;
     const extra = Object.keys(have).find((k) => k !== "type" && k !== "nonce" && !names.includes(k) && !optional.includes(k));
-    return extra === undefined ? null : `"${extra}" is not part of "${action.type}"`;
+    return extra === undefined ? null : `${fieldSaid(extra)} is not part of "${action.type}"`;
   }
   const fields = fieldsOf(action);
   const have = action as unknown as Record<string, unknown>;
@@ -344,8 +385,13 @@ export function malformed(action: Action): string | null {
     if (f.type === "uint64" ? !Number.isSafeInteger(v) || (v as number) < 0 : typeof v !== "string") return `"${f.name}" is ${f.type === "uint64" ? "a whole number, zero or more" : "text"}`;
   }
   const extra = Object.keys(have).find((k) => k !== "type" && !fields.some((f) => f.name === k));
-  return extra === undefined ? null : `"${extra}" is not part of what "${action.type}" signs`;
+  return extra === undefined ? null : `${fieldSaid(extra)} is not part of what "${action.type}" signs`;
 }
+
+/** A field no signature covers, as malformed says it: by its name, quoted, when the name is a plain identifier that does not look like a key
+ * (brain-key.ts plainFieldName) — else "a field it was sent", never the name itself. A name is text the sender chose: a key sent as a
+ * field's name would otherwise be said back by /api/account/prepare and written into the ledger's refusal row, which cannot be cleaned */
+const fieldSaid = (name: string): string => (plainFieldName(name) ? `"${name}"` : "a field it was sent");
 
 /** an order as a seat's tools take it (mcp.ts portfolio_live_order, portfolio_live_batch, portfolio_live_preview): numbers, and the type
  * left out for a market order */

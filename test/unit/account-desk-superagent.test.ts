@@ -337,6 +337,22 @@ describe("the superagent: the desk's autonomy on paper", () => {
     expect(rows.filter((r) => r.reason?.startsWith("Superagent on paper (Desk Sniper"))).toHaveLength(3);
   });
 
+  it("a venue move whose brain is refused moves nothing: the desk stays at its venue with its objective, its autonomy follows the same venue, and desk.json is untouched", async () => {
+    const { desk, hire, autonomy, own, home, keyOf } = await boot();
+    await hire();
+    await autonomy(true);
+    const was = (await desk.view())!.objective;
+    const saved = readFileSync(deskPath(home), "utf8");
+    const r = await own({ type: "setDesk", desk: "desk", change: "objective", value: JSON.stringify({ venue: "pap2", text: "Elsewhere", brain: { provider: "grok", model: "grok-4.3" } }) });
+    expect(isRefusal(r) && r.message).toBe('"grok" is not a brain this account holds: scripted');
+    expect((await desk.view())!.objective).toEqual(was);
+    expect(was.venue).toBe("pap");
+    expect(readFileSync(deskPath(home), "utf8")).toBe(saved);
+    // the door's question still follows the venue the desk is at
+    expect(desk.autonomyFor(keyOf("sniper").address, "pap")).toBe("Superagent on paper (Desk Sniper, the desk's autonomy you signed)");
+    expect(desk.autonomyFor(keyOf("sniper").address, "pap2")).toBeUndefined();
+  });
+
   it("the venue: with autonomy on the desk moves only to another paper account; off, anywhere; a re-hire starts with it off; a venue that is no longer paper turns it off", async () => {
     const { desk, hire, autonomy, own, home, real, keyOf } = await boot();
     await hire();
@@ -826,5 +842,72 @@ describe("the first cycle comes after the owner's autonomy, never before it", ()
     await desk.cycle("test");
     expect((await desk.view())!.cards).toEqual([]);
     expect(readRoom(home).find((m) => m.kind === "cycle")?.text).toBe("Cycle 1 (test): 1 lead scanned, 1 cleared, 1 placed, 0 waiting for you, 1 open.");
+  });
+});
+
+describe("start again in one step: a resume carries the autonomy and the brain", () => {
+  const resume = (own: (a: NoNonce<OwnerAction>) => Promise<Outcome | Refusal>, value: unknown) => own({ type: "setDesk", desk: "desk", change: "resume", value: value === "" ? "" : JSON.stringify(value) });
+
+  it("an ended session starts again with its autonomy on paper in ONE signature: on before the first cycle, said in the room, the first entry placed without a card", async () => {
+    const { desk, hire, own, home } = await boot();
+    expect(code(await hire())).toBe("account");
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "end", value: "" }))).toBe("account");
+    expect((await desk.view())!.autonomy).toBeUndefined();
+    const r = await resume(own, { autonomy: { paper: true } });
+    expect(summary(r)).toBe("a new session of 22 h, trading on its own at Paper Ex (paper money)");
+    const v = (await desk.view())!;
+    expect(v.session?.state).toBe("live");
+    expect(v.autonomy).toEqual({ paper: true, at: new Date(START).toISOString() });
+    const said = readRoom(home).filter((m) => m.from === "you").map((m) => m.text);
+    expect(said.slice(-2)).toEqual([expect.stringMatching(/^You started a new session of 22 h from /), "You let the desk trade on its own at Paper Ex, paper money: the orders of its own seats there go at once, without cards, each inside its seat's trading limit. Every other agent and every other venue is answered as before."]);
+    await desk.cycle("test");
+    expect((await desk.view())!.cards).toEqual([]);
+    expect(readRoom(home).find((m) => m.kind === "cycle")?.text).toBe("Cycle 1 (test): 1 lead scanned, 1 cleared, 1 placed, 0 waiting for you, 1 open.");
+  });
+
+  it("validated exactly like the hire: autonomy on only at a paper account, a shape that is not {paper: true|false} refused — the WHOLE resume refused, the session still ended, nothing changed", async () => {
+    const onReal = await boot();
+    expect(code(await onReal.hire({ venue: "ex" }))).toBe("account");
+    expect(code(await onReal.own({ type: "setDesk", desk: "desk", change: "end", value: "" }))).toBe("account");
+    const real = await resume(onReal.own, { autonomy: { paper: true } });
+    expect(isRefusal(real) && real.message).toBe("Ex is real money: the desk places orders without cards only at a paper account. Resume it without the autonomy, or move it to one first (objective)");
+    expect((await onReal.desk.view())!.session?.state).toBe("ended");
+    expect((await onReal.desk.view())!.autonomy).toBeUndefined();
+    // without it, the real-money desk starts again as before; and {paper: false} is taken anywhere
+    expect(code(await resume(onReal.own, { autonomy: { paper: false } }))).toBe("account");
+    expect((await onReal.desk.view())!.autonomy?.paper).toBe(false);
+
+    const { desk, hire, own } = await boot();
+    await hire();
+    await own({ type: "setDesk", desk: "desk", change: "end", value: "" });
+    for (const bad of [true, "on", { paper: "true" }, [true], null]) {
+      const r = await resume(own, { autonomy: bad });
+      expect(isRefusal(r) && r.code, JSON.stringify(bad)).toBe("E_ACCOUNT_BAD_ACTION");
+    }
+    // a brain the account does not hold: the whole resume refused too
+    const brain = await resume(own, { autonomy: { paper: true }, brain: { provider: "grok", model: "grok-4.3" } });
+    expect(isRefusal(brain) && brain.message).toBe('"grok" is not a brain this account holds: scripted');
+    const v = (await desk.view())!;
+    expect(v.session?.state).toBe("ended");
+    expect(v.autonomy).toBeUndefined();
+    // the value "" resumes as before: a new session, the autonomy as it was
+    expect(code(await resume(own, ""))).toBe("account");
+    expect((await desk.view())!.session?.state).toBe("live");
+    expect((await desk.view())!.autonomy).toBeUndefined();
+  });
+
+  it("a paused session resumes with what the value carries — its autonomy (paper only), its brain — and a resume of a running session is refused as before", async () => {
+    const claude = scriptedBrain(scriptOf(), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: [{ id: "claude-opus-5-5", name: "Opus", inUsd: 4, outUsd: 20 }, { id: "claude-haiku-5-5", name: "Haiku", inUsd: 0.1, outUsd: 0.5 }] });
+    const { desk, hire, own, home } = await boot({ brain: claude });
+    await hire();
+    expect(code(await resume(own, { autonomy: { paper: true } }))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "pause", value: "" }))).toBe("account");
+    const r = await resume(own, { autonomy: { paper: true }, brain: { provider: "claude", model: "claude-haiku-5-5", effort: "low" } });
+    expect(summary(r)).toBe("the desk runs again, thinking with claude-haiku-5-5 (Claude · Anthropic API), trading on its own at Paper Ex (paper money)");
+    const v = (await desk.view())!;
+    expect(v.session?.state).toBe("live");
+    expect(v.autonomy?.paper).toBe(true);
+    expect(v.brain).toMatchObject({ provider: "claude", model: "claude-haiku-5-5", effort: "low" });
+    expect(readRoom(home).filter((m) => m.from === "you").slice(-3).map((m) => m.text)).toEqual(["You resumed the desk.", "You changed the brain: Claude · Anthropic API · claude-haiku-5-5 · low effort.", expect.stringMatching(/^You let the desk trade on its own at Paper Ex, paper money/)]);
   });
 });

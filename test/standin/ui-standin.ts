@@ -4,8 +4,12 @@
  *   npx tsx test/standin/ui-standin.ts --port 4821      (never 4820: that port is the real account's)
  *     --cap 250        the most one order or movement may be worth (the server's --live-cap)
  *     --tick 3000      how often prices move, in milliseconds
- *     --no-desk        no desk hired: the page's own setup, with the real brains behind it, each saying honestly that this home holds no
- *                      key for it (the no-key fix: the key file's path and the command that makes it)
+ *     --no-desk        no desk hired: the page's own setup, with the real brains behind it — every preset the account knows (brains.ts:
+ *                      Claude, OpenAI, DeepSeek, Grok · xAI, Muse · Meta, Kimi, Qwen, OpenRouter, Gemini, Groq, Together, Ollama,
+ *                      vLLM, a custom endpoint) — each saying honestly that this home holds no key for it (the no-key fix: its key file's
+ *                      path and the command that makes it), and Ollama and vLLM, which need no key and no file, that they need a model's
+ *                      name. A key saved for one of them makes it ready (a local server: a model named for it), but the stand-in reaches no
+ *                      network: its calls and its "Test the key" answer that the endpoint could not be reached
  *     --superagent     the desk hired as the SUPERAGENT at the account's own paper account (paper-momentum), its autonomy on paper signed,
  *                      its clock running every ten seconds and a cycle every minute, the first a few seconds after the start
  *     --cards          with --superagent: hired with the autonomy OFF, so in Guard every lead it clears waits for you on a card — the
@@ -13,7 +17,15 @@
  *     --brain-refuses  the scripted brain answers as the API does to a key it refuses (E_BRAIN_KEY_REJECTED, brain-key.ts): the desk's
  *                      standing turns "not ready" with the rejected-key fix, and the room says so once. The stand-in writes a stand-in key
  *                      to <home>/credentials/anthropic/api-key.json at the start; change what that file holds (the fix's command opens
- *                      it) and the next call is answered, as a replaced key would be
+ *                      it), or save a key for Claude on the page (credentials/brains/claude.json, which is read before it), and the next
+ *                      call is answered, as a replaced key would be
+ *
+ * THE BRAINS. With a desk (the default, --superagent), the desk thinks with a SCRIPT — never a model — held under Claude's preset id
+ * ("claude", labelled "A script (stand-in, as Claude)"), beside every other preset's real brain: so the Brains place shows every provider
+ * with its honest standing (no key in this fresh home; Ollama and vLLM ready once a model is named, needing neither key nor file), and
+ * switching the brain away and back can be clicked through. The real brains here read no variable from the shell that started the stand-in
+ * (so no ANTHROPIC_BASE_URL or OPENAI_API_KEY there changes what the page shows) and reach no network: a key saved on the page makes one
+ * ready, and its calls then answer that the endpoint could not be reached.
  *
  * It starts the account exactly as `npm run account` does — real accounts only, trading on with a small cap, a pairing code printed here —
  * on a fresh temporary home, with every live connection's reach replaced by a stand-in (test/standin/venues.ts): the venues, the public
@@ -62,10 +74,11 @@ import { fileURLToPath } from "node:url";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
-import { scriptedBrain, seatName, type Brain, type BrainAnswer, type BrainRequest, type RoleId } from "../../src/portfolio/account/desk.ts";
-import { ANTHROPIC_KEY_REF, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
-import { keyRejected, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
-import { openaiBrain } from "../../src/portfolio/account/brain-openai.ts";
+import { BRAIN_MODELS, scriptedBrain, seatName, type Brain, type BrainAnswer, type BrainRequest, type RoleId } from "../../src/portfolio/account/desk.ts";
+import Anthropic from "@anthropic-ai/sdk";
+import { ANTHROPIC_KEY_REF, CLAUDE_KEY_REF, type ClaudeClient } from "../../src/portfolio/account/brain-claude.ts";
+import { keyRejected, present, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
+import { brainProviders } from "../../src/portfolio/account/brains.ts";
 import { agentWalletKey } from "../../src/portfolio/account/keystore.ts";
 import { NetWorthLog, networthPath } from "../../src/portfolio/account/networth.ts";
 import { isJwk, kidOf, signAgent, signDevice, simKey, type AgentAction, type OwnerAction, type SimKey } from "../../src/portfolio/account/sign.ts";
@@ -171,9 +184,10 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     liveWrites: { capUsd, pairingCode: code },
     openness: { ...(loadOpenness() as object), sessionExpiresAt: month },
     publicMarkets: publicSources(),
-    // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds
-    // no desk seeded: the real brains stand behind the hire form, each saying honestly that this home holds no key for it
-    desk: { brain: o.desk === false ? [claudeBrain({ home }), openaiBrain({ home })] : refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home), tickMs: o.superagent ? 10_000 : 0 },
+    // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds —
+    // held under Claude's preset id beside every other preset's real brain (standinBrains). No desk seeded: the real brains alone stand
+    // behind the hire form, each saying honestly that this home holds no key for it
+    desk: { brain: o.desk === false ? realBrains(home) : standinBrains(home, refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home)), tickMs: o.superagent ? 10_000 : 0 },
     payHttp: async () => ({ status: 0, headers: {}, body: undefined, error: "the stand-in pays no one: it reaches no network" }),
     liveDeps: {
       http: noNetwork,
@@ -494,7 +508,7 @@ function superagentBrain() {
     if (role === "exit") return { decisions: [] };
     if (role === "head") return { worked: "Quick entries, each with its numbers said first.", change: "Keep the size small while the tape is thin." };
     return null;
-  });
+  }, "claude-opus-5-5");
 }
 
 /** The stand-in's brain answering as the Anthropic API does to a key it refuses (`--brain-refuses`): every call throws E_BRAIN_KEY_REJECTED
@@ -509,23 +523,49 @@ function refusingIf(on: boolean, brain: Brain, home: string): Brain {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, '{"apiKey": "sk-ant-standin-key-the-api-refuses-0000"}\n', { mode: 0o600 });
   const refused = readFileSync(file, "utf8");
+  // the file Claude's brain reads now: the new one once it is there (a key saved on the page), else the older one
+  const inUse = (): string => (present(home, CLAUDE_KEY_REF) ? join(home, CLAUDE_KEY_REF) : file);
   const now = (): string => {
     try {
-      return readFileSync(file, "utf8");
+      return readFileSync(inUse(), "utf8");
     } catch {
       return "";
     }
   };
   return {
-    id: brain.id,
-    label: brain.label,
-    models: brain.models,
-    ready: (model?: string) => brain.ready(model),
+    ...brain,
     async decide<T>(r: BrainRequest<T>): Promise<BrainAnswer<T>> {
-      if (now() === refused) throw keyRejected("the API did not accept the key", "Anthropic", rejectedFix(file, undefined, "Anthropic"));
+      if (now() === refused) throw keyRejected("the API did not accept the key", "Anthropic", rejectedFix(inUse(), undefined, "Anthropic"));
       return brain.decide(r);
     },
   };
+}
+
+/** what a real brain's call meets in the stand-in: no network. The OpenAI-format brains' fetch fails as an unreachable endpoint does;
+ * Claude's client fails as an unreachable API does — for a call and for "Test the key" alike */
+const noNetworkFetch = (async () => {
+  throw new TypeError("the stand-in reaches no network");
+}) as unknown as typeof fetch;
+const noNetworkClaude = (): ClaudeClient => {
+  const down = async (): Promise<never> => {
+    throw new Anthropic.APIConnectionError({ message: "the stand-in reaches no network" });
+  };
+  return { messages: { parse: down as never }, models: { list: down as never } };
+};
+
+/** every preset's real brain, as the account makes them (brains.ts), reading no variable from the shell and reaching no network */
+function realBrains(home: string): Brain[] {
+  return brainProviders(home, { env: {}, fetch: noNetworkFetch, newClaudeClient: noNetworkClaude });
+}
+
+/** The desk's brains in the stand-in: every preset's real brain, with Claude's place held by the stand-in's script — its id "claude"
+ * (so the desk is hired with it as with the default brain, and the Brains place can switch away and back), Claude's listed models, what
+ * Claude's real brain says of its place (its base URL, its key file and the key's tail), and a label that says it is a script */
+function standinBrains(home: string, script: Brain): Brain[] {
+  const real = realBrains(home);
+  const claude = real.find((b) => b.id === "claude")!;
+  const asClaude: Brain = { ...script, id: "claude", label: "A script (stand-in, as Claude)", models: BRAIN_MODELS, ...(claude.about ? { about: () => claude.about!() } : {}) };
+  return real.map((b) => (b.id === "claude" ? asClaude : b));
 }
 
 /** the desk's brain in the stand-in: a script. Search names ETH, SOL and BTC at the exchange in turn; Risk clears at $60 with a 1.2%
@@ -542,7 +582,7 @@ function standinBrain() {
     if (role === "exit") return { decisions: [] };
     if (role === "head") return { worked: "The clearance named its numbers before the order went.", change: "Scan the perpetuals too." };
     return null;
-  });
+  }, "claude-opus-5-5");
 }
 
 const isMain = !!process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
@@ -581,7 +621,8 @@ if (isMain) {
       `  agent wallet  ${v.agent.wallet} holds a real key made in this home, so its address is a real one: send it nothing real`,
       `  seeded        venues ${v.venues.join(", ")} · ${Object.keys(v.orders).length} orders · ${v.agent.name} with trade, venues and payees limits and an agent wallet · 1 card waiting (${v.card}) · ${v.intents.length} intents · a report · ${v.asks} asks · ${v.watch} watched markets · ${v.curvePoints} net worth points over 7 days`,
       ...(args.includes("--superagent") ? [`  superagent    the desk at paper-momentum (paper money), ${args.includes("--cards") ? "its autonomy off: in Guard each lead it clears waits for you on a card" : "trading on its own on paper"} · ${s.url}/#/trade?mode=superagent`] : []),
-      ...(args.includes("--brain-refuses") ? [`  brain         refuses its key, as the API does, until ${join(s.home, ANTHROPIC_KEY_REF)} holds something else`] : []),
+      args.includes("--no-desk") ? "  brains        every preset's real brain, none with a key in this fresh home; they reach no network here" : "  brain         a script under Claude's id (no model thinks here), beside every other preset's real brain (no key, no network)",
+      ...(args.includes("--brain-refuses") ? [`  brain         refuses its key, as the API does, until ${join(s.home, ANTHROPIC_KEY_REF)} holds something else (or a key is saved for Claude on the page)`] : []),
       `  prices move every ${tickMs / 1000} s · Ctrl-C to stop`,
     ].join("\n"),
   );

@@ -82,6 +82,7 @@
   .sg-btn-p:hover:not(:disabled) { background: var(--hl-accent); }
   .sg-btn-g:hover:not(:disabled) { background: transparent; border-color: var(--hl-muted); color: var(--hl-text); }
   .sg-link:hover, .sg a:hover { color: var(--hl-accent); }
+  .sg-brain:hover .sg-stat-l { color: var(--hl-accent); }
   .sg-seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--hl-title); }
   .sg-msg:hover { background: var(--hl-inset); }
 }
@@ -110,6 +111,10 @@
 .sg-stat-v { color: var(--hl-text); }
 .sg-stat .sg-link { min-height: 0; }
 .sg-stale .sg-stat-v { color: var(--hl-dim); }
+/* the Brain stat is a button (it opens the Brains sheet, ui/brains.js): drawn as the other stats, its label in the soft accent with its
+   "›", a little lighter on hover; its focus ring the area's */
+.sg-brain { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--hl-r-check); }
+.sg-brain .sg-stat-l { color: var(--hl-accent-soft); transition: color var(--hl-ease); }
 .sg-tools { grid-area: t; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .sg-head-n { grid-area: n; display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; overflow-wrap: anywhere; }
 .sg-head-n:empty { display: none; }
@@ -395,6 +400,13 @@
 .sg-setup-f, .sg-move-f { display: flex; flex-direction: column; gap: 12px; }
 .sg-step { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--hl-tabline); }
 .sg-step > .sg-lab { color: var(--hl-text); }
+/* a brain that is not ready, in the setup: "Type its key ›", and the key file folded under it */
+.sg-fix-d { margin-top: 8px; }
+.sg-fix-d > summary { color: var(--hl-dim); cursor: pointer; min-height: 24px; }
+.sg-fix-d[open] > summary { margin-bottom: 8px; }
+/* a step's title with its way to the Brains sheet beside it */
+.sg-step-h { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.sg-step-h .sg-lab { color: var(--hl-text); }
 .sg-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .sg .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 @container (max-width: 759px) { .sg-row3, .sg .row2 { grid-template-columns: minmax(0, 1fr); } }
@@ -432,7 +444,7 @@
 @media (pointer: coarse) {
   .sg-btn, .sg-seg, .sg-setup :is(input, select), .sg-move-f :is(input, select) { min-height: 44px; }
   .sg-seg button { min-height: 40px; }
-  .sg-link { min-height: 44px; }
+  .sg-link, .sg-brain { min-height: 44px; }
 }
 
 /* ---- under reduced motion: nothing moves (last, so it outweighs every rule above) ------------------------------------------------------ */

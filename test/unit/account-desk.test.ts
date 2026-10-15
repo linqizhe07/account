@@ -6,7 +6,7 @@ import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { ANTHROPIC_KEY_SHAPE, brainReach, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
 import { shq } from "../../src/portfolio/account/brain-key.ts";
 import { keyRejected, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
-import { BRAIN_MODELS, DECISIONS, deskPath, FIRST_CYCLE_MS, readRoom, ROLE_SPECS, ROLES, scriptedBrain, type Brain, type RoleId } from "../../src/portfolio/account/desk.ts";
+import { BRAIN_MODELS, BRAIN_NOT_OBJECT, DECISIONS, deskPath, FIRST_CYCLE_MS, KEY_IN_MODEL, KEY_IN_PROVIDER, readRoom, ROLE_SPECS, ROLES, roomPath, scriptedBrain, type Brain, type BrainAbout, type RoleId } from "../../src/portfolio/account/desk.ts";
 import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
@@ -493,6 +493,184 @@ describe("the floor, the clock, the words", () => {
     expect((await again.view())!.brain.provider).toBe("claude");
   });
 
+  it("no silent fallback: a brain the account does not hold is refused by name, never swapped; a desk hired with one the account no longer holds is not ready and asks — and bills — no other in its place; a model's name that is not one is refused, not replaced", async () => {
+    const usage = { inputTokens: 100_000, outputTokens: 10_000 };
+    let askedClaude = 0;
+    let askedDeepseek = 0;
+    const claude = scriptedBrain(() => (askedClaude++, { leads: [], note: "claude here" }), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: BRAIN_MODELS, usage });
+    const deepseek = scriptedBrain(() => (askedDeepseek++, { leads: [], note: "deepseek here" }), "deepseek-flash", { id: "deepseek", label: "DeepSeek", usage });
+    const { desk, hire, own, home } = await boot({ brain: [claude, deepseek], prices: { "BTC/USDT": SPOT("BTC/USDT", 60_000) } });
+    // a provider the account does not hold: refused in words, nothing hired — never hired with the first brain instead
+    const unknown = await hire({}, ["head", "search", "risk", "sniper"], { provider: "grok", model: "grok-4.3", effort: "low" });
+    expect(isRefusal(unknown) && unknown.message).toBe('"grok" is not a brain this account holds: claude, deepseek');
+    expect(desk.hired()).toBe(false);
+    // a model's name that is not one: refused, never quietly replaced by the file's or the last one
+    const badModel = await hire({}, ["head", "search", "risk", "sniper"], { provider: "deepseek", model: "deep seek <flash>", effort: "low" });
+    expect(isRefusal(badModel) && badModel.message).toMatch(/^"deep seek <flash>" is not a model's name as an endpoint names it/);
+    expect(desk.hired()).toBe(false);
+    expect(code(await hire({}, ["head", "search", "risk", "sniper"], { provider: "deepseek", model: "deepseek-flash", effort: "low" }))).toBe("account");
+    // a change to a provider not held: refused, the desk keeps its brain
+    const ch = await own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ provider: "openai", model: "gpt-6-luna" }) });
+    expect(isRefusal(ch) && ch.message).toBe('"openai" is not a brain this account holds: claude, deepseek');
+    expect((await desk.view())!.brain.provider).toBe("deepseek");
+    // the same desk file read by an account that holds only Claude: its brain is said absent, and Claude is never asked in its place
+    const second = await boot({ home, brain: [claude], prices: { "BTC/USDT": SPOT("BTC/USDT", 60_000) }, at: 60_000 });
+    const other = second.desk;
+    await other.cycle("test");
+    const v = (await other.view())!;
+    expect(v.brain).toMatchObject({ ok: false, provider: "deepseek", label: "deepseek (not on this account)", why: expect.stringMatching(/^the desk was hired with the brain "deepseek", which this account does not hold now: choose one it holds \(Brain…\) — no other brain is asked in its place$/) });
+    expect(v.brain.spend.calls).toBe(0);
+    expect(askedClaude).toBe(0);
+    expect(askedDeepseek).toBe(0);
+    expect(readRoom(home).at(-1)?.text).toMatch(/^Cycle \d+: the house seats have no brain to think with \(the desk was hired with the brain "deepseek", which this account does not hold now/);
+    expect((await other.feed(0))!.brain).toMatchObject({ ok: false, provider: "deepseek" });
+    expect(other.catalog().brains.map((b) => b.id)).toEqual(["claude"]);
+    expect(other.catalog().brain).toMatchObject({ provider: "deepseek", ok: false });
+    // the owner signs a change naming no provider: with one brain held, that one — said in the room — and it thinks from the next cycle
+    expect(code(await second.own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ model: "claude-haiku-5-5" }) }))).toBe("account");
+    expect(readRoom(home).at(-1)?.text).toBe("You changed the brain: Claude · Anthropic API · claude-haiku-5-5 · low effort.");
+    await other.cycle("test");
+    expect(askedClaude).toBe(1);
+    expect(askedDeepseek).toBe(0);
+    // with several held and the desk's own not among them, a change must name one
+    const third = await boot({ home, brain: [scriptedBrain(() => null, "m", { id: "xai" }), scriptedBrain(() => null, "m", { id: "meta" })], at: 120_000 });
+    const unnamed = await third.own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ model: "grok-4.3" }) });
+    expect(isRefusal(unnamed) && unnamed.message).toBe('name the brain: the desk\'s "claude" is not one this account holds — xai, meta');
+  });
+
+  it("a key pasted where the model goes — hire, brain, objective, resume — is refused by the desk itself in words that never repeat it (whoever reaches it, the door's own check aside); desk.json, the room, the view, the feed and the catalog never hold it", async () => {
+    // made up, in the shapes that fit a model's name (80 characters or fewer): none of them is anyone's key
+    const KEYS = [`gsk_TESTnotArealKey${"0123456789abcdefABCDEF".repeat(2)}`, `sk-${"0123456789abcdef".repeat(2)}`, "AIzaTESTnotArealKey0123456789abcdefgh"];
+    const claude = scriptedBrain(() => ({ leads: [], note: "" }), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: BRAIN_MODELS });
+    const deepseek = scriptedBrain(() => ({ leads: [], note: "" }), "deepseek-flash", { id: "deepseek", label: "DeepSeek" });
+    const { desk, hire, own, home } = await boot({ brain: [claude, deepseek] });
+    // the desk's own handler, as the door hands it an instruction (Desk.apply): its refusal, not the door's
+    let n = 0;
+    const apply = (change: string, value: unknown) => desk.apply({ type: "setDesk", desk: "desk", change, value: JSON.stringify(value), nonce: ++n }, { signer: owner.address });
+    const message = (r: Outcome | Refusal) => (isRefusal(r) ? r.message : `taken: ${r.kind}`);
+    const leaks = (k: string): string[] => {
+      const read = (f: string) => {
+        try {
+          return readFileSync(f, "utf8");
+        } catch {
+          return "";
+        }
+      };
+      return ([["desk.json", read(deskPath(home))], ["room", read(roomPath(home))]] as const).filter(([, text]) => text.includes(k) || text.includes(k.slice(4, 20))).map(([name]) => name);
+    };
+    const objective = { text: "Small, careful entries on majors", venue: "ex", universe: "all" };
+    for (const k of KEYS) {
+      expect(message(await apply("hire", { objective, brain: { provider: "deepseek", model: k }, roles: [{ role: "head", kind: "house" }] })), k).toBe(KEY_IN_MODEL);
+      expect(message(await apply("hire", { objective, brain: { provider: k, model: "deepseek-flash" }, roles: [{ role: "head", kind: "house" }] })), k).toBe(KEY_IN_PROVIDER);
+      expect(desk.hired(), k).toBe(false);
+      // through the door as the page sends it: refused too (the door's own words), and never said back
+      const h = await hire({}, ["head", "search", "risk", "sniper"], { provider: "deepseek", model: k, effort: "low" });
+      expect(isRefusal(h), k).toBe(true);
+      expect(message(h), k).not.toContain(k.slice(4, 20));
+      expect(desk.hired(), k).toBe(false);
+      expect(leaks(k), k).toEqual([]);
+    }
+    expect(KEY_IN_MODEL).not.toMatch(/gsk_|sk-[0-9a-f]|AIza/);
+    expect(code(await hire({}, ["head", "search", "risk", "sniper"], { provider: "deepseek", model: "deepseek-flash", effort: "low" }))).toBe("account");
+    for (const k of KEYS) {
+      expect(message(await apply("brain", { provider: "deepseek", model: k })), k).toBe(KEY_IN_MODEL);
+      expect(message(await apply("brain", { provider: "claude", model: k })), k).toBe(KEY_IN_MODEL);
+      expect(message(await apply("objective", { text: "Bigger entries", brain: { provider: "claude", model: k } })), k).toBe(KEY_IN_MODEL);
+      const v = (await desk.view())!;
+      expect(v.brain, k).toMatchObject({ provider: "deepseek", model: "deepseek-flash" });
+      expect(v.objective.text, k).toBe("Small, careful entries on majors");
+      expect(JSON.stringify(v), k).not.toContain(k.slice(4, 20));
+      expect(JSON.stringify(await desk.feed(0)), k).not.toContain(k.slice(4, 20));
+      expect(JSON.stringify(desk.catalog()), k).not.toContain(k.slice(4, 20));
+      expect(leaks(k), k).toEqual([]);
+    }
+    // a resume of an ended session that carries one: the whole resume refused, the session still ended
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "end", value: "" }))).toBe("account");
+    for (const k of KEYS) expect(message(await apply("resume", { brain: { provider: "deepseek", model: k } })), k).toBe(KEY_IN_MODEL);
+    expect((await desk.view())!.session?.state).toBe("ended");
+    for (const k of KEYS) expect(leaks(k), k).toEqual([]);
+  });
+
+  it("the brain is one object of four fields: a list, a string, a number or null in its place, or a field beside the four, is refused by the desk itself — named only when the name is plain — and nothing changes", async () => {
+    const claude = scriptedBrain(() => ({ leads: [], note: "" }), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: BRAIN_MODELS });
+    const deepseek = scriptedBrain(() => ({ leads: [], note: "" }), "deepseek-flash", { id: "deepseek", label: "DeepSeek" });
+    const { desk, hire, home } = await boot({ brain: [claude, deepseek] });
+    expect(code(await hire({}, ["head", "search", "risk", "sniper"], { provider: "deepseek", model: "deepseek-flash", effort: "low" }))).toBe("account");
+    let n = 0;
+    // the desk's own handler, as the door hands it an instruction (Desk.apply): its refusal, not the door's
+    const applyRaw = (change: string, value: string) => desk.apply({ type: "setDesk", desk: "desk", change, value, nonce: ++n }, { signer: owner.address });
+    const message = (r: Outcome | Refusal) => (isRefusal(r) ? r.message : `taken: ${r.kind}`);
+    const GSK = `gsk_TESTnotArealKey${"0123456789abcdefABCDEF".repeat(2)}`;
+    const saved = readFileSync(deskPath(home), "utf8");
+    for (const value of [JSON.stringify([GSK]), JSON.stringify(GSK), "null", "42", "true"]) expect(message(await applyRaw("brain", value)), value).toBe(BRAIN_NOT_OBJECT);
+    expect(message(await applyRaw("objective", JSON.stringify({ text: "Bigger entries", brain: [GSK] })))).toBe(BRAIN_NOT_OBJECT);
+    expect(message(await applyRaw("brain", JSON.stringify({ provider: "deepseek", model: "deepseek-flash", extra: 1 })))).toBe('a brain is named with provider, model, effort, price: "extra" is not one of them, and nothing was kept');
+    expect(message(await applyRaw("brain", JSON.stringify({ provider: "deepseek", model: "deepseek-flash", [GSK]: 1 })))).toBe("a brain is named with provider, model, effort, price: a field it was sent is not one of them, and nothing was kept");
+    expect(message(await applyRaw("brain", JSON.stringify({ provider: "deepseek", model: "deepseek-flash", extra: { k: GSK } })))).toBe('a brain is named with provider, model, effort, price: "extra" is not one of them, and nothing was kept');
+    // nothing changed, and nothing of the key anywhere the desk keeps or says
+    expect((await desk.view())!.brain).toMatchObject({ provider: "deepseek", model: "deepseek-flash", effort: "low" });
+    expect(JSON.parse(readFileSync(deskPath(home), "utf8")).brain).toEqual(JSON.parse(saved).brain);
+    expect(JSON.parse(readFileSync(deskPath(home), "utf8")).objective).toEqual(JSON.parse(saved).objective);
+    expect(readFileSync(roomPath(home), "utf8")).not.toContain(GSK.slice(4, 20));
+    // a paused desk resumed with a brain that is not one object: the whole resume refused, the desk still paused
+    expect(message(await applyRaw("pause", ""))).toBe("taken: account");
+    expect(message(await applyRaw("resume", JSON.stringify({ brain: GSK })))).toBe(BRAIN_NOT_OBJECT);
+    expect((await desk.view())!.session?.state).toBe("paused");
+    // the four fields, as the page sends them (price null clears the owner's price), and "" for no change: taken
+    expect(message(await applyRaw("brain", JSON.stringify({ provider: "deepseek", model: "deepseek-flash", effort: "high", price: null })))).toBe("taken: account");
+    expect(message(await applyRaw("brain", ""))).toBe("taken: account");
+    // a hire that names no brain thinks with the default, as before
+    expect(BRAIN_NOT_OBJECT).not.toMatch(/gsk_/);
+  });
+
+  it("keyChanged says a local server's address and model saved with no key as that — not as a key taken away", async () => {
+    const { desk, hire, home } = await boot();
+    await hire();
+    desk.keyChanged("scripted", "", { keyless: true });
+    expect(readRoom(home).at(-1)?.text).toBe("You saved a script's address and model, with no key; it is ready.");
+    desk.keyChanged("scripted", "");
+    expect(readRoom(home).at(-1)?.text).toBe("You took away the key saved for a script; it is ready.");
+  });
+
+  it("an objective change carrying a brain that is refused changes NOTHING: the objective, its venue and its numbers stay — in memory, in the next cycle and in desk.json", async () => {
+    const claude = scriptedBrain(() => ({ leads: [], note: "" }), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: BRAIN_MODELS });
+    const { desk, hire, own, home } = await boot({ brain: [claude] });
+    expect(code(await hire())).toBe("account");
+    const was = (await desk.view())!.objective;
+    const saved = readFileSync(deskPath(home), "utf8");
+    for (const brain of [{ provider: "nope", model: "x" }, { provider: "claude", model: "gpt-5" }, { provider: "claude", model: "deep seek <flash>" }]) {
+      const r = await own({ type: "setDesk", desk: "desk", change: "objective", value: JSON.stringify({ text: "Go big on everything", maxRiskPct: 40, maxDailyLossPct: 45, targetPct: 90, brain }) });
+      expect(isRefusal(r), JSON.stringify(brain)).toBe(true);
+      expect((await desk.view())!.objective, JSON.stringify(brain)).toEqual(was);
+      expect(readFileSync(deskPath(home), "utf8"), JSON.stringify(brain)).toBe(saved);
+    }
+    // a cycle and a save afterwards still carry the old objective
+    await desk.cycle("test");
+    expect(JSON.parse(readFileSync(deskPath(home), "utf8")).objective).toEqual(was);
+    // a brain that IS taken changes both, and the room says each
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "objective", value: JSON.stringify({ text: "Majors only, smaller", brain: { provider: "claude", model: "claude-haiku-5-5", effort: "low" } }) }))).toBe("account");
+    const v = (await desk.view())!;
+    expect(v.objective.text).toBe("Majors only, smaller");
+    expect(v.brain).toMatchObject({ provider: "claude", model: "claude-haiku-5-5", effort: "low" });
+    expect(readRoom(home).filter((m) => m.from === "you").slice(-2).map((m) => m.text)).toEqual([expect.stringMatching(/^You changed the objective: “Majors only, smaller”/), "You changed the brain: Claude · Anthropic API · claude-haiku-5-5 · low effort."]);
+  });
+
+  it("the room says the effort as it is SENT: a provider whose docs name no effort gets its own default, one that does not take the desk's gets its own — said so, not as the desk's word", async () => {
+    const about = (efforts: BrainAbout["efforts"]): (() => BrainAbout) => () => ({ kind: "model-api", format: "openai", baseUrl: "https://x.example/v1", efforts, keyFile: "credentials/brains/x.json", keyFrom: "file" });
+    const xai = scriptedBrain(() => ({ leads: [], note: "" }), "grok-4.3", { id: "xai", label: "Grok · xAI API", about: about([]) });
+    const deepseek = scriptedBrain(() => ({ leads: [], note: "" }), "deepseek-flash", { id: "deepseek", label: "DeepSeek", about: about(["low", "high"]) });
+    const claude = scriptedBrain(() => ({ leads: [], note: "" }), "claude-opus-5-5", { id: "claude", label: "Claude · Anthropic API", models: BRAIN_MODELS, about: about(["low", "medium", "high"]) });
+    const { hire, own, home } = await boot({ brain: [claude, xai, deepseek] });
+    expect(code(await hire())).toBe("account");
+    const said = () => readRoom(home).filter((m) => m.from === "you").at(-1)?.text;
+    await own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ provider: "xai", model: "grok-4.3", effort: "high" }) });
+    expect(said()).toBe("You changed the brain: Grok · xAI API · grok-4.3 · the provider's own effort (its docs name no effort setting).");
+    await own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ provider: "deepseek", model: "deepseek-flash", effort: "medium" }) });
+    expect(said()).toBe("You changed the brain: DeepSeek · deepseek-flash · the provider's own effort (it takes low or high, not medium).");
+    await own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify({ provider: "deepseek", model: "deepseek-flash", effort: "high" }) });
+    expect(said()).toBe("You changed the brain: DeepSeek · deepseek-flash · high effort.");
+  });
+
   it("the house brain's standing is honest: no file, the example left in the file, a file it cannot use, a key — and never a value", () => {
     const home = mkdtempSync(join(tmpdir(), "account-brain-"));
     const dir = join(home, "credentials", "anthropic");
@@ -500,12 +678,16 @@ describe("the floor, the clock, the words", () => {
     const file = join(dir, "api-key.json");
     const env = {} as NodeJS.ProcessEnv;
     const KEY = "sk-ant-api03-TEST-not-a-real-key-0123456789";
-    // no file: why in a sentence (the environment only for an account started by hand, no "chmod 600" to puzzle over), and the fix — the
-    // file's absolute path, a command that makes it with the EMPTY template, readable by the user alone, and opens it, no restart
+    // no file, old or new: why in a sentence (the environment only for an account started by hand, no "chmod 600" to puzzle over), and the
+    // fix — the NEW file's absolute path (credentials/brains/claude.json), a command that makes it with the EMPTY template, readable by the
+    // user alone, and opens it, no restart
+    const brainsDir = join(home, "credentials", "brains");
+    const newFile = join(brainsDir, "claude.json");
     const none = brainReach({ home, env, platform: "darwin" });
-    expect(none).toMatchObject({ ok: false, why: expect.stringMatching(/^no key: the brain reads an Anthropic API key from .*api-key\.json, which is not there yet; .* \(if you start the account by hand, ANTHROPIC_API_KEY in its environment works too\)$/) });
+    expect(none).toMatchObject({ ok: false, why: expect.stringMatching(/^no key: the brain reads an Anthropic API key from .*credentials\/brains\/claude\.json, which is not there yet; .* \(if you start the account by hand, ANTHROPIC_API_KEY in its environment works too\)$/) });
     expect(!none.ok && none.why).not.toMatch(/chmod/);
-    expect(!none.ok && none.fix).toEqual({ code: "no-key", file, restart: false, command: `mkdir -p '${dir}' && (umask 077 && printf '{"apiKey": ""}\\n' > '${file}') && open -e '${file}'`, words: expect.stringMatching(/^Run the command below: .*Paste your Anthropic API key \(it starts sk-ant-, from console\.anthropic\.com › API keys\) between the quotes .* no restart\.$/) });
+    expect(!none.ok && none.fix).toEqual({ code: "no-key", file: newFile, restart: false, command: `mkdir -p '${brainsDir}' && (umask 077 && printf '{"apiKey": ""}\\n' > '${newFile}') && open -e '${newFile}'`, words: expect.stringMatching(/^Run the command below: .*Paste your Anthropic API key \(it starts sk-ant-, from console\.anthropic\.com › API keys\) between the quotes .* no restart\.$/) });
+    // the older file, credentials/anthropic/api-key.json, is still read while the new one is not there: what follows is about it
     expect(ANTHROPIC_KEY_SHAPE.example).toBe('{"apiKey": ""}');
     expect(claudeBrain({ home, env, platform: "darwin" }).ready()).toMatchObject({ ok: false, fix: { code: "no-key" } });
     // the template as the command makes it, left empty: the example, and the fix opens it again
@@ -528,7 +710,7 @@ describe("the floor, the clock, the words", () => {
     // a home whose path has a quote in it: quoted for the shell, so the command still runs as written
     expect(shq("/Users/o'brien/home")).toBe("'/Users/o'\\''brien/home'");
     // the environment: the example is refused there too — no command from here, a restart; a key is taken
-    expect(brainReach({ home, env: { ANTHROPIC_API_KEY: "sk-ant-..." } as NodeJS.ProcessEnv })).toMatchObject({ ok: false, why: expect.stringMatching(/^ANTHROPIC_API_KEY .* not a key/), fix: { code: "env", file, restart: true } });
+    expect(brainReach({ home, env: { ANTHROPIC_API_KEY: "sk-ant-..." } as NodeJS.ProcessEnv })).toMatchObject({ ok: false, why: expect.stringMatching(/^ANTHROPIC_API_KEY .* not a key/), fix: { code: "env", file: newFile, restart: true } });
     const fromEnv = claudeBrain({ home, env: { ANTHROPIC_API_KEY: KEY } as NodeJS.ProcessEnv }).ready();
     expect(fromEnv).toMatchObject({ ok: true, how: "ANTHROPIC_API_KEY in the service's environment" });
     expect(JSON.stringify(fromEnv)).not.toContain(KEY);
@@ -666,6 +848,46 @@ describe("what the desk says, as a person reads it", () => {
     expect((await desk.view())!.brain).toMatchObject({ ok: true });
     expect((await desk.view())!.brain.fix).toBeUndefined();
     expect(room.some((m) => m.from === "search" && m.kind === "lead")).toBe(true);
+  });
+
+  it("a key changed on the page (Desk.keyChanged) clears the refusal of the OLD key at once — the view, the feed and the catalog agree with no cycle in between, even with the desk paused — and the room says it by the fingerprint only", async () => {
+    const file = "/home/o/credentials/brains/claude.json";
+    const brain = refusingBrain(file);
+    const { desk, hire, own, home } = await boot({ brain });
+    await hire();
+    await desk.cycle("test");
+    expect((await desk.view())!.brain).toMatchObject({ ok: false, fix: { code: "rejected" } });
+    // paused: no cycle runs, so before keyChanged nothing could clear the fault
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "pause", value: "" }))).toBe("account");
+    const calls = brain.calls;
+    desk.keyChanged("claude", "1a2b3c4d");
+    expect(brain.calls).toBe(calls);
+    expect((await desk.view())!.brain).toMatchObject({ ok: true });
+    expect((await desk.view())!.brain.fix).toBeUndefined();
+    expect((await desk.feed(0))!.brain).toMatchObject({ ok: true });
+    expect(desk.catalog().brains.find((b) => b.id === "claude")).toMatchObject({ ok: true });
+    expect(readRoom(home).at(-1)).toMatchObject({ from: "you", kind: "you", text: "You saved a new key for Claude · Anthropic API (fingerprint 1a2b3c4d) — the refusal of the old key no longer stands; it is ready." });
+    // what is not eight lower-case hex is never written as a fingerprint
+    desk.keyChanged("claude", "sk-TESTnotArealKey0123456789abcdef");
+    expect(readRoom(home).at(-1)?.text).toBe("You saved a new key for Claude · Anthropic API; it is ready.");
+    expect(readFileSync(roomPath(home), "utf8")).not.toContain("TESTnotArealKey");
+    // taken away; and a provider the desk does not hold: nothing
+    desk.keyChanged("claude", "");
+    expect(readRoom(home).at(-1)?.text).toBe("You took away the key saved for Claude · Anthropic API; it is ready.");
+    const n = readRoom(home).length;
+    desk.keyChanged("grok", "1a2b3c4d");
+    expect(readRoom(home).length).toBe(n);
+  });
+
+  it("keyChanged leaves a refusal standing while a variable in the service's environment wins over the file — the brain still uses the refused key — and says so", async () => {
+    const file = "/home/o/credentials/brains/claude.json";
+    const brain = Object.assign(refusingBrain(file), { about: (): BrainAbout => ({ kind: "model-api", format: "anthropic", baseUrl: "https://api.anthropic.com", efforts: ["low", "medium", "high"], envWins: "ANTHROPIC_API_KEY", keyFile: "credentials/brains/claude.json", keyFrom: "env" }) });
+    const { desk, hire, home } = await boot({ brain });
+    await hire();
+    await desk.cycle("test");
+    desk.keyChanged("claude", "1a2b3c4d");
+    expect((await desk.view())!.brain).toMatchObject({ ok: false, fix: { code: "rejected" } });
+    expect(readRoom(home).at(-1)?.text).toMatch(/^You saved a new key for Claude · Anthropic API \(fingerprint 1a2b3c4d\) — but ANTHROPIC_API_KEY in the service's environment wins over the file, so the refused key is still the one in use; it is not ready: /);
   });
 
   it("Search's brain that gives no decision is said so too, in one line: not a quiet market", async () => {
