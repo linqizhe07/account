@@ -486,6 +486,184 @@ dialog { color: var(--text); }
   dialog .row, .row2 { grid-template-columns: 1fr; }
 }
 
+/* ---- THE TRADING AREA: Trade, Regular and Superagent, in Hyperliquid's trade-app look (html[data-area="trade"]; the tokens in
+   ui/tokens.css, every value measured from app.hyperliquid.xyz/trade: scratchpad hl-reference.md §5–§8). The column beside the rail becomes
+   HL's screen: 3 px of ground between flat panels (radius 5, no edge, no shadow), one face at 12 on 15 and one weight (400), controls 33
+   high with 8 px corners, colour changing over 0.2 s, no shadow anywhere. The chrome the shell draws is styled here — the top bar as HL's
+   nav, the switch, the lens and its menu, the search, the banners, the sheets and the toasts; the shared classes the panes draw with (.btn
+   .seg .tabs .t .fld .link) get HL's grammar under :where(), at the specificity they already have, so a pane's own rule for its own part
+   (the terminal's order panel, its book) still decides there. Every such rule is scoped to the area's containers (the main column, the
+   sheet, the drawer, the asking dialog, the toasts), never to the whole page, so nothing of the area's grammar — its one weight above
+   all — reaches the rail. Where HL has no keyboard ring, the area keeps one: 2 px of the soft accent.
+   THE RAIL takes the area's colours while it shows (tokens.css gives them to html itself): HL's own nav is a panel of the same green, so the
+   rail is one with the screen beside it instead of a cream strip from another app. Only its colours change — its shape, its face and its
+   weights stay the Account's, so nothing on it moves — and they change over 0.2 s, at once under reduced motion. Leaving the area brings the
+   Account's look back. Its current item and the item under the pointer are HL's nav link in the bright accent.
+   Hover colours sit inside (hover: hover), so a touch screen never keeps one stuck; outside it only resets, which set back the Account's
+   own hover rules to the rest look ---------------------------------------------------------------------------------------------------- */
+/* the rail beside the area, and the page behind it: their colours fade between the Account's and the area's. The page's own text colour
+   is never faded: every word in a pane inherits it, and a fade from the area's near-white back to the Account's ink would leave the next
+   pane's words near-white on its white cards for the length of it — so html and body fade their background only, and .main takes its
+   ink at once */
+html, body { transition: background-color 0.2s ease-in-out; }
+.main { color: var(--text); }
+.rail, .rail-wallet, .rail-pill, .brand, .brand-mark, .rail .count, .rail .stamp, .rw-sub { transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out, border-color 0.2s ease-in-out; }
+.rail-nav.moves .rail-pill { transition: transform 220ms cubic-bezier(.2, .8, .2, 1), background-color 0.2s ease-in-out; }
+.rail-nav a, .rail-links button { transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out; }
+/* HL's nav has no edge: the 3 px of ground beside the main column does the separating */
+:root[data-area="trade"] .rail { border-right-color: transparent; }
+:root[data-area="trade"] .rail-nav a[aria-current="page"] { color: var(--hl-accent); }
+@media (hover: hover) { :root[data-area="trade"] :is(.rail-nav a, .rail-links button):hover { color: var(--hl-accent); } }
+:root[data-area="trade"] .main { padding: var(--hl-gap); gap: var(--hl-gap); }
+:root[data-area="trade"] .pane, :root[data-area="trade"] .pane > div { gap: var(--hl-gap); }
+/* the top bar as HL's nav: a panel 56 high, its parts 22 apart; the switch first, the lens, then the search and the Statement at its end */
+:root[data-area="trade"] .topbar { min-height: var(--hl-h-nav); padding: 0 12px; gap: 22px; background: var(--hl-panel); border-radius: var(--hl-r-panel); }
+:root[data-area="trade"] .lens { font: 400 12px/15px var(--font-sans); height: var(--hl-h-control); margin-left: 0; padding: 0 4px; color: var(--hl-text); background: transparent; border-radius: var(--hl-r); transition: color var(--hl-ease); }
+:root[data-area="trade"] .lens:hover { background: transparent; }
+@media (hover: hover) { :root[data-area="trade"] .lens:hover { color: var(--hl-accent); } }
+:root[data-area="trade"] .search { height: var(--hl-h-control); width: 320px; padding: 0 10px; gap: 8px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; font-size: 12px; color: var(--hl-dim); transition: border-color var(--hl-ease); }
+:root[data-area="trade"] .search input { font-size: 12px; }
+:root[data-area="trade"] .search input::placeholder { color: var(--hl-placeholder); }
+:root[data-area="trade"] .search:focus-within { outline: 0; border-color: var(--hl-muted); }
+@media (hover: hover) { :root[data-area="trade"] .search:hover { border-color: var(--hl-muted); } }
+:root[data-area="trade"] kbd { border-color: var(--hl-inset); font-weight: 400; }
+:root[data-area="trade"] .search .ico { width: 16px; height: 16px; }
+/* the Statement: HL's icon button, 32 square, an edge of the inset colour, the ground under the pointer */
+:root[data-area="trade"] #open-statement { width: 32px; height: 32px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); transition: background-color 0.1s ease-in-out; }
+:root[data-area="trade"] #open-statement .ico { width: 18px; height: 18px; }
+@media (hover: hover) { :root[data-area="trade"] #open-statement:hover:not(:disabled) { background: var(--hl-ground); } }
+/* pairing, a restart's notice: panels like any other */
+:root[data-area="trade"] :is(.banner, .notice) { background: var(--hl-panel); border: 0; border-radius: var(--hl-r-panel); box-shadow: none; padding: 10px 12px; font-size: 12px; line-height: 15px; }
+:root[data-area="trade"] .codeform input { height: var(--hl-h-control); border-color: var(--hl-inset); border-radius: var(--hl-r); background: transparent; font-size: 12px; }
+:root[data-area="trade"] .codeform input:focus { border-color: var(--hl-muted); box-shadow: none; }
+:root[data-area="trade"] .pane-error { background: var(--hl-panel); border: 0; border-radius: var(--hl-r-panel); padding: 10px 12px; font-size: 12px; }
+
+/* REGULAR · SUPERAGENT: HL's toggle (its Buy | Sell and Strict | All), a 33-high track of the inset colour, the mode showing on the soft
+   accent with the deep ink on it (#02231e on #50d2c1). Drawn once in the top bar for both panes (account.html), so it stands in the same
+   place whichever shows; outside the area it is not there at all */
+:root:not([data-area="trade"]) [data-only="trade-area"] { display: none !important; }
+.ta-mode { display: inline-grid; grid-template-columns: 1fr 1fr; flex: none; height: var(--hl-h-control); padding: 2px; gap: 0; background: var(--hl-inset); border-radius: var(--hl-r); }
+.ta-mode button { min-width: 104px; min-height: 29px; padding: 0 16px; border: 0; border-radius: var(--hl-r-panel); background: transparent; box-shadow: none; color: var(--hl-text); font: 400 12px/29px var(--font-sans); letter-spacing: normal; white-space: nowrap; transition: background-color 0.1s ease-in-out, color 0.2s ease-in-out; }
+.ta-mode button[aria-pressed="true"] { background: var(--hl-accent-soft); color: var(--hl-on-buy); cursor: default; }
+@media (hover: hover) { .ta-mode button[aria-pressed="false"]:hover { color: var(--hl-title); } }
+.ta-mode button:focus-visible { outline-offset: 1px; }
+@media (pointer: coarse) {
+  .ta-mode { height: 48px; }
+  .ta-mode button { min-height: 44px; line-height: 44px; }
+}
+
+/* one weight, as HL draws it (its only bold is the book's cell under the pointer, the book's own rule): the shared classes that set a
+   heavier one, set back, at their own specificity — inside the area's containers only (the main column, the sheet, the drawer, the asking
+   dialog, the toasts: every rule below is scoped to them in a :where(), which adds nothing to its specificity); the rail keeps its weights */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.btn, button, .fld, .tag, .pill, .chip, .count, .msg, .up, .down, .label, .h2, .num, .num-m, .link, h1, h2, h3, .t th, label.chk1, .seg a, .seg button, .tabs button, .menu button, .menu .menu-h, .who b, .choice b, .st, dialog label) { font-weight: 400; letter-spacing: normal; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.seg button[aria-pressed="true"], .seg a[aria-current="page"], .tabs button[aria-pressed="true"], .menu button[aria-checked="true"], .picks button[aria-current="true"], .quote .big, details.signs summary, .callout > .label:first-child) { font-weight: 400; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) #modal-form button:not([class]) { font-weight: 400; }
+/* the keyboard's ring: HL draws none; here 2 px of the soft accent, 2 px out */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask)) :focus-visible { outline: 2px solid var(--hl-accent-soft); outline-offset: 2px; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .menu button:focus-visible { outline-color: var(--hl-accent-soft); }
+/* scroll bars: HL's opt-in thin bar, a fifth of white on no track (the dialogs themselves, and what scrolls inside the area) */
+:where(:root[data-area="trade"]) :is(#modal, #drawer, #ask) { scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.t-wrap, .menu) { scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
+/* a link under the pointer: the Account's amber set back (a tap leaves nothing lit), the bright accent where there is a pointer */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) a:hover { color: inherit; }
+
+/* buttons: HL's secondary (the inset colour, its hover a step lighter) and primary (the soft accent, the bright one under the pointer, a
+   deep green when off), 33 high, 8 px corners, 12 px words. The Account's own hover (a fill, a fade) set back to the rest look here */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn { min-height: var(--hl-h-control); padding: 0 16px; border: 1px solid transparent; border-radius: var(--hl-r); font-size: 12px; color: var(--hl-title); transition: background-color var(--hl-ease), color var(--hl-ease), border-color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn-sm { min-height: var(--hl-h-control); padding: 0 12px; font-size: 12px; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn:hover:not(:disabled) { background: var(--hl-inset); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn.btn-primary { color: var(--hl-on-accent); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn.btn-primary:hover:not(:disabled) { background: var(--hl-accent-soft); opacity: 1; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn.btn-primary:disabled { background: var(--hl-accent-disabled); opacity: 1; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn-ghost { color: var(--hl-dim); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn-ghost:hover:not(:disabled) { color: var(--hl-dim); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .icon-btn { border-radius: var(--hl-r); }
+/* a word that does something: HL's green link, the bright accent under the pointer */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link { color: var(--hl-accent-soft); text-decoration: none; font-size: 12px; transition: color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link:hover { color: var(--hl-accent-soft); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link.dim, :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link.dim:hover { color: var(--hl-dim); }
+/* a toggle: HL's, the pressed half on the soft accent */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg { padding: 2px; gap: 0; border-radius: var(--hl-r); background: var(--hl-inset); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg :is(button, a) { min-height: 29px; padding: 0 12px; border-radius: var(--hl-r-panel); font-size: 12px; color: var(--hl-text); transition: background-color 0.1s ease-in-out, color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg button[aria-pressed="true"], :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg a[aria-current="page"] { background: var(--hl-accent-soft); color: var(--hl-on-buy); box-shadow: none; }
+/* category tabs: HL's tab bar — 12 px, dim until chosen, a 1 px line of the soft accent under the chosen one, the tab line under all */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs { gap: 0; background: linear-gradient(var(--hl-tabline), var(--hl-tabline)) center bottom / calc(100% - 16px) 1px no-repeat; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button { min-height: 34px; padding: 0 12px; font-size: 12px; color: var(--hl-dim); transition: color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button::after { height: 1px; left: 12px; right: 12px; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button:hover { color: var(--hl-dim); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button[aria-pressed="true"] { color: var(--hl-text); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button[aria-pressed="true"]::after { background: var(--hl-accent-soft); }
+/* tables: HL's rows, 24 high, no rules between them, the heads dim */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) table.t { font-size: 12px; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .t th { font-size: 12px; line-height: var(--hl-h-row); padding: 0 8px; color: var(--hl-dim); border-bottom: 1px solid var(--hl-tabline); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .t td { padding: 4px 8px; line-height: 16px; border-bottom: 0; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .t tr.click:hover td { background: transparent; }
+/* what the pointer lights, where there is a pointer */
+@media (hover: hover) {
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) a:hover { color: var(--hl-accent); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn:hover:not(:disabled) { background: var(--hl-inset-hover); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn.btn-primary:hover:not(:disabled) { background: var(--hl-accent); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .btn-ghost:hover:not(:disabled) { color: var(--hl-text); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link:hover, :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .link.dim:hover { color: var(--hl-accent); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--hl-title); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button:hover:not([aria-pressed="true"]) { color: var(--hl-title); }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .t tr.click:hover td { background: var(--hl-inset); }
+}
+/* a card or a section: a panel */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.card, .pane .sec) { border: 0; border-radius: var(--hl-r-panel); box-shadow: none; padding: 10px 12px; gap: 10px; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.empty, .msg) { font-size: 12px; }
+/* fields: HL's, 33 high, an edge of the inset colour on no fill, the muted edge under the pointer and while typing */
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld, dialog label) { font-size: 12px; color: var(--hl-dim); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld input, .fld select, .fld textarea) { min-height: var(--hl-h-control); padding: 6px 10px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; font-size: 12px; transition: border-color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, dialog textarea) { min-height: var(--hl-h-control); padding: 6px 10px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; font-size: 12px; font-weight: 400; transition: border-color var(--hl-ease); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld input, .fld select, .fld textarea):focus { border-color: var(--hl-muted); box-shadow: none; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(dialog input, dialog select, dialog textarea):focus { border-color: var(--hl-muted); box-shadow: none; }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld, dialog) :is(input, textarea)::placeholder { color: var(--hl-placeholder); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld, dialog) select option { background: var(--hl-ground); color: var(--hl-text); }
+@media (hover: hover) { :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.fld input, .fld select, .fld textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, dialog textarea):hover { border-color: var(--hl-muted); } }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) label.chk1 input { accent-color: var(--hl-accent-soft); }
+
+/* the lens's menu: HL's dropdown — the ground, an inset edge, radius 10, items 24 high in the dim, the text under the pointer; it drops in
+   as HL's do, 5 px and a fade over 0.3 s */
+:root[data-area="trade"] .menu { background: var(--hl-ground); border: 1px solid var(--hl-inset); border-radius: var(--hl-r-pop); box-shadow: none; padding: 4px; animation: ta-drop 0.3s ease; }
+:root[data-area="trade"] .menu .menu-h { font-size: 12px; padding: 8px 8px 2px; }
+:root[data-area="trade"] .menu button { min-height: var(--hl-h-row); padding: 4px 8px 4px 26px; border-radius: var(--hl-r-panel); font-size: 12px; line-height: 16px; color: var(--hl-dim); transition: color var(--hl-ease); }
+:root[data-area="trade"] .menu button::before { left: 10px; }
+:root[data-area="trade"] .menu button[aria-checked="true"] { color: var(--hl-title); }
+:root[data-area="trade"] .menu button:hover, :root[data-area="trade"] .menu button:focus-visible { background: transparent; color: var(--hl-text); }
+:root[data-area="trade"] .menu button .dim { font-size: 12px; }
+@keyframes ta-drop { from { opacity: 0; transform: translateY(-5px); } }
+@media (pointer: coarse) { :root[data-area="trade"] .menu button { min-height: 44px; } }
+
+/* the sheet, the drawer, the question: HL's modal — a panel with an inset edge, radius 16, no shadow, over a blurred scrim */
+:root[data-area="trade"] :is(#modal, #ask) { border: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal); background: var(--hl-panel); box-shadow: none; }
+:root[data-area="trade"] #drawer { border: 0; border-left: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal) 0 0 var(--hl-r-modal); background: var(--hl-panel); box-shadow: none; }
+:root[data-area="trade"] :is(#modal, #ask)::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
+:root[data-area="trade"] .sheet-h { border-bottom-color: var(--hl-inset); background: var(--hl-panel); }
+:root[data-area="trade"] :is(.sheet-h h2, #modal-form h2, .ask-f h2) { font-size: 20px; line-height: 27px; color: var(--hl-title); }
+:root[data-area="trade"] :is(.sheet-b, #modal-form, .ask-f) { font-size: 12px; line-height: 15px; color: var(--hl-modal-body); }
+:root[data-area="trade"] .ask-f p { font-size: 12px; line-height: 17px; }
+/* toasts: HL's, a panel with an inset edge and radius 12 */
+:root[data-area="trade"] .toast { background: var(--hl-panel); border: 1px solid var(--hl-inset); border-radius: var(--hl-r-toast); box-shadow: none; font-size: 12px; line-height: 16px; }
+:root[data-area="trade"] .toast.no { border-color: var(--hl-down); }
+
+@media (max-width: 900px) {
+  :root[data-area="trade"] .main { padding: var(--hl-gap); }
+  /* the bar wraps: the switch, the lens and the Statement on its first row, the search under them */
+  :root[data-area="trade"] .topbar { padding: 10px 12px; gap: 10px 12px; }
+  :root[data-area="trade"] .ta-mode { order: 0; }
+  :root[data-area="trade"] .search { width: 100%; }
+}
+@media (max-width: 560px) {
+  /* a phone: the switch the bar's whole width, its two halves sharing it */
+  :root[data-area="trade"] .ta-mode { order: 0; flex-basis: 100%; width: 100%; }
+  :root[data-area="trade"] .ta-mode button { flex: 1; min-width: 0; }
+}
+@media (pointer: coarse) {
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.btn, .btn-sm, .fld input, .fld select) { min-height: 44px; }
+  :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .seg :is(button, a) { min-height: 40px; }
+}
+
 /* ---- print: only the statement ---------------------------------------------------------------------------------------------------- */
 @media print {
   body[data-print="statement"] { background: #fff; color: #000; }
@@ -500,4 +678,9 @@ dialog { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   .btn, .icon-btn, .seg button, .seg a, .rkey, .tabs button, .rail-nav a, .rail-links button, .lens, .menu button, .picks button, .link, .t tr.click td, .tk-list button, .quick-card, .choice, .choice::after, .quick-card::after { transition: none; }
   .rail-nav.moves .rail-pill { transition: none; }
+  /* the trading area: its switch cut, its menus and controls changing at once */
+  .ta-mode button, :root[data-area="trade"] :is(.lens, .search, .menu button, #open-statement), :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) :is(.btn, .link, .seg button, .seg a, .tabs button, .fld input, .fld select, .fld textarea) { transition: none; }
+  /* the rail and the page behind it change colour at once as the area comes and goes */
+  html, body, .rail, .rail-wallet, .rail-pill, .rail-nav.moves .rail-pill, .brand, .brand-mark, .rail .count, .rail .stamp, .rw-sub { transition: none; }
+  :root[data-area="trade"] .menu { animation: none; }
 }

@@ -378,13 +378,13 @@ describe("a paper account beside a real one", () => {
       return isRefusal(p) ? p.message : "prepared";
     };
     // a market buy fills at the ask (60,010): its take-profit must be above it
-    expect(await why({ side: "buy", orderType: "market", takeProfit: "50000" })).toBe("Paper account: the take-profit (50000) must be above the entry (60010) for a buy");
+    expect(await why({ side: "buy", orderType: "market", takeProfit: "50000" })).toBe("Paper account: the take-profit (50,000) must be above the entry (60,010) for a buy");
     // a buy limited at 70,000 crosses the ask and fills at 60,010: a stop-loss at 65,000 would sell at once
-    expect(await why({ side: "buy", orderType: "limit", limitPrice: "70000", stopLoss: "65000" })).toBe("Paper account: the stop-loss (65000) must be below the entry (60010) for a buy: a buy limited at 70000 crosses the book and fills there, at 60010");
+    expect(await why({ side: "buy", orderType: "limit", limitPrice: "70000", stopLoss: "65000" })).toBe("Paper account: the stop-loss (65,000) must be below the entry (60,010) for a buy: a buy limited at 70,000 crosses the book and fills there, at 60,010");
     // a sell limited at 50,000 fills at the bid (59,990): a stop-loss at 55,000 is under that fill
-    expect(await why({ side: "sell", orderType: "limit", limitPrice: "50000", stopLoss: "55000" })).toBe("Paper account: the stop-loss (55000) must be above the entry (59990) for a sell: a sell limited at 50000 crosses the book and fills there, at 59990");
+    expect(await why({ side: "sell", orderType: "limit", limitPrice: "50000", stopLoss: "55000" })).toBe("Paper account: the stop-loss (55,000) must be above the entry (59,990) for a sell: a sell limited at 50,000 crosses the book and fills there, at 59,990");
     // a sell's take-profit is under its limit, the worst fill for it
-    expect(await why({ side: "sell", orderType: "limit", limitPrice: "60500", takeProfit: "61000" })).toBe("Paper account: the take-profit (61000) must be below the entry (60500) for a sell");
+    expect(await why({ side: "sell", orderType: "limit", limitPrice: "60500", takeProfit: "61000" })).toBe("Paper account: the take-profit (61,000) must be below the entry (60,500) for a sell");
     // a limit that rests is judged at its own price; a crossing one's take-profit at its limit
     expect(await why({ side: "buy", orderType: "limit", limitPrice: "59000", takeProfit: "62000", stopLoss: "58000" })).toBe("prepared");
     expect(await why({ side: "buy", orderType: "limit", limitPrice: "70000", takeProfit: "72000", stopLoss: "59000" })).toBe("prepared");
@@ -400,10 +400,10 @@ describe("a paper account beside a real one", () => {
     expect(entry.order.status).toBe("open");
     // under the stop-loss, the entry would fill and its stop-loss sell at once
     const under = await svc.account!.prepare({ type: "liveAmend", venue: "paper-1", order: entry.order.id, limitPrice: "57000" });
-    expect(isRefusal(under) && under.message).toBe("Paper account: the stop-loss (58000) must be below the entry (57000) for a buy");
+    expect(isRefusal(under) && under.message).toBe("Paper account: the stop-loss (58,000) must be below the entry (57,000) for a buy");
     const p = await svc.account!.prepare({ type: "liveAmend", venue: "paper-1", order: entry.order.id, limitPrice: "59500" });
     if (isRefusal(p)) throw new Error(p.message);
-    expect(p.quote?.order?.words).toContain("limit 59500 · then take-profit 62000, stop-loss 58000");
+    expect(p.quote?.order?.words).toContain("limit 59,500 · then take-profit 62,000, stop-loss 58,000");
     const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveAmend" }>;
     const changed = await own(rest as NoNonce<OwnerAction>);
     if (isRefusal(changed) || changed.kind !== "order") throw new Error(`expected an order, got ${code(changed)}`);
@@ -522,7 +522,7 @@ describe("a paper account beside a real one", () => {
     expect(tp()).toMatchObject({ status: "filled", qty: 0.01, filledQty: 0.01, usd: 660, note: expect.stringMatching(/^filled at /) });
     const line = svc.statement().find((l) => l.id === tp().id)!;
     expect(line).toMatchObject({ status: "filled", worthUsd: 660 });
-    expect(line.description).toMatch(/^Sell 0\.01 BTC · BTC market · limit 66000 · take-profit of /);
+    expect(line.description).toMatch(/^Sell 0\.01 BTC · BTC market · limit 66,000 · take-profit of /);
     expect(line.description).not.toContain("of 0.02 filled");
   });
 

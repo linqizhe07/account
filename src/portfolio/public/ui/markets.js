@@ -362,7 +362,9 @@ function mkPeekHtml(item) {
   const iss = mkIssuerWords(item);
   const seen = new Set();
   const at = [...item.at.filter((a) => a.connected), ...item.at.filter((a) => !a.connected)].filter((a) => !seen.has(a.venueName) && seen.add(a.venueName));
-  const where = at.map((a) => (a.connected ? `${esc(a.venueName)}${a.paper ? " (paper)" : ""}` : `<span class="dim">${esc(a.venueName)}</span>`)).join(" · ");
+  // a paper account's own name already ends in "paper" ("Momentum · paper"): said once
+  const unpaper = (n) => String(n || "").replace(/\s*[·-]\s*paper\s*$/i, "") || String(n || "");
+  const where = at.map((a) => (a.connected ? `${esc(a.paper ? unpaper(a.venueName) : a.venueName)}${a.paper ? " (paper)" : ""}` : `<span class="dim">${esc(a.venueName)}</span>`)).join(" · ");
   const from = mkPriceFrom(item);
   return `<b class="mk-peek-n">${esc(item.name)}</b>${kind ? `<span class="mk-peek-k">${kind}</span>` : ""}${iss ? `<span class="mk-peek-i">${esc(iss)}</span>` : ""}${where ? `<span class="mk-peek-w">${where}</span>` : ""}${from ? `<span class="mk-peek-f">Price from ${esc(from)}</span>` : ""}`;
 }
@@ -388,7 +390,7 @@ function mkWhere(item) {
   // price is from once it is not the last minute or two's
   const from = (a) => { const w = mkQuoteWords(a.quoteFrom, a.quoteAt); return w ? `Price from ${w}` : ""; };
   const title = (...words) => { const t = words.filter(Boolean).join(". "); return t ? ` title="${esc(t)}"` : ""; };
-  const name = (a) => (a.connected ? (a.paper ? `<span class="mk-v paper"${title("A paper account: no real money", from(a))}>${esc(a.venueName)} · paper</span>` : `<span class="mk-v"${title(from(a))}>${esc(a.venueName)}</span>`) : `<span class="mk-v pub"${title("Public prices, read without a key", from(a))}>${esc(a.venueName)}</span>`);
+  const name = (a) => (a.connected ? (a.paper ? `<span class="mk-v paper"${title("A paper account: no real money", from(a))}>${esc(String(a.venueName || "").replace(/\s*[·-]\s*paper\s*$/i, "") || a.venueName)} · paper</span>` : `<span class="mk-v"${title(from(a))}>${esc(a.venueName)}</span>`) : `<span class="mk-v pub"${title("Public prices, read without a key", from(a))}>${esc(a.venueName)}</span>`);
   const more = at.length > 2 ? ` <span class="dim mk-more" title="${esc(at.slice(2).map((a) => a.venueName).join(", "))}">+${at.length - 2}</span>` : "";
   return `<span class="mk-where">${at.slice(0, 2).map(name).join(" · ")}${more}</span>`;
 }

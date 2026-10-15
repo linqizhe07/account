@@ -63,7 +63,15 @@
  *   GET  /api/account/desk                               THE DESK (account/desk.ts): the account's own agents, as the page draws them — the
  *                                                        objective, the seats and their standing at the door, the session, the equity
  *                                                        and its curve, the leads, the tape, the room
- *   GET  /api/account/desk/catalog                       what hiring offers: the roles and their charters, the house seats' keys, the brain
+ *   GET  /api/account/desk/catalog                       what hiring offers: the roles and their charters, the house seats' keys, the brains
+ *                                                        (each one's standing, and when it cannot think its fix: where the key goes, a
+ *                                                        command that runs as written, whether a restart is needed), the objective's bounds
+ *   GET  /api/account/desk/feed?since=<seq>              the floor's read, asked every second while the Superagent's floor shows: the room's
+ *                                                        lines after `since` (at most 200, oldest first), the seat working now, the brain
+ *                                                        calls in flight and each role's last, the last scan, the autonomy, the session,
+ *                                                        the equity's last points, the funnel, the last leads, the seats and the
+ *                                                        objective, the brain's standing with its fix — the room's tail only, all of one
+ *                                                        moment
  *   GET  /api/account/desk/seat?address=                 the desk as one seat reads it (portfolio_desk): its charter, the room's last lines
  *   GET  /api/account/memory                             what each agent remembers about the owner (account/memory.ts), as the owner
  *                                                        reads it: its notes (the waiting ones too), the switches, what its limits say
@@ -73,7 +81,8 @@
  *                                                        connected from its public data, without a key; kept a minute
  *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
  *                                                        bid and ask only, depth "top"); kept a second and a half
- *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds
+ *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds (a source that
+ *                                                        publishes no trades at all: an empty list and `none`, the sentence saying so, 200)
  *   GET  /api/account/earn?venue=&asset=                 Earn: the products the connected venues offer (the MetaMask Agent Wallet's
  *                                                        vaults through mm, OKX Simple Earn, Kraken Earn), what is in them, and the venues
  *                                                        that could not be read (money in or out is a signed liveEarn / agentLiveEarn)
@@ -304,8 +313,9 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (f === undefined) return void res.sendStatus(404);
     sendPage(req, res, f, ext === "js" ? "application/javascript" : "text/css", req.query.v === f.hash ? KEEP_A_YEAR : "no-cache");
   });
-  // the page's two faces (SIL Open Font License, public/fonts/OFL.txt): a plain name and .woff2, nothing else; named by their version, so
-  // kept a year
+  // the page's three faces (SIL Open Font License, public/fonts/OFL.txt): Manrope for the Account, IBM Plex Mono for hashes and signed
+  // payloads, Inter for the trading area (Hyperliquid's own face). A plain name and .woff2, nothing else; named by their version, so kept a
+  // year
   app.get(/^\/fonts\/([a-z0-9-]+)\.woff2$/, (req, res) => {
     const f = pageFile(join("fonts", `${req.params[0]}.woff2`));
     if (f === undefined) return void res.sendStatus(404);
@@ -604,6 +614,17 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (!mounted(res)) return;
     if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
     res.json({ ok: true, ...svc.desk.catalog() });
+  }));
+  // the floor's read (the Superagent, ui/superagent.js): polled every second, so it reads the room's tail and nothing it need not. `since` is
+  // the room's last seq the page holds: a whole number 0 or more, in digits (none: 0), nothing a number parser would also take
+  app.get("/api/account/desk/feed", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    const q = strings(req, res, { since: 17 });
+    if (!q) return;
+    if (q.since !== "" && !/^\d{1,15}$/.test(q.since)) return void bad(res, "since is the room's last seq the page has: a whole number, 0 or more, in digits");
+    const feed = await svc.desk.feed(q.since === "" ? 0 : Number(q.since));
+    res.json(feed ? { ok: true, ...feed } : { ok: true, desk: null });
   }));
   app.get("/api/account/desk/seat", wrap(async (req, res) => {
     if (!mounted(res)) return;

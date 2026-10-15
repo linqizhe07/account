@@ -12,15 +12,28 @@
      bkMount(el, { venue, symbol, kind, quote, priceStep, base?, rows?, onPrice })
                    draws the panel into el for one market and keeps it fresh: the book read every two seconds while its tab shows, the
                    trades every four while theirs does, and neither while el is out of the document (it stops itself then), its pane is
-                   put aside (shell.js `hidden`: it waits, and reads at once when the pane comes back) or the page is hidden. Mounting el again with another market switches cleanly: every read is tagged with the market it was asked for,
+                   put aside (shell.js `hidden`: it waits, and reads at once when the pane comes back) or the page is hidden. A read the
+                   account refuses — or that never reaches it (a stopped service, a dropped connection) — is asked again later and later —
+                   two seconds, then four, eight … at most a minute apart — until one is answered, so a venue that is not connected, or an
+                   account that is down, is not asked every two seconds for ever; and the panel says so: the refusal's words, or "the
+                   account is not answering", with how long it now waits between asks. While the account does not answer, the book and
+                   the trades last read stay, dimmed, under a line that says since when they were not read (an old book is never taken
+                   for a live one); a refusal, which is the account's or the venue's own word, takes them away. A source that publishes
+                   no trades (the account answers so: `none`) is not asked for them again until the market or the tab changes. Mounting
+                   el again with another market switches cleanly: every read is tagged with the market it was asked for,
                    and an answer for a market no longer showing is dropped. `priceStep` (the market's own tick) sets the prices' precision
                    and the grouping offered (1×, 10×, 100× the tick); `kind: "event"` shows prices in cents. Pressing a row of the ladder
                    calls onPrice(price), the price in the market's quote (an event contract's in dollars: 0.62), which the ticket takes as
                    its limit price. `rows`: how many rows a side the ladder draws; without it, as many whole rows as the panel's height
                    holds (worked out when it is mounted and when its size changes, never as data arrives), so no row is ever cut
      bkRelease(el) stops it: its timers, and any answer still on its way is dropped
-   The pure parts, for the tests and anything else that draws a book: bkGroup · bkLadder · bkSpread · bkSpreadWords · bkTopLine · bkPrice ·
-   bkSize · bkClock · bkGroups. */
+   As HL's does, a level whose size changed since the last read flashes once in its side's colour (bkFlashes; none under reduced motion),
+   and a pointer over a row shows a card beside the panel with what the rows from the best to it add up to (bkReach: the distance from the
+   middle, the average price, the totals in the base and the quote — from the source's own levels; the keyboard's focus on a row shows it
+   too, a finger never).
+   The pure parts, for the tests and anything else that draws a book: bkGroup · bkLadder · bkSpread · bkSpreadParts · bkSpreadWords ·
+   bkSpreadHtml · bkTopLine · bkPrice · bkSize · bkClock · bkGroups · bkFlashes · bkReach · bkReachLines · bkUnanswered (whether a read's body says the account did not answer
+   it: the terminal's bar asks it too) · bkNoWords · bkOldWords. */
 
 /** each mounted panel's state, by its element: the market, the tab, the grouping, what the last reads said, the timers */
 const BK = new WeakMap();
@@ -31,10 +44,16 @@ const BK_BOOK_MS = 2000;
 const BK_TRADES_MS = 4000;
 const BK_ROWS = 9;
 const BK_TRADES = 30;
-/** a row's height, and what the book's pane holds besides its two halves — the head (37), the column heads (26), the spread row (28) and room
- * for the quiet line (30) — as book.css draws them: how many rows a side fit is worked out from these */
-const BK_ROW_PX = 20;
-const BK_CHROME_PX = 37 + 26 + 28 + 30;
+/** a row's pitch — HL's 23-pixel row and the 2 pixels between rows — and what the book's pane holds besides its two halves — the tabs (41),
+ * the controls row (31: the grouping, the size's unit), the column heads (17), the spread row (23) and room for the quiet line (30) — as
+ * book.css draws them: how many rows a side fit is worked out from these (bkFit reads the row's own height where the stylesheet set
+ * another: --bk-row, 24 under a coarse pointer) */
+const BK_ROW_PX = 25;
+const BK_GAP_PX = 2;
+const BK_CHROME_PX = 41 + 31 + 17 + 23 + 30;
+/** a refused read is asked again after this long, doubled each time it is refused again, at most the second figure; an answer resets it */
+const BK_BACKOFF_MS = 2000;
+const BK_BACKOFF_MAX_MS = 60_000;
 
 // ---- the pure parts --------------------------------------------------------------------------------------------------------------------
 
@@ -168,13 +187,28 @@ function bkLadder(book, { rows = BK_ROWS, group = 0 } = {}) {
   return { asks: a.map((r) => ({ ...r, w: share(r) })).reverse(), bids: b.map((r) => ({ ...r, w: share(r) })), spread: bkSpread(book), top };
 }
 
-/** the spread row's words: "Spread 1.0 · 0.0012%" (an event contract's in cents); a dash while a side is empty */
-function bkSpreadWords(book, o) {
+/** the spread row's figures: the spread in the market's own figures (an event contract's in cents) and in percent of the middle — two
+ * figures that count below one percent, never in exponent notation (a spread of a ten-millionth of a percent is "0.0000001%"); null while a
+ * side is empty */
+function bkSpreadParts(book, o) {
   const s = bkSpread(book);
-  if (!s) return book && ((book.bids || []).length || (book.asks || []).length) ? "Spread — · one side of the book is empty" : "Spread —";
-  // two figures that count below one percent, never in exponent notation (a spread of a ten-millionth of a percent is "0.0000001%")
+  if (!s) return null;
   const pct = Math.abs(s.pct) >= 1 ? s.pct.toFixed(2) : s.pct.toLocaleString("en-US", { maximumSignificantDigits: 2, useGrouping: false });
-  return `Spread ${bkPrice(s.abs, o, 1)} · ${pct}%`;
+  return { value: bkPrice(s.abs, o, 1), pct: `${pct}%` };
+}
+/** the spread row's words: "Spread 1.0 · 0.0012%"; a dash while a side is empty — what a screen reader hears of the row, whose three parts
+ * stand apart on the screen (bkSpreadHtml) */
+function bkSpreadWords(book, o) {
+  const s = bkSpreadParts(book, o);
+  if (!s) return book && ((book.bids || []).length || (book.asks || []).length) ? "Spread — · one side of the book is empty" : "Spread —";
+  return `Spread ${s.value} · ${s.pct}`;
+}
+/** the spread row as HL draws it: "Spread", the value and the percent as three figures 32 pixels apart, read out as one sentence */
+function bkSpreadHtml(book, o) {
+  const s = bkSpreadParts(book, o);
+  const words = bkSpreadWords(book, o);
+  if (!s) return `<span class="bk-spread">${esc(words)}</span>`;
+  return `<span class="bk-spread" role="text" aria-label="${esc(words)}"><span aria-hidden="true">Spread</span><span aria-hidden="true">${esc(s.value)}</span><span aria-hidden="true">${esc(s.pct)}</span></span>`;
 }
 
 /** a top-of-book quote older than this has its time said in the quiet line */
@@ -202,24 +236,93 @@ function bkTopLine(book, now = Date.now()) {
 function bkFrame(st) {
   const o = st.o;
   const groups = bkGroups(o.priceStep, o.kind);
-  const unit = o.kind === "event" ? "" : o.quote ? ` (${esc(o.quote)})` : "";
-  const size = o.base ? ` (${esc(o.base)})` : "";
+  // what the prices and the sizes are counted in, said once, at the controls row's right (HL's "BTC") and to a screen reader with the
+  // column heads, which stay one word each so none is ever cut
+  const quote = o.kind === "event" ? "cents" : o.quote || "";
+  const size = o.base || "";
   const select = groups.length > 1 ? `<label class="bk-gw"><span class="sr">Group prices by</span><select class="bk-group" data-bk-group>${groups.map((k) => `<option value="${k}"${k === st.group ? " selected" : ""}>${esc(bkPrice(k * Number(o.priceStep), o, k))}</option>`).join("")}</select></label>` : "";
+  const unit = size ? `<span class="bk-unit" title="${esc(`Sizes and totals in ${size}`)}">${esc(size)}</span>` : "";
+  const heads = (last) => `<div class="bk-cols"><span>Price<span class="sr">${quote ? ` in ${esc(quote)}` : ""}</span></span><span>Size<span class="sr">${size ? ` in ${esc(size)}` : ""}</span></span><span>${last}</span></div>`;
   return `<div class="bk" data-k="bk:${esc(st.key)}">
-<div class="bk-head"><div class="bk-tabs" role="tablist" aria-label="Order book or trades"><button type="button" role="tab" class="bk-tab" data-bk-tab="book" aria-selected="true">Order book</button><button type="button" role="tab" class="bk-tab" data-bk-tab="trades" aria-selected="false">Trades</button></div>${select}</div>
-<div class="bk-pane" data-bk-pane="book" role="tabpanel"><div class="bk-cols" aria-hidden="true"><span>Price${unit}</span><span>Size${size}</span><span>Total${size}</span></div><div class="bk-asks" data-bk-asks></div><div class="bk-mid" data-bk-mid><span class="bk-wait">Reading the book…</span></div><div class="bk-bids" data-bk-bids></div><p class="bk-note" data-bk-note></p></div>
-<div class="bk-pane" data-bk-pane="trades" role="tabpanel" hidden><div class="bk-cols" aria-hidden="true"><span>Price${unit}</span><span>Size${size}</span><span>Time</span></div><div class="bk-tape" data-bk-tape><p class="bk-wait">Reading the trades…</p></div></div>
+<div class="bk-head"><div class="bk-tabs" role="tablist" aria-label="Order book or trades"><button type="button" role="tab" class="bk-tab" data-bk-tab="book" aria-selected="true">Order book</button><button type="button" role="tab" class="bk-tab" data-bk-tab="trades" aria-selected="false">Trades</button></div></div>
+<div class="bk-pane" data-bk-pane="book" role="tabpanel"><div class="bk-ctl">${select}${unit}</div>${heads("Total")}<div class="bk-ladder"><div class="bk-asks" data-bk-asks></div><div class="bk-mid" data-bk-mid><span class="bk-wait">Reading the book…</span></div><div class="bk-bids" data-bk-bids></div></div><p class="bk-note" data-bk-note></p></div>
+<div class="bk-pane" data-bk-pane="trades" role="tabpanel" hidden>${heads("Time")}<div class="bk-tape" data-bk-tape><p class="bk-wait">Reading the trades…</p></div></div>
 </div>`;
 }
 
-/** one row of the ladder: its bar (its running total's share), its price, its size, its running total; a button that hands its price on */
-function bkRowHtml(r, side, o, g) {
+/** one row of the ladder: its bar (its running total's share), its price, its size, its running total; a button that hands its price on.
+ * `flash`: "a" or "b" when the level's size changed since the book was last drawn (bkFlashes) — the row flashes once in its side's colour
+ * (book.css, HL's 800 ms); two names, taken in turn, so a level that changes on two reads running flashes on both */
+function bkRowHtml(r, side, o, g, flash = "") {
   const p = bkPrice(r.p, o, g);
   const w = Math.max(0, Math.min(1, r.w || 0));
   // a row that is only part of its range: its size and its running total are what was read of it, at least that much ("≥"), and it says so
   const least = r.part ? "≥\u2009" : "";
   const title = r.part ? `Use ${p} as the limit price · only part of this range was read: at least this much rests here` : `Use ${p} as the limit price`;
-  return `<div class="bk-row bk-${side}${r.part ? " bk-part" : ""}" role="button" tabindex="0" data-k="${side}:${esc(String(r.p))}${r.part ? ":part" : ""}" data-bk-px="${esc(String(r.p))}" title="${esc(title)}"><span class="bk-bar" style="transform:scaleX(${Number(w.toFixed(4))})"></span><span class="bk-p">${esc(p)}</span><span class="bk-s">${least}${esc(bkSize(r.s))}</span><span class="bk-t">${least}${esc(bkSize(r.t))}</span></div>`;
+  return `<div class="bk-row bk-${side}${r.part ? " bk-part" : ""}${flash ? ` bk-f${flash}` : ""}" role="button" tabindex="0" data-k="${side}:${esc(String(r.p))}${r.part ? ":part" : ""}" data-bk-px="${esc(String(r.p))}" title="${esc(title)}"><span class="bk-bar" style="transform:scaleX(${Number(w.toFixed(4))})"></span><span class="bk-p">${esc(p)}</span><span class="bk-s">${least}${esc(bkSize(r.s))}</span><span class="bk-t">${least}${esc(bkSize(r.t))}</span></div>`;
+}
+
+/** THE LEVELS THAT CHANGED since the book was last drawn at this grouping: a level at the same price on the same side whose size the
+ * source now says is another — never a level that only came into the rows drawn (the ladder's far end moves as the book does) and never one
+ * whose size is not known. Returns the set of `${side}:${price}` keys that changed, and keeps this draw's sizes for the next (st.sizes, by
+ * the grouping they were drawn at: another grouping starts afresh, as does another market — a new state). The first draw flashes nothing */
+function bkFlashes(st, lad, g) {
+  const now = new Map();
+  for (const r of lad.asks) if (r.s !== null && r.s !== undefined) now.set(`ask:${r.p}`, r.s);
+  for (const r of lad.bids) if (r.s !== null && r.s !== undefined) now.set(`bid:${r.p}`, r.s);
+  const was = st.sizes && st.sizesAt === g ? st.sizes : null;
+  st.sizes = now;
+  st.sizesAt = g;
+  const changed = new Set();
+  if (was) for (const [k, s] of now) if (was.has(k) && was.get(k) !== s) changed.add(k);
+  return changed;
+}
+
+/** WHAT A ROW REACHES, for the card beside the book on hover (HL's): every level of the source from the best on the row's side to the row
+ * itself — read from the source's own levels, never the grouped rows' prices (an ask's group holds the levels at or under its price, a bid's
+ * those at or over it, so the levels counted are exactly those of the rows from the best to it) — and what they add up to: the row's
+ * distance from the middle of the best bid and the best ask in percent, the average price of what rests there, and the sizes added up in
+ * the base and in the quote (an event contract's in dollars). Null where a size in the reach is not known (a quote with no depth), or there is
+ * no middle */
+function bkReach(book, side, price) {
+  const levels = book && Array.isArray(side === "ask" ? book.asks : book.bids) ? (side === "ask" ? book.asks : book.bids) : [];
+  const P = Number(price);
+  const s = bkSpread(book);
+  if (!(P > 0) || !s) return null;
+  const eps = Math.abs(P) * 1e-12;
+  let base = 0;
+  let quote = 0;
+  for (const l of levels) {
+    const p = Number(l && l[0]);
+    if (!(p > 0) || (side === "ask" ? p > P + eps : p < P - eps)) continue;
+    if (l[1] === null || l[1] === undefined || !Number.isFinite(Number(l[1]))) return null;
+    base += Number(l[1]);
+    quote += p * Number(l[1]);
+  }
+  if (!(base > 0)) return null;
+  const bid = Number(book.bids[0][0]);
+  const ask = Number(book.asks[0][0]);
+  const mid = (bid + ask) / 2;
+  return { dist: ((P - mid) / mid) * 100, avg: quote / base, base: Number(base.toPrecision(12)), quote: Number(quote.toPrecision(12)) };
+}
+/** the card's four lines, as words: [label, value] — the distance with its sign, two figures below one percent; the average to the market's
+ * own step (it is an average: no tail no venue quotes; an event's in cents to a tenth); the totals as the ladder writes sizes, and in the
+ * quote to the cent. `part`: the row is only part of its range — its totals at least ("≥") */
+function bkReachLines(reach, o, part = false) {
+  const ev = o && o.kind === "event";
+  const a = Math.abs(reach.dist);
+  const dist = `${reach.dist > 0 ? "+" : reach.dist < 0 ? "−" : ""}${a >= 1 ? a.toFixed(2) : a.toLocaleString("en-US", { maximumSignificantDigits: 2, useGrouping: false })}%`;
+  const dec = Number(o && o.priceStep) > 0 ? (bkDecimals(Number(o.priceStep)) ?? 2) : 2;
+  const avg = ev ? `${Number((reach.avg * 100).toFixed(1))}¢` : reach.avg.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  const least = part ? "≥\u2009" : "";
+  const quote = ev ? "USD" : (o && o.quote) || "";
+  const base = (o && o.base) || "";
+  return [
+    ["Distance from mid", dist],
+    ["Average price", avg],
+    [`Total${base ? ` (${base})` : ""}`, `${least}${bkSize(reach.base)}`],
+    [`Total${quote ? ` (${quote})` : ""}`, `${least}${reach.quote.toLocaleString("en-US", { maximumFractionDigits: 2 })}`],
+  ];
 }
 
 /** the book's pane drawn from what the last read said: the ladder, the spread row, the quiet line — or the refusal's words in the middle */
@@ -232,8 +335,10 @@ function bkDrawBook(el, st) {
   if (st.bookNo) {
     paint(asks, "");
     paint(bids, "");
-    paint(mid, `<span class="${st.bookNo.quiet ? "bk-wait" : "bk-no"}" role="status">${esc(st.bookNo.words)}</span>`);
+    paint(mid, `<span class="${st.bookNo.quiet ? "bk-wait" : "bk-no"}" role="status">${esc(bkNoWords(st.bookNo, st.wait.book))}</span>`);
     paint(note, "");
+    bkTop(el, false);
+    bkOld(el, false);
     return;
   }
   const book = st.book;
@@ -243,22 +348,47 @@ function bkDrawBook(el, st) {
   const step = Number(st.o.priceStep);
   const lad = bkLadder(book, { rows: st.rows, group: g > 1 && step > 0 ? Number((g * step).toPrecision(12)) : 0 });
   const shown = g;
-  paint(asks, lad.asks.map((r) => bkRowHtml(r, "ask", st.o, shown)).join(""));
-  paint(bids, lad.bids.map((r) => bkRowHtml(r, "bid", st.o, shown)).join(""));
-  paint(mid, !lad.asks.length && !lad.bids.length ? '<span class="bk-wait">No orders on the book just now</span>' : `<span class="bk-spread">${esc(bkSpreadWords(book, st.o))}</span>`);
-  paint(note, esc(bkTopLine(book)));
+  // the levels whose size changed since the last draw flash once (bkFlashes); the two names are taken in turn, one per draw
+  const changed = bkFlashes(st, lad, g);
+  if (changed.size) st.flip = st.flip === "a" ? "b" : "a";
+  const fl = (side, r) => (changed.has(`${side}:${r.p}`) ? st.flip : "");
+  paint(asks, lad.asks.map((r) => bkRowHtml(r, "ask", st.o, shown, fl("ask", r))).join(""));
+  paint(bids, lad.bids.map((r) => bkRowHtml(r, "bid", st.o, shown, fl("bid", r))).join(""));
+  st.lad = lad;
+  bkCardAgain(el, st);
+  paint(mid, !lad.asks.length && !lad.bids.length ? '<span class="bk-wait">No orders on the book just now</span>' : bkSpreadHtml(book, st.o));
+  // a book kept while the account does not answer: said over its quiet line, in the warning colour, and the ladder dimmed (bkOld)
+  const top = bkTopLine(book);
+  paint(note, st.bookOld ? `<span class="bk-oldline" role="status">${esc(bkOldWords(st.bookOld, st.wait.book))}</span>${top ? ` ${esc(top)}` : ""}` : esc(top));
+  bkOld(el, !!st.bookOld);
+  // a book of its best bid and ask only: the panel says so on its root (book.css centres the two rows and the line under them, rather
+  // than leaving them adrift in a ladder's height)
+  bkTop(el, book.depth === "top");
   bkGroupShown(el, st);
+}
+/* the root's mark for a book of its best bid and ask only (C7: bk-top), set and taken away as the reads say */
+function bkTop(el, top) {
+  const root = el.querySelector(".bk");
+  if (root && root.classList && typeof root.classList.toggle === "function") root.classList.toggle("bk-top", !!top);
+}
+/* the root's mark for a book kept while the account does not answer (bk-old: book.css dims its ladder), set and taken away as the reads say */
+function bkOld(el, old) {
+  const root = el.querySelector(".bk");
+  if (root && root.classList && typeof root.classList.toggle === "function") root.classList.toggle("bk-old", !!old);
 }
 
 /** the trades' pane: time, price (coloured by the side that took it, where the source says, with the side in words for a screen reader),
  * size — or the refusal's words */
 function bkDrawTrades(el, st) {
   const tape = el.querySelector("[data-bk-tape]");
-  if (st.tradesNo) return void paint(tape, `<p class="${st.tradesNo.quiet ? "bk-wait" : "bk-no"}" role="status">${esc(st.tradesNo.words)}</p>`);
+  if (st.tradesNo) return void paint(tape, `<p class="${st.tradesNo.quiet ? "bk-wait" : "bk-no"}" role="status">${esc(bkNoWords(st.tradesNo, st.wait.trades))}</p>`);
   if (!st.trades) return;
-  if (!st.trades.length) return void paint(tape, '<p class="bk-wait">No trades just now</p>');
+  // the trades kept while the account does not answer: the line over them says since when they were not read
+  const old = st.tradesOld ? `<p class="bk-oldline" role="status" data-k="old">${esc(bkOldWords(st.tradesOld, st.wait.trades))}</p>` : "";
+  if (!st.trades.length) return void paint(tape, `${old}<p class="bk-wait">No trades just now</p>`);
   paint(
     tape,
+    old +
     st.trades
       .map((t, i) => {
         const side = t.side === "buy" ? "buy" : t.side === "sell" ? "sell" : "";
@@ -268,10 +398,74 @@ function bkDrawTrades(el, st) {
   );
 }
 
-/** the tab showing, on the tabs and the panes (set directly: the frame is not drawn again for it) */
+/* ---- the card beside the book (HL's hover card) -------------------------------------------------------------------------------- */
+/** The card for one row, beside the panel on its left (HL's place for it), centred on the row: what the row reaches (bkReach), drawn only
+ * where a pointer hovers (a touch screen never keeps one stuck) or a row has the keyboard's focus, and only where every size it adds is known.
+ * It is laid at a fixed place on the screen; the box it is fixed to is measured (a container on the way to the window holds fixed boxes too),
+ * so it lands beside the row wherever the panel is mounted. Gone when the pointer or the focus leaves the rows, when the book is no longer
+ * drawn, or when the row is not on it any more */
+function bkCardShow(el, st, row) {
+  const root = el.querySelector(".bk");
+  if (!root || !row || typeof row.getBoundingClientRect !== "function" || !st.book || st.bookNo) return bkCardHide(el, st);
+  const side = row.classList && row.classList.contains("bk-ask") ? "ask" : "bid";
+  const price = Number(row.dataset.bkPx);
+  const reach = bkReach(st.book, side, price);
+  if (!reach) return bkCardHide(el, st);
+  const part = !!(row.classList && row.classList.contains("bk-part"));
+  let card = root.querySelector(".bk-card");
+  if (!card) {
+    root.insertAdjacentHTML("beforeend", '<div class="bk-card" aria-hidden="true"></div>');
+    card = root.querySelector(".bk-card");
+  }
+  st.cardRow = `${side}:${price}`;
+  paint(card, bkReachLines(reach, st.o, part).map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join(""));
+  // where the card's fixed box starts on the screen (its own place at 0, 0), then the row and the panel: beside the panel, centred on the row
+  card.style.left = "0px";
+  card.style.top = "0px";
+  card.hidden = false;
+  const o = card.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  const b = el.getBoundingClientRect();
+  const left = b.left - o.width - 8 >= 0 ? b.left - o.width - 8 : b.right + 8;
+  card.style.left = `${Math.round(left - o.left)}px`;
+  card.style.top = `${Math.round(Math.max(4, r.top + r.height / 2 - o.height / 2) - o.top)}px`;
+}
+function bkCardHide(el, st) {
+  st.cardRow = "";
+  const card = el.querySelector(".bk .bk-card");
+  if (card) card.hidden = true;
+}
+/* the book drawn again while the card shows: the card follows the row it was for (its figures from this read), or goes with it */
+function bkCardAgain(el, st) {
+  if (!st.cardRow) return;
+  const [side, price] = st.cardRow.split(":");
+  const row = typeof el.querySelector === "function" ? el.querySelector(`.bk-${side}[data-bk-px="${price}"]`) : null;
+  if (row) bkCardShow(el, st, row);
+  else bkCardHide(el, st);
+}
+/* a pointer that hovers (not a finger): the card is for it */
+const bkHovers = () => typeof matchMedia === "function" && matchMedia("(hover: hover)").matches;
+
+/** THE SLIDING UNDERLINE, as HL's tab bars draw it: one accent line under the bar that moves to the tab pressed (left and width over .3 s).
+ * The bar's --tab-x and --tab-w are set from the pressed tab's own place and width, and its class slide-under draws the line as one ::after
+ * the width of that tab and takes the pressed tab's own static line away (book.css for the book's tabs; terminal.css for the tables' and the
+ * narrow terminal's, which call this too). Until it has run — a page that cannot measure, a bar with no box — the pressed tab keeps its own
+ * static line, so a tab bar is never without one. Called whenever the tab pressed changes and whenever the bar's size changes. `pressed`:
+ * how the bar marks the tab pressed, where it is not aria-selected alone (the order panel's Pro, a select: .tk-pro.on) */
+function bkSlideUnder(bar, pressed = '[aria-selected="true"]') {
+  if (!bar || typeof bar.querySelector !== "function" || !bar.style || typeof bar.style.setProperty !== "function") return;
+  const on = bar.querySelector(pressed);
+  if (!on || !(on.offsetWidth > 0)) return;
+  bar.style.setProperty("--tab-x", `${on.offsetLeft}px`);
+  bar.style.setProperty("--tab-w", `${on.offsetWidth}px`);
+  if (bar.classList && typeof bar.classList.add === "function") bar.classList.add("slide-under");
+}
+
+/** the tab showing, on the tabs and the panes (set directly: the frame is not drawn again for it), its line slid under it */
 function bkShowTab(el, st) {
   for (const b of el.querySelectorAll("[data-bk-tab]")) b.setAttribute("aria-selected", String(b.dataset.bkTab === st.tab));
   for (const p of el.querySelectorAll("[data-bk-pane]")) p.hidden = p.dataset.bkPane !== st.tab;
+  bkSlideUnder(el.querySelector(".bk-tabs"));
   bkGroupShown(el, st);
 }
 
@@ -281,12 +475,50 @@ function bkGroupShown(el, st) {
   if (gw) gw.hidden = st.tab !== "book" || !!(st.book && st.book.depth === "top");
 }
 
+/** the browser's own words for a request that never reached the account — a stopped service, a dropped connection ("Failed to fetch",
+ * "Load failed", "NetworkError when attempting to fetch resource.") — or for an answer that was not the account's (a gateway's "502 Bad
+ * Gateway"): core api gives either as { ok: false, error } with no refusal */
+const BK_UNANSWERED = /^(Failed to fetch|Load failed|NetworkError\b|fetch failed|The network connection was lost|The Internet connection appears to be offline|\d{3}\b)/i;
+/** a read the account did not answer: no body at all, or core api's { ok: false, error } for a request that never reached it (`b` may be
+ * that body, or the words a read already took from one). Never a refusal: that is the account's own sentence, and an error the account
+ * wrote itself (its 500's "The account hit an error answering this") is its own words too */
+function bkUnanswered(b) {
+  if (b === undefined || b === null) return true;
+  if (typeof b === "string") return BK_UNANSWERED.test(b.trim());
+  if (b.ok !== false || b.refusal) return false;
+  const e = String(b.error || "").trim();
+  return !e || BK_UNANSWERED.test(e);
+}
 /** a refusal's words in the panel: a source that publishes no book or no trades (E_VENUE_RAIL_CLOSED) said quietly, as a fact of the
- * source; any other refusal — a place rule, no answer — in the warning colour */
+ * source; the account not answering at all in the page's own words (never the browser's error as it was thrown); any other refusal — a
+ * place rule, a venue not connected — in its own words; all but the quiet ones in the warning colour */
 function bkSaid(body, fallback) {
+  if (bkUnanswered(body)) return { words: "The account is not answering", quiet: false, unanswered: true };
   const words = refusalOf(body) || fallback;
   const quiet = !!(body && body.refusal && body.refusal.code === "E_VENUE_RAIL_CLOSED");
   return { words, quiet };
+}
+/** what the panel says of a read that failed: its words (bkSaid) and — but for a source's quiet fact — how long it now waits between asks
+ * (bkMissed: two seconds, doubling, at most a minute), so a panel that has gone still says it is still asking */
+function bkNoWords(no, wait) {
+  const words = String(no.words || "").replace(/[.\s]+$/, "");
+  return no.quiet || !(wait > 0) ? words : `${words}. Asking again every ${Math.round(wait / 1000)} s.`;
+}
+/** the line over a book or trades kept while the account does not answer: since when they were not read (the viewer's clock, as the
+ * book's own times are), why, and how long it now waits between asks */
+function bkOldWords(since, wait) {
+  return bkNoWords({ words: `Not read since ${bkClock(since)}: the account is not answering` }, wait);
+}
+/** a refused read of `what` ("book" or "trades") is asked again later each time: two seconds, then twice as long each refusal more, at
+ * most a minute; an answer resets it, so the next read is on the tab's own beat again */
+function bkMissed(st, what, refused) {
+  if (!refused) {
+    st.wait[what] = 0;
+    st.next[what] = 0;
+    return;
+  }
+  st.wait[what] = Math.min(BK_BACKOFF_MAX_MS, Math.max(BK_BACKOFF_MS, st.wait[what] * 2));
+  st.next[what] = Date.now() + st.wait[what];
 }
 
 // ---- reading -----------------------------------------------------------------------------------------------------------------------------
@@ -308,7 +540,15 @@ function bkFit(el, st) {
   const root = el.querySelector(".bk");
   const h = root ? Number(root.clientHeight) : NaN;
   if (!(h > 0)) return false;
-  const n = Math.max(3, Math.min(25, Math.floor((h - BK_CHROME_PX) / (2 * BK_ROW_PX))));
+  // the row's pitch: its own height as the stylesheet sets it (--bk-row) and the gap under it, else HL's 23 and 2
+  let row = NaN;
+  try {
+    row = parseFloat(getComputedStyle(root).getPropertyValue("--bk-row"));
+  } catch {
+    row = NaN;
+  }
+  const pitch = row > 0 ? row + BK_GAP_PX : BK_ROW_PX;
+  const n = Math.max(3, Math.min(25, Math.floor((h - BK_CHROME_PX) / (2 * pitch))));
   if (root.style && typeof root.style.setProperty === "function") root.style.setProperty("--bk-n", String(n));
   if (n === st.rows) return false;
   st.rows = n;
@@ -344,37 +584,62 @@ async function bkReadBook(el, st) {
   const body = await api(`/api/account/book?${new URLSearchParams({ venue: st.o.venue, symbol: st.o.symbol, depth: String(depth) })}`);
   if (BK.get(el) !== st || !st.alive || ask < st.bookDrawn) return;
   st.bookDrawn = ask;
-  if (body && body.ok && body.book) {
+  const read = !!(body && body.ok && body.book);
+  if (read) {
     st.book = body.book;
     st.bookNo = null;
+    st.bookAt = Date.now();
+    st.bookOld = 0;
+  } else if (st.book && bkUnanswered(body)) {
+    // the account did not answer: the book last read stays, dimmed, said as not read since then — never passed off as live
+    st.bookOld = st.bookAt || Date.now();
   } else {
     st.book = null;
+    st.bookOld = 0;
     st.bookNo = bkSaid(body, "The book could not be read just now");
   }
+  bkMissed(st, "book", !read);
   bkDrawBook(el, st);
 }
 
-/** one read of the latest trades, on the same terms */
+/** one read of the latest trades, on the same terms. A source that publishes no trades the account can read is an answer, not a refusal
+ * (C7: HTTP 200, `none` in its words; an older account refused it, E_VENUE_RAIL_CLOSED, and is heard the same way): its words, said
+ * quietly, and no more asking until the market or the tab changes (st.tradesQuiet) */
 async function bkReadTrades(el, st) {
   const ask = ++st.tradesAsked;
   const body = await api(`/api/account/trades?${new URLSearchParams({ venue: st.o.venue, symbol: st.o.symbol, limit: String(BK_TRADES) })}`);
   if (BK.get(el) !== st || !st.alive || ask < st.tradesDrawn) return;
   st.tradesDrawn = ask;
-  if (body && body.ok && Array.isArray(body.trades)) {
+  const none = body && body.ok && typeof body.none === "string" && body.none.trim() ? body.none.trim() : "";
+  if (none) {
+    st.trades = null;
+    st.tradesNo = { words: none, quiet: true };
+    st.tradesOld = 0;
+  } else if (body && body.ok && Array.isArray(body.trades)) {
     st.trades = body.trades;
     st.tradesNo = null;
+    st.tradesAt = Date.now();
+    st.tradesOld = 0;
+  } else if (st.trades && bkUnanswered(body)) {
+    // the account did not answer: the trades last read stay, under a line that says since when
+    st.tradesOld = st.tradesAt || Date.now();
   } else {
     st.trades = null;
+    st.tradesOld = 0;
     st.tradesNo = bkSaid(body, "The trades could not be read just now");
   }
+  st.tradesQuiet = !!(st.tradesNo && st.tradesNo.quiet);
+  bkMissed(st, "trades", !!st.tradesOld || (!!st.tradesNo && !st.tradesQuiet));
   bkDrawTrades(el, st);
 }
+/* the read `what` may be asked on its beat now: its tab showing, not quiet (trades a source does not publish), not waiting out a refusal */
+const bkDue = (st, what) => st.tab === what && !(what === "trades" && st.tradesQuiet) && Date.now() >= st.next[what];
 
 /** the next read of `what` in `ms`, while the panel lives; a read only while its tab shows and the page is visible */
 function bkLoop(el, st, what, ms) {
   const tick = () => {
     if (!st.alive || BK.get(el) !== st) return;
-    if (bkLive(el, st) && st.tab === what) void (what === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
+    if (bkLive(el, st) && bkDue(st, what)) void (what === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
     if (st.alive) st.timers[what] = setTimeout(tick, ms);
   };
   st.timers[what] = setTimeout(tick, ms);
@@ -392,8 +657,12 @@ function bkWire(el) {
       const want = tab.dataset.bkTab === "trades" ? "trades" : "book";
       if (want !== st.tab) {
         st.tab = want;
+        bkCardHide(el, st);
         bkShowTab(el, st);
-        // the tab coming in is read at once, then on its own beat
+        // the tab coming in is read at once, then on its own beat: pressing it asks again whatever the last read said (a source that
+        // publishes no trades is asked once more, and is quiet again if it still does not)
+        st.tradesQuiet = false;
+        st.next[want] = 0;
         void (want === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
       }
       return true;
@@ -407,6 +676,30 @@ function bkWire(el) {
     return false;
   };
   el.addEventListener("click", (e) => void press(e.target));
+  // the card beside the book: a row under a hovering pointer, or a row with the keyboard's focus
+  const rowOf = (t) => (t && typeof t.closest === "function" ? t.closest("[data-bk-px]") : null);
+  el.addEventListener("mouseover", (e) => {
+    const st = BK.get(el);
+    const row = rowOf(e.target);
+    if (!st || !bkHovers()) return;
+    // between two rows (the two pixels that part them) the card stays as it is; anywhere else off the rows it goes
+    const inLadder = !!(e.target && typeof e.target.closest === "function" && e.target.closest(".bk-ladder"));
+    if (!row || !el.contains(row)) return void (st.cardRow && !inLadder && bkCardHide(el, st));
+    if (st.cardRow !== `${row.classList.contains("bk-ask") ? "ask" : "bid"}:${Number(row.dataset.bkPx)}`) bkCardShow(el, st, row);
+  });
+  el.addEventListener("mouseleave", () => {
+    const st = BK.get(el);
+    if (st) bkCardHide(el, st);
+  });
+  el.addEventListener("focusin", (e) => {
+    const st = BK.get(el);
+    const row = rowOf(e.target);
+    if (st && row && el.contains(row)) bkCardShow(el, st, row);
+  });
+  el.addEventListener("focusout", () => {
+    const st = BK.get(el);
+    if (st) bkCardHide(el, st);
+  });
   el.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && e.target && e.target.dataset && e.target.dataset.bkPx !== undefined && press(e.target)) e.preventDefault();
   });
@@ -427,7 +720,7 @@ function bkMount(el, o) {
   if (!el || !o || !o.venue || !o.symbol) return;
   bkRelease(el);
   const fixed = Number.isInteger(o.rows) && o.rows > 0 && o.rows <= 50;
-  const st = { key: `${o.venue}|${o.symbol}`, o, rows: fixed ? o.rows : BK_ROWS, fixed, tab: "book", group: 1, book: null, bookNo: null, trades: null, tradesNo: null, bookAsked: 0, bookDrawn: 0, tradesAsked: 0, tradesDrawn: 0, timers: {}, alive: true, watch: null };
+  const st = { key: `${o.venue}|${o.symbol}`, o, rows: fixed ? o.rows : BK_ROWS, fixed, tab: "book", group: 1, book: null, bookNo: null, bookAt: 0, bookOld: 0, trades: null, tradesNo: null, tradesAt: 0, tradesOld: 0, tradesQuiet: false, bookAsked: 0, bookDrawn: 0, tradesAsked: 0, tradesDrawn: 0, wait: { book: 0, trades: 0 }, next: { book: 0, trades: 0 }, timers: {}, alive: true, watch: null, sizes: null, sizesAt: 0, flip: "", cardRow: "", lad: null };
   BK.set(el, st);
   paint(el, bkFrame(st));
   bkShowTab(el, st);
@@ -442,10 +735,12 @@ function bkMount(el, o) {
   if (typeof ResizeObserver === "function") {
     st.watch = new ResizeObserver(() => {
       if (BK.get(el) !== st) return;
+      // the two tabs share the panel's width: the line under the one showing follows it
+      bkSlideUnder(el.querySelector(".bk-tabs"));
       if (bkFit(el, st)) bkDrawBook(el, st);
       const was = st.shown;
       st.shown = bkLaidOut(el);
-      if (st.shown && !was && bkLive(el, st)) void (st.tab === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
+      if (st.shown && !was && bkLive(el, st) && bkDue(st, st.tab)) void (st.tab === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
     });
     st.watch.observe(el);
   }

@@ -4,9 +4,11 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Account</title>
-<script>/* the background before the first paint: Cream, unless this browser chose Black */
+<script>/* the background before the first paint: Cream, unless this browser chose Black; a link straight to the trading area (Trade,
+   either mode) is dark green from its first paint, whichever background (ui/tokens.css, html[data-area]) */
 (function () { var t = "cream"; try { t = localStorage.getItem("account.theme") || t; } catch (e) {}
-document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "cream"); })();</script>
+document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "cream");
+try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentElement.setAttribute("data-area", "trade"); } catch (e) {} })();</script>
 <!-- the page's face, from this account (ui/tokens.css names every file): asked for at once, so the first paint is already in it -->
 <link rel="preload" href="/fonts/manrope-v20-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/ui/tokens.css" />
@@ -20,6 +22,7 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
 <link rel="stylesheet" href="/ui/book.css" />
 <link rel="stylesheet" href="/ui/live.css" />
 <link rel="stylesheet" href="/ui/desk.css" />
+<link rel="stylesheet" href="/ui/superagent.css" />
 </head>
 <body>
 <!-- the page's icons: stroke drawings of its own (no venue's or wallet's logo). icon("name") in ui/core.js draws one -->
@@ -60,6 +63,7 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
   <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z" /></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></symbol>
   <symbol id="i-preipo" viewBox="0 0 24 24"><path d="M4 16 9 11l3 3 7-8" /><path d="M15 6h4v4" /><path d="M4 20h2M9 20h2M14 20h2M19 20h1" /></symbol>
+  <symbol id="i-superagent" viewBox="0 0 24 24"><path d="M12 6.5c5 0 7 2.2 7 7s-2.6 6.5-7 6.5-7-1.7-7-6.5 2-7 7-7z" /><path d="M9.6 12.5v2M14.4 12.5v2" /><path d="M12 2.5v2M16.8 3.8l-1.2 1.6M7.2 3.8l1.2 1.6" /></symbol>
 </svg>
 <a class="skip" href="#main">Skip to the page</a>
 <div class="app">
@@ -82,6 +86,9 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
 
   <main class="main" id="main" tabindex="-1" aria-busy="true" data-at="account">
     <header class="topbar">
+      <!-- the trading area's two modes, drawn once for both panes so the switch never moves under the pointer (shell.js wires it; shown only
+           in the area, html[data-area="trade"]): Regular, your own orders; Superagent, the desk trading a paper account by itself -->
+      <div class="ta-mode" id="trade-mode" role="group" aria-label="How you trade" data-only="trade-area"><button type="button" data-trade-mode="regular" aria-pressed="true" aria-describedby="tm-regular">Regular</button><button type="button" data-trade-mode="superagent" aria-pressed="false" aria-describedby="tm-superagent">Superagent</button><span class="sr" id="tm-regular">You place your own orders.</span><span class="sr" id="tm-superagent">The account's desk of AI seats trades a paper account by itself while you watch. Paper money only.</span></div>
       <div class="acct-h" data-only="account">Account</div>
       <button type="button" class="lens" id="lens" aria-haspopup="menu" aria-expanded="false" aria-controls="lens-menu"><span id="lens-name">All accounts</span><svg class="ico sm" aria-hidden="true"><use href="#i-chevron"></use></svg></button>
       <div class="menu" id="lens-menu" role="menu" aria-label="Show" hidden></div>
@@ -111,6 +118,8 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
     <section class="pane" data-pane="trade" aria-labelledby="h-trade" hidden><h1 class="sr" id="h-trade">Trade</h1><div id="pane-trade"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     <!-- the desk: the account's own agents (ui/desk.js), opened from the rail's Agents -->
     <section class="pane" data-pane="desk" aria-labelledby="h-desk" hidden><h1 class="sr" id="h-desk">Agents</h1><div id="pane-desk"><div class="skel-rows" aria-hidden="true"><span class="skel big"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
+    <!-- the superagent: the desk trading a paper account by itself, as a live floor (ui/floor.js draws it, ui/superagent.js reads it) -->
+    <section class="pane" data-pane="superagent" aria-labelledby="h-superagent" hidden><h1 class="sr" id="h-superagent">Superagent</h1><div id="pane-superagent"><div class="skel-rows" aria-hidden="true"><span class="skel big"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     </div>
   </main>
 </div>
@@ -138,6 +147,8 @@ document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "c
 <script defer src="/ui/book.js"></script>
 <script defer src="/ui/terminal.js"></script>
 <script defer src="/ui/desk.js"></script>
+<script defer src="/ui/floor.js"></script>
+<script defer src="/ui/superagent.js"></script>
 <script defer src="/ui/statement.js"></script>
 <script defer src="/ui/agents-mount.js"></script>
 <script defer src="/ui/shell.js"></script>

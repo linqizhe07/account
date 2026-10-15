@@ -168,11 +168,12 @@ describe("fix round · what the panes draw", () => {
     const stop = { ...base, id: "ord-0003", side: "sell", type: "stop", stopPrice: 58000, status: "open", ref: "p3", exitOf: { order: "ord-0001", kind: "stop-loss" } };
     p.set("A", account([venue("paper-1", "Paper account", { paper: true })], { orders: [stop, entry] }));
     expect(p.out(`[byOf(${JSON.stringify(stop)}), byOf(${JSON.stringify({ ...stop, exitOf: { order: "ord-0001", kind: "take-profit" } })}), byOf(${JSON.stringify(entry)})]`)).toEqual(["Claude Code, stop-loss of ord-0001", "Claude Code, take-profit of ord-0001", "Claude Code, approved by you"]);
-    // the rows as Under way draws them: the exit's says whose exit it is, never "inside its limit"
+    // the rows as Under way draws them (HL's Open Orders table, a By column of its own): the exit's says whose exit it is, never "inside
+    // its limit"
     p.run('var SEC = { innerHTML: "", addEventListener() {}, contains: () => false }; tkDrawOpen(SEC, false)');
     const drawn = p.run<string>("SEC.innerHTML");
-    expect(drawn).toContain("by Claude Code, stop-loss of ord-0001");
-    expect(drawn).toContain("by Claude Code, approved by you");
+    expect(drawn).toContain("<td>Claude Code, stop-loss of ord-0001</td>");
+    expect(drawn).toContain("<td>Claude Code, approved by you</td>");
     expect(drawn).not.toContain("inside its limit");
   });
 

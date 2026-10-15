@@ -496,21 +496,21 @@ describe("stops, trailing stops and brackets", () => {
     const { t } = await open(h);
     const why = async (o: Partial<OrderRequest>) => refusal(await t.place(order({ qty: 0.01, ...o }))).message;
     // a market buy fills at the ask (60,012): its take-profit must be above it
-    expect(await why({ takeProfit: 59000 })).toBe("Paper account: the take-profit (59000) must be above the entry (60012) for a buy");
+    expect(await why({ takeProfit: 59000 })).toBe("Paper account: the take-profit (59,000) must be above the entry (60,012) for a buy");
     // a buy limited at 70,000 crosses the ask and fills at 60,012: a stop-loss at 65,000 would sell at once
-    expect(await why({ type: "limit", limitPrice: 70000, stopLoss: 65000 })).toBe("Paper account: the stop-loss (65000) must be below the entry (60012) for a buy: a buy limited at 70000 crosses the book and fills there, at 60012");
+    expect(await why({ type: "limit", limitPrice: 70000, stopLoss: 65000 })).toBe("Paper account: the stop-loss (65,000) must be below the entry (60,012) for a buy: a buy limited at 70,000 crosses the book and fills there, at 60,012");
     // a sell limited at 50,000 fills at the bid (59,988): a stop-loss at 55,000 is under that fill
-    expect(await why({ side: "sell", type: "limit", limitPrice: 50000, stopLoss: 55000 })).toBe("Paper account: the stop-loss (55000) must be above the entry (59988) for a sell: a sell limited at 50000 crosses the book and fills there, at 59988");
+    expect(await why({ side: "sell", type: "limit", limitPrice: 50000, stopLoss: 55000 })).toBe("Paper account: the stop-loss (55,000) must be above the entry (59,988) for a sell: a sell limited at 50,000 crosses the book and fills there, at 59,988");
     // a sell's take-profit is under its limit, the worst fill for it
-    expect(await why({ side: "sell", type: "limit", limitPrice: 60500, takeProfit: 61000 })).toBe("Paper account: the take-profit (61000) must be below the entry (60500) for a sell");
+    expect(await why({ side: "sell", type: "limit", limitPrice: 60500, takeProfit: 61000 })).toBe("Paper account: the take-profit (61,000) must be below the entry (60,500) for a sell");
     expect(book(h).cashUsd).toBe(10000);
     // a crossing limit's take-profit is judged at its limit, its stop-loss at the fill
     expect(ok(await t.place(order({ qty: 0.01, type: "limit", limitPrice: 70000, takeProfit: 72000, stopLoss: 59000 }))).status).toBe("filled");
     // a resting bracketed entry changed in place: its exits are checked against the entry as changed
     const entry = ok(await t.place(order({ qty: 0.01, type: "limit", limitPrice: 59000, takeProfit: 60000, stopLoss: 58000 })));
     expect(entry.status).toBe("open");
-    expect(refusal(await t.amend!(entry.ref, "BTC/USD", { limitPrice: 57000 }, order())).message).toBe("Paper account: the stop-loss (58000) must be below the entry (57000) for a buy");
-    expect(refusal(await t.amend!(entry.ref, "BTC/USD", { limitPrice: 61000 }, order())).message).toBe("Paper account: the take-profit (60000) must be above the entry (61000) for a buy");
+    expect(refusal(await t.amend!(entry.ref, "BTC/USD", { limitPrice: 57000 }, order())).message).toBe("Paper account: the stop-loss (58,000) must be below the entry (57,000) for a buy");
+    expect(refusal(await t.amend!(entry.ref, "BTC/USD", { limitPrice: 61000 }, order())).message).toBe("Paper account: the take-profit (60,000) must be above the entry (61,000) for a buy");
     expect(book(h).orders[entry.ref]).toMatchObject({ status: "open", limitPrice: 59000 });
     expect(ok(await t.amend!(entry.ref, "BTC/USD", { limitPrice: 58500 }, order())).status).toBe("open");
   });
@@ -583,7 +583,7 @@ describe("perpetuals with leverage: isolated margin, funding each hour, liquidat
       expect(book(h).cashUsd).toBeCloseTo(cash, 6);
       const last = book(h).fills.at(-1)!;
       expect(last).toMatchObject({ symbol: "BTC-PERP", side: "sell", qty: 0.1, price: 54000 });
-      expect(last.note).toContain("liquidated at the mark (54000)");
+      expect(last.note).toContain("liquidated at the mark (54,000)");
       expect(Object.values(book(h).orders).at(-1)).toMatchObject({ status: "filled", reduceOnly: true, symbol: "BTC-PERP" });
       // a short at 1x (the market's most is 1x, so the maintenance margin is half the notional) is liquidated once the price has risen by a third
       const short = ok(await t.place(order({ symbol: "ETH-PERP", side: "sell", qty: 1 })));
@@ -988,7 +988,7 @@ describe("isolated margin: a perpetual's own margin, and nothing more, is lost",
     now += 10_000;
     await src.settle!();
     expect(book(h).positions).toEqual({});
-    expect(book(h).fills.at(-1)!.note).toContain("liquidated at the mark (60005)");
+    expect(book(h).fills.at(-1)!.note).toContain("liquidated at the mark (60,005)");
     expect(book(h).cashUsd).toBeCloseTo(10000 - 300.085005 - 6.0017001, 6);
   });
 

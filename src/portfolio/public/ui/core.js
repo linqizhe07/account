@@ -12,8 +12,17 @@
      busy         an owner action is being signed and sent                            view  { month, account, type, agent } the statement's
      flash, said  a refusal / what was done: set them, then load() or render(), and          filters · lens: the top bar's lens, see lensNow()
                   the shell shows each once as a toast
-     ROUTE        { tab: "portfolio" | "venues" | "memory" | "markets" | "trade", params } from the hash (#/markets?tab=crypto&q=btc ·
-                  #/trade?kind=perps); the first three are the Account (ACCOUNT_TABS), opened from the rail's foot
+     ROUTE        { tab: "portfolio" | "venues" | "memory" | "markets" | "trade" | "desk" | "superagent", params } from the hash
+                  (#/markets?tab=crypto&q=btc · #/trade?kind=perps · #/trade?mode=superagent&venue=paper-1); the first three and the
+                  desk are the Account (ACCOUNT_TABS), the first three opened from the rail's foot. Trade and the superagent are the
+                  TRADING AREA (TRADE_AREA), one place in two modes the owner switches in one click from the top bar's Regular ·
+                  Superagent: Regular is the terminal where you place your own orders (#/trade), Superagent the desk on a paper account
+                  as a live floor (ui/superagent.js), #/trade?mode=superagent — "mode" never reaches the pane's params. #/superagent
+                  (?venue=…) is kept as an alias: routed() rewrites it to the canonical hash in place. Inside the page the two keep their
+                  own pane ids, "trade" and "superagent", so ROUTE.tab says which is showing
+     tradeModeLast()              the mode the viewer used last ("regular" | "superagent", kept under TRADE_MODE_KEY in this browser):
+                                  the rail's Trade opens it. Read in a guarded read; nothing writes it at load
+     setTradeMode(mode, params)   the switch's click, and only it: the mode kept, then go() there
    Doing
      load()                       read the account and the statement again, then render() (shell.js): the chrome, the visible pane, and
                                   the redraw of whatever sheet or drawer is open; the latest read wins over a slower earlier one
@@ -68,8 +77,9 @@
                                   form changes (the latest ask wins) and when its ten minutes run out; a refusal shows in the venue's words
      toast(text | { html }, kind, { ms })   kind "ok" · "no" (read out at once, stays longer) · "info"
    Where the page is
-     go(tab, params, { replace }) · onRoute(fn(tab, params, moved)) — moved: another tab than before · lensNow() → { kind: "all" | "venue" |
-     "agent", id, name } · inLens(venue, agent)
+     go(tab, params, { replace }) · onRoute(fn(tab, params, moved)) — moved: another tab than before (Regular ↔ Superagent is a move: the
+     panes cross-fade) · hashOf(tab, params) the hash for a place (hashOf("superagent", { venue }) → #/trade?mode=superagent&venue=…) ·
+     lensNow() → { kind: "all" | "venue" | "agent", id, name } · inLens(venue, agent)
    What an account can do
      connected() · nameOf(id) · keyName(address) · owns() · writesOn() · canTrade(v) · canMove(v) · keyOnlyReads(v) · watched(v) ·
      servedHere(v) · awayMiss(m) / awayLine(list, { fold }) (a venue a read left out because it does not serve this network: one quiet line) ·
@@ -77,7 +87,8 @@
      dollarsOf() · isDollar(asset) · networksOf() · bridgeChainsOf() (the lists the account publishes, the page's own as the fallback)
    A browser wallet sending what the account built: PROVIDERS (proven address → wallet) · SENT · INFLIGHT · walletFor(address) · mined(w, hash)
    What the panes define (the shell calls each if it is there): renderPortfolio(ctx) · renderVenues(ctx) [portfolio.js] · renderMemory(ctx)
-     [memory.js] · renderMarkets(ctx) [markets.js] · renderTrade(ctx) [trade.js], ctx = { el (#pane-…), owner, lens, params }; render() redraws only the visible pane, so keep what the owner is
+     [memory.js] · renderMarkets(ctx) [markets.js] · renderTrade(ctx) [trade.js] · renderDesk(ctx) [desk.js] · renderSuperagent(ctx)
+     [superagent.js], ctx = { el (#pane-…), owner, lens, params }; render() redraws only the visible pane, so keep what the owner is
      typing in an element you do not redraw. And the openers other parts call: openTicket(preset) · openClose(position) [trade.js] ·
      openHandToAgent(preset) [intent.js] · openReceive(venue) [money.js] · openLiveMove(venueId, preset) [money.js] · openAsset(key)
      [asset.js] · declineAsk(ask) [portfolio.js] · openMarket(item) [markets.js] · openPicker() / openConnect(option, opts) / connectVia(connector,
@@ -188,10 +199,15 @@ let S = [];
 const view = { month: "", account: "", type: "", agent: "", lens: "" };
 /* when the account was last read, for the shell's refresh */
 let loadedAt = 0;
-/* a connection's summary, short: its name and balance; the rest behind "details" */
+/* what was done, as a toast or a sheet says it: a connection's summary short (its name and balance; the rest behind "details"), and an
+   order's id (orderSaid) out of the words, one pointer away */
 const sayHtml = (s) => {
   const m = /^(.+?) connected live · (\$[\d,.]+) there now · (.+)$/.exec(s || "");
-  return m ? `<b>${esc(m[1])}</b> connected · ${esc(m[2])}<details class="inl"><summary>details</summary>${esc(m[3])}</details>` : esc(s);
+  if (m) return `<b>${esc(m[1])}</b> connected · ${esc(m[2])}<details class="inl"><summary>details</summary>${esc(m[3])}</details>`;
+  // the account's ids for the orders it speaks of (orderSaid: "… · ord-0011"), taken out of the words and kept one pointer away
+  const ids = [];
+  const words = String(s || "").replace(/ · (ord-\d+)(?= · |$)/g, (all, id) => (ids.push(id), ""));
+  return ids.length ? `<span title="${esc(`${ids.length > 1 ? "Orders" : "Order"} ${ids.join(", ")}`)}">${esc(words)}</span>` : esc(s);
 };
 
 const connected = () => A.venues.filter((v) => v.live);
@@ -272,9 +288,28 @@ function saidOf(body) {
   if (!body) return "";
   if (body.summary) return body.summary;
   const o = body.kind === "order" && body.order;
-  if (o) return `${o.status === "filled" ? (o.side === "buy" ? "Bought" : "Sold") : o.status === "partial" ? "Part filled" : o.status === "canceled" ? "Canceled" : ["rejected", "expired"].includes(o.status) ? "Not filled" : "Placed"}: ${o.id}${o.note ? ` · ${o.note}` : ""}`;
+  if (o) return orderSaid(o);
   const p = body.kind === "payment" && body.payment;
   return p ? p.note || `${p.id}: ${p.status}` : "";
+}
+/** An order as it now stands, said from its own fields: what was done (Bought, Sold, Part filled, Placed, Canceled, Not filled), how much
+ * of which market, at what price — the average fill, grouped as the page writes prices, or the order's own type where nothing filled —
+ * where, and the fee. The account's note is said only where nothing filled (why it was refused, expired or canceled, or how it rests): a
+ * fill's note repeats the price, unformatted. The account's id for the order goes last, after " · ", where sayHtml takes it out of the words and keeps it one
+ * pointer away (title=): the person reads what happened, and the id is there for the Statement and for support */
+function orderSaid(o) {
+  const filled = num(o.filledQty) > 0;
+  // the verb from the order's own state: "Placed" only for an order the venue holds (open); one the venue did not confirm, or one still
+  // waiting on the owner's wallet, is said as exactly that — never as placed (its note says the rest)
+  const verb = o.status === "filled" ? (o.side === "buy" ? "Bought" : "Sold") : o.status === "partial" ? "Part filled" : o.status === "canceled" ? "Canceled" : ["rejected", "expired"].includes(o.status) ? "Not filled" : o.unconfirmed && !o.ref ? "Sent, not confirmed" : o.walletTxs && !o.ref ? "Waiting for your wallet" : o.status === "open" ? "Placed" : "Sent";
+  const market = o.kind === "event" && o.name ? o.name : o.symbol || o.name || "";
+  const qty = filled ? o.filledQty : o.qty;
+  const what = qty !== undefined && qty !== null && Number.isFinite(Number(qty)) && market ? ` ${qtyOf(qty)} ${market}` : market ? ` ${market}` : "";
+  const at = filled && Number.isFinite(Number(o.avgPrice)) ? ` at ${o.kind === "event" ? cents(o.avgPrice) : px(o.avgPrice)}` : !filled && o.type && o.type !== "market" ? ` · ${typeText(o)}` : "";
+  const where = o.venueName ? ` on ${o.venueName}` : "";
+  const fee = filled && num(o.feeUsd) > 0 ? ` · fee ${money(o.feeUsd)}` : "";
+  const why = o.status !== "filled" && o.status !== "partial" && o.note ? ` · ${o.note}` : "";
+  return `${verb}${what}${at}${where}${fee}${why}${o.id ? ` · ${o.id}` : ""}`;
 }
 
 /* a JSON read as the page asks it: one request at a time per path (a second ask while the first is out gets the same answer), and the
@@ -958,19 +993,52 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
 
 // ---- where the page is ----------------------------------------------------------------------
 
-const TABS = ["portfolio", "venues", "memory", "markets", "trade", "desk"];
+const TABS = ["portfolio", "venues", "memory", "markets", "trade", "desk", "superagent"];
 /* the Account's own three, opened from the rail's foot (round 7), and the desk (the rail's Agents), under the Account's header too: the
    mode matters to the desk */
 const ACCOUNT_TABS = ["portfolio", "venues", "memory", "desk"];
+/* the trading area: Trade's two modes, Regular (the terminal, pane "trade") and Superagent (the desk's floor, pane "superagent"). One
+   place on the rail, one URL path (#/trade, the mode in its query), two panes the shell cross-fades between */
+const TRADE_AREA = ["trade", "superagent"];
+/* the mode the viewer used last, kept in this browser so the rail's Trade opens it: "regular" | "superagent" */
+const TRADE_MODE_KEY = "account.tradeMode";
+/** the mode the viewer used last — Regular when none was kept, or storage is off (a private window) */
+function tradeModeLast() {
+  try {
+    return localStorage.getItem(TRADE_MODE_KEY) === "superagent" ? "superagent" : "regular";
+  } catch {
+    return "regular";
+  }
+}
+/** the switch's click: the mode kept for the next visit (the only write of that key; never at load, never from a link), then the page
+ * goes there. params: what the mode should show (a paper account's id for the superagent) */
+function setTradeMode(mode, params = {}) {
+  const m = mode === "superagent" ? "superagent" : "regular";
+  try {
+    localStorage.setItem(TRADE_MODE_KEY, m);
+  } catch {
+    // a private window: the mode holds for this visit only
+  }
+  go(m === "superagent" ? "superagent" : "trade", params);
+}
 const ROUTE = { tab: "portfolio", params: {} };
 const ROUTED = [];
+/* the hash's place: #/trade?mode=superagent is the superagent's pane (and #/superagent, the older link, too); any other mode is
+   Regular's. The mode is the route's, never a pane's param */
 const routeOf = (hash) => {
   const m = /^#\/([a-z]+)(?:\?(.*))?$/.exec(hash || "");
-  return { tab: m && TABS.includes(m[1]) ? m[1] : "portfolio", params: Object.fromEntries(new URLSearchParams((m && m[2]) || "")) };
+  const params = Object.fromEntries(new URLSearchParams((m && m[2]) || ""));
+  let tab = m && TABS.includes(m[1]) ? m[1] : "portfolio";
+  if (TRADE_AREA.includes(tab)) tab = m[1] === "superagent" || params.mode === "superagent" ? "superagent" : "trade";
+  delete params.mode;
+  return { tab, params };
 };
+/* the hash for a place: the superagent's is Trade's path with mode=superagent first; Regular's carries no mode */
 const hashOf = (tab, params = {}) => {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")).toString();
-  return `#/${TABS.includes(tab) ? tab : "portfolio"}${q ? `?${q}` : ""}`;
+  const kept = Object.entries(params).filter(([k, v]) => k !== "mode" && v !== undefined && v !== null && v !== "");
+  const sup = tab === "superagent";
+  const q = new URLSearchParams(sup ? [["mode", "superagent"], ...kept] : kept).toString();
+  return `#/${sup ? "trade" : TABS.includes(tab) ? tab : "portfolio"}${q ? `?${q}` : ""}`;
 };
 /** go to a tab, with what it should show (#/markets?tab=crypto&q=btc); `replace` keeps the browser's history as it was */
 function go(tab, params = {}, { replace = false } = {}) {
@@ -985,6 +1053,9 @@ const onRoute = (fn) => void ROUTED.push(fn);
 /* the hash says where the page is: everyone listening is told (the shell first: it shows the pane) */
 function routed() {
   const r = routeOf(location.hash);
+  // the trading area's older or roundabout links (#/superagent?venue=…, #/trade?mode=regular) written as the one canonical hash, in place:
+  // no new history entry and no second hashchange
+  if (TRADE_AREA.includes(r.tab) && location.hash !== hashOf(r.tab, r.params)) history.replaceState(null, "", hashOf(r.tab, r.params));
   const moved = r.tab !== ROUTE.tab;
   ROUTE.tab = r.tab;
   ROUTE.params = r.params;

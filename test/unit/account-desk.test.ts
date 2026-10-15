@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
-import { brainReach, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
-import { BRAIN_MODELS, deskPath, readRoom, ROLE_SPECS, ROLES, scriptedBrain, type Brain, type RoleId } from "../../src/portfolio/account/desk.ts";
+import { ANTHROPIC_KEY_SHAPE, brainReach, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
+import { shq } from "../../src/portfolio/account/brain-key.ts";
+import { keyRejected, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
+import { BRAIN_MODELS, DECISIONS, deskPath, FIRST_CYCLE_MS, readRoom, ROLE_SPECS, ROLES, scriptedBrain, type Brain, type RoleId } from "../../src/portfolio/account/desk.ts";
 import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
@@ -91,7 +93,7 @@ const brainOf = (s: Script = {}): Brain =>
 const noBrain: Brain = { id: "none", label: "no brain", models: [], ready: () => ({ ok: false, model: "none", why: "no key" }), decide: async () => ({ out: null, why: "no key", usage: { inputTokens: 0, outputTokens: 0 } }) };
 
 let registered = false;
-async function boot(o: { home?: string; brain?: Brain | Brain[]; prices?: Record<string, Market>; at?: number; cap?: number } = {}) {
+async function boot(o: { home?: string; brain?: Brain | Brain[]; prices?: Record<string, Market>; at?: number; cap?: number; tickMs?: number; firstCycleMs?: number } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), "account-desk-"));
   if (!o.home) homes.push(home);
   const markets = o.prices ?? { "BTC/USDT": SPOT("BTC/USDT", 60_000), "ETH/USDT": SPOT("ETH/USDT", 3_000) };
@@ -107,7 +109,7 @@ async function boot(o: { home?: string; brain?: Brain | Brain[]; prices?: Record
   // the real clock and the account's clock move together: `advance` pushes both, so kept reads (markets, prices) expire as they would
   let skew = o.at ?? 0;
   const liveDeps: Partial<LiveDeps> = { clock: () => REAL + skew, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
-  const svc = await PortfolioService.create({ home, now: () => new Date(START + skew).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [], liveWrites: { capUsd: o.cap ?? 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] }, desk: { brain: o.brain ?? brainOf(), tickMs: 0 } });
+  const svc = await PortfolioService.create({ home, now: () => new Date(START + skew).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [], liveWrites: { capUsd: o.cap ?? 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] }, desk: { brain: o.brain ?? brainOf(), tickMs: o.tickMs ?? 0, firstCycleMs: o.firstCycleMs } });
   await svc.restoring;
   const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: START + skew + ++n } as OwnerAction));
   const as = async (key: ReturnType<typeof simKey>, a: NoNonce<AgentAction>) => svc.exchange(await signAgent(key, { ...a, nonce: START + skew + ++n } as AgentAction));
@@ -169,7 +171,10 @@ describe("the desk is hired", () => {
     expect(room[0]?.from).toBe("you");
     expect(room[0]?.text).toContain("You hired Test desk");
     expect(room[1]).toMatchObject({ from: "head", kind: "report" });
-    expect(room[1]?.text).toMatch(/^MORNING STATUS/);
+    // the start of the session, named so whatever the hour, its seats by name
+    expect(room[1]?.text).toMatch(/^SESSION START — /);
+    expect(room[1]?.text).toContain("Seats: Head, Search, Risk, Sniper and Exit.");
+    expect(room[0]?.text).toContain("You hired Test desk: Head, Search, Risk, Sniper and Exit.");
     // the ledger has the signed hire, in the owner's name
     const rows = readFileSync(svc.ledgerPath(), "utf8").split("\n").filter(Boolean).map((x) => JSON.parse(x) as { tool?: string; outcome?: string; reason?: string });
     expect(rows.find((x) => x.tool === "setDesk" && x.outcome === "ok")?.reason).toContain("desk hired: 5 seats at Ex");
@@ -197,7 +202,8 @@ describe("a cycle", () => {
     expect(room.find((x) => x.startsWith("search:lead:"))).toContain("LEAD L-0001 | BTC/USDT | long |");
     expect(room.find((x) => x.startsWith("risk:clearance:"))).toContain("Verdict: CLEAR → SNIPER");
     expect(room.find((x) => x.startsWith("sniper:card:"))).toMatch(/L-0001: buy \$40\.00 of BTC\/USDT waits for you on card-\d+ \(Guard\)/);
-    expect(room.find((x) => x.startsWith("head:cycle:"))).toContain("1 lead scanned, 1 cleared, 1 placed");
+    // a lead whose order waits on a card is counted apart from one placed: a card is not an order
+    expect(room.find((x) => x.startsWith("head:cycle:"))).toContain("1 lead scanned, 1 cleared, 0 placed, 1 waiting for you, 1 open");
     let v = (await desk.view())!;
     expect(v.open.map((l) => [l.id, l.state, l.sizeUsd, l.tpPct, l.slPct])).toEqual([["L-0001", "confirmed", 40, 2, 1]]);
     expect(v.cards).toHaveLength(1);
@@ -252,7 +258,8 @@ describe("a cycle", () => {
     expect(v.open.map((l) => l.id)).toEqual(["L-0002"]);
     const closed = v.recent.find((l) => l.id === "L-0001")!;
     expect(closed.state).toBe("closed");
-    expect(closed.exitWhy).toMatch(/^TP HIT at 61800/);
+    // the mark said as a person reads it: grouped the en-US way
+    expect(closed.exitWhy).toMatch(/^TP HIT at 61,800 /);
     expect(closed.pnlUsd!).toBeGreaterThan(0.5);
     expect(closed.roiPct!).toBeGreaterThan(1);
     expect(v.tape).toMatchObject({ wins: 1, losses: 0, winRatePct: 100 });
@@ -493,23 +500,35 @@ describe("the floor, the clock, the words", () => {
     const file = join(dir, "api-key.json");
     const env = {} as NodeJS.ProcessEnv;
     const KEY = "sk-ant-api03-TEST-not-a-real-key-0123456789";
-    expect(brainReach({ home, env })).toMatchObject({ ok: false, why: expect.stringMatching(/^no key: put an Anthropic API key in .*api-key\.json as/) });
-    // the how-to's example, copied as it is: not a key, and the standing says so instead of "ready"
+    // no file: why in a sentence (the environment only for an account started by hand, no "chmod 600" to puzzle over), and the fix — the
+    // file's absolute path, a command that makes it with the EMPTY template, readable by the user alone, and opens it, no restart
+    const none = brainReach({ home, env, platform: "darwin" });
+    expect(none).toMatchObject({ ok: false, why: expect.stringMatching(/^no key: the brain reads an Anthropic API key from .*api-key\.json, which is not there yet; .* \(if you start the account by hand, ANTHROPIC_API_KEY in its environment works too\)$/) });
+    expect(!none.ok && none.why).not.toMatch(/chmod/);
+    expect(!none.ok && none.fix).toEqual({ code: "no-key", file, restart: false, command: `mkdir -p '${dir}' && (umask 077 && printf '{"apiKey": ""}\\n' > '${file}') && open -e '${file}'`, words: expect.stringMatching(/^Run the command below: .*Paste your Anthropic API key \(it starts sk-ant-, from console\.anthropic\.com › API keys\) between the quotes .* no restart\.$/) });
+    expect(ANTHROPIC_KEY_SHAPE.example).toBe('{"apiKey": ""}');
+    expect(claudeBrain({ home, env, platform: "darwin" }).ready()).toMatchObject({ ok: false, fix: { code: "no-key" } });
+    // the template as the command makes it, left empty: the example, and the fix opens it again
+    writeFileSync(file, '{"apiKey": ""}\n', { mode: 0o600 });
+    expect(brainReach({ home, env, platform: "darwin" })).toMatchObject({ ok: false, why: expect.stringMatching(/api-key\.json holds the example, not a key: .* no restart needed/), fix: { code: "example", file, command: `open -e '${file}'`, restart: false } });
+    // the how-to's old example, copied as it is: not a key, and the standing says so instead of "ready"
     writeFileSync(file, '{"apiKey": "sk-ant-..."}', { mode: 0o600 });
-    expect(brainReach({ home, env })).toMatchObject({ ok: false, why: expect.stringMatching(/api-key\.json holds the example, not a key: put your key there .* no restart needed/) });
+    expect(brainReach({ home, env })).toMatchObject({ ok: false, why: expect.stringMatching(/api-key\.json holds the example, not a key: put your key between the quotes .* no restart needed/), fix: { code: "example" } });
     writeFileSync(file, '{"apiKey": "sk-ant-…"}');
     expect(brainReach({ home, env })).toMatchObject({ ok: false, why: expect.stringMatching(/holds the example, not a key/) });
     writeFileSync(file, '{"secret": "x"}');
-    expect(brainReach({ home, env })).toMatchObject({ ok: false, why: expect.stringMatching(/^the key file cannot be used: .*missing "apiKey"/) });
+    expect(brainReach({ home, env, platform: "linux" })).toMatchObject({ ok: false, why: expect.stringMatching(/^the key file cannot be used: .*missing "apiKey"/), fix: { code: "unusable", command: `\${EDITOR:-nano} '${file}'` } });
     writeFileSync(file, `{"apiKey": "${KEY}"}`);
     expect(brainReach({ home, env })).toMatchObject({ ok: true, how: "the key file credentials/anthropic/api-key.json" });
     expect(claudeBrain({ home, env }).ready()).toMatchObject({ ok: true, model: "claude-opus-5-5" });
     chmodSync(file, 0o644);
     const open = brainReach({ home, env });
-    expect(open).toMatchObject({ ok: false, why: expect.stringMatching(/^the key file cannot be used: .*chmod 600/) });
+    expect(open).toMatchObject({ ok: false, why: expect.stringMatching(/^the key file cannot be used: .*chmod 600/), fix: { code: "unusable", command: `chmod 600 '${file}'`, restart: false } });
     expect(JSON.stringify(open)).not.toContain(KEY);
-    // the environment: the example is refused there too; a key is taken
-    expect(brainReach({ home, env: { ANTHROPIC_API_KEY: "sk-ant-..." } as NodeJS.ProcessEnv })).toMatchObject({ ok: false, why: expect.stringMatching(/^ANTHROPIC_API_KEY .* not a key/) });
+    // a home whose path has a quote in it: quoted for the shell, so the command still runs as written
+    expect(shq("/Users/o'brien/home")).toBe("'/Users/o'\\''brien/home'");
+    // the environment: the example is refused there too — no command from here, a restart; a key is taken
+    expect(brainReach({ home, env: { ANTHROPIC_API_KEY: "sk-ant-..." } as NodeJS.ProcessEnv })).toMatchObject({ ok: false, why: expect.stringMatching(/^ANTHROPIC_API_KEY .* not a key/), fix: { code: "env", file, restart: true } });
     const fromEnv = claudeBrain({ home, env: { ANTHROPIC_API_KEY: KEY } as NodeJS.ProcessEnv }).ready();
     expect(fromEnv).toMatchObject({ ok: true, how: "ANTHROPIC_API_KEY in the service's environment" });
     expect(JSON.stringify(fromEnv)).not.toContain(KEY);
@@ -583,5 +602,173 @@ describe("the cap is the owner's to change", () => {
     const again = await boot({ home, at: 10 * 60_000 });
     expect((await again.svc.accountView())!.connectLive?.writes?.capUsd).toBe(40);
     expect(again.svc.restored?.skipped ?? []).toEqual([]);
+  });
+});
+
+/** A brain whose key the API refuses until `accept()`: it says it is ready (the key's shape is fine — only a call finds it refused), throws
+ * E_BRAIN_KEY_REJECTED with the fix, as brain-claude.ts does on a 401; then answers as brainOf() does */
+function refusingBrain(file: string): Brain & { accept(): void; calls: number } {
+  const answers = brainOf();
+  let accepted = false;
+  const b = {
+    id: "claude",
+    label: "Claude · Anthropic API",
+    models: BRAIN_MODELS,
+    calls: 0,
+    accept() {
+      accepted = true;
+    },
+    ready: () => ({ ok: true, model: "claude-opus-5-5", how: "the key file credentials/anthropic/api-key.json" }),
+    async decide<T>(r: Parameters<Brain["decide"]>[0]) {
+      b.calls++;
+      if (!accepted) throw keyRejected("the API did not accept the key", "Anthropic", rejectedFix(file, undefined, "Anthropic", "darwin"));
+      return answers.decide(r) as Promise<Awaited<ReturnType<Brain["decide"]>>> as never as T;
+    },
+  };
+  return b as unknown as Brain & { accept(): void; calls: number };
+}
+
+describe("what the desk says, as a person reads it", () => {
+  it("a key the API refused is the brain's standing until a call is answered: not ready with the fix, said once in the room, the cycle says Search's brain did not answer — never a quiet market", async () => {
+    const file = "/home/o/credentials/anthropic/api-key.json";
+    const brain = refusingBrain(file);
+    const { desk, hire, home } = await boot({ brain });
+    await hire();
+    await desk.cycle("test");
+    let room = readRoom(home);
+    // one line for the fault, from the account, saying where the key goes and that no restart is needed
+    expect(room.filter((m) => m.from === "account" && m.text.includes("refused the brain's key"))).toEqual([expect.objectContaining({ kind: "note", text: `Anthropic refused the brain's key. Replace it in ${file}; the next cycle reads it, no restart.` })]);
+    // Search says it in ONE line of the account's own (no brain mark), and the Head's cycle line says no lead was looked for
+    const search = room.filter((m) => m.from === "search");
+    expect(search).toHaveLength(1);
+    expect(search[0]!.text).toMatch(/^Scanned \d+ markets?, but the brain did not answer \(the API did not accept the key\): no lead this cycle\.$/);
+    expect(search[0]!.brain).toBeUndefined();
+    expect(room.at(-1)).toMatchObject({ from: "head", kind: "cycle", text: "Cycle 1 (test): Search's brain did not answer, so no lead was looked for." });
+    expect(room.some((m) => /nothing worth a lead|: no lead\.$/.test(m.text))).toBe(false);
+    // the standing: not ready, why in a sentence, the fix — in the view, the floor's read and the catalog alike
+    const v = (await desk.view())!;
+    expect(v.brain).toMatchObject({ ok: false, why: `Anthropic refused the brain's key: replace it in ${file} — the next cycle reads it, no restart`, fix: { code: "rejected", file, command: `open -e '${file}'`, restart: false } });
+    // the calls that got no answer are counted apart, at no cost
+    expect(v.brain.spend).toMatchObject({ calls: 0, failed: 1, usd: 0 });
+    const f = (await desk.feed(0))!;
+    expect(f.brain).toMatchObject({ ok: false, fix: { code: "rejected", file } });
+    expect(desk.catalog().brains[0]).toMatchObject({ id: "claude", ok: false, fix: { code: "rejected" } });
+    // the next cycle still asks (that is how a replaced key is found to work), and the room does not say the fault again
+    await desk.cycle("test");
+    room = readRoom(home);
+    expect(room.filter((m) => m.text.includes("refused the brain's key"))).toHaveLength(1);
+    expect((await desk.view())!.brain.spend.failed).toBe(2);
+    // the key replaced: the next call is answered, the fault is gone, and the room says so
+    brain.accept();
+    await desk.cycle("test");
+    room = readRoom(home);
+    expect(room.some((m) => m.from === "account" && m.text === "Anthropic answered the brain's call: its key works again.")).toBe(true);
+    expect((await desk.view())!.brain).toMatchObject({ ok: true });
+    expect((await desk.view())!.brain.fix).toBeUndefined();
+    expect(room.some((m) => m.from === "search" && m.kind === "lead")).toBe(true);
+  });
+
+  it("Search's brain that gives no decision is said so too, in one line: not a quiet market", async () => {
+    const { desk, hire, home } = await boot({ brain: brainOf({ search: () => ({ nonsense: true }) }) });
+    await hire();
+    await desk.cycle("test");
+    const room = readRoom(home);
+    expect(room.filter((m) => m.from === "search").map((m) => m.text)).toEqual([expect.stringMatching(/^Scanned \d+ markets?, but the brain gave no decision \(the script's answer did not fit\): no lead this cycle\.$/)]);
+    expect(room.at(-1)?.text).toBe("Cycle 1 (test): Search's brain gave no decision, so no lead was looked for.");
+    expect((await desk.view())!.brain.spend).toMatchObject({ calls: 1, failed: 0 });
+    void DECISIONS;
+  });
+
+  it("figures grouped as a person reads them: the price at the market's places, the day's volume in the large, the plan's numbers short", async () => {
+    const brain = brainOf({ risk: () => ({ verdict: "clear", why: "tight", sizeUsd: 40, tpPct: 1.23456, slPct: 0.4, maxHours: 12.5 }) });
+    const { desk, hire, home } = await boot({ brain, prices: { "BTC/USDT": { ...SPOT("BTC/USDT", 62_420.7), volumeUsd24h: 603_890_041 } } });
+    await hire();
+    await desk.cycle("test");
+    const clearance = readRoom(home).find((m) => m.kind === "clearance")!.text;
+    // the room's protocol stays: " | " between the parts, "Verdict: …" last
+    expect(clearance).toMatch(/^RISK CLEARANCE L-0001 \| market open · price 62,420\.7 · spread 0\.10% · volume \$603\.9M · day's loss room \$250\.00 · size up to \$50\.00 \| tight \| size \$40\.00 · TP \+1\.23% · SL -0\.4% · 12\.5 h \| Verdict: CLEAR → SNIPER$/);
+  });
+
+  it("a session started after the report's hour has no evening report minutes later; the start is SESSION START, never a morning status at night", async () => {
+    // 22:00 New York: past the 21:00 report
+    const { desk, hire, advance, home } = await boot({ at: 11 * HOUR });
+    await hire({ hours: 48 });
+    expect(readRoom(home).find((m) => m.kind === "report")?.text).toMatch(/^SESSION START — /);
+    advance(2 * 60_000);
+    await desk.tick();
+    expect((await desk.view())!.reports.map((r) => r.kind)).toEqual(["start"]);
+    // the next evening, at its hour: the day's report
+    advance(23 * HOUR);
+    await desk.tick();
+    expect((await desk.view())!.reports.map((r) => r.kind)).toEqual(["start", "evening"]);
+  });
+
+  it("the bounds of the objective, for the form; a venue no longer connected is still called by its name, never its id", async () => {
+    const { desk, hire, own, home } = await boot();
+    expect(desk.catalog().bounds).toEqual({ targetPct: [0.1, 100], maxRiskPct: [0.1, 50], maxDailyLossPct: [0.1, 50], hours: [1, 336], everyMin: [1, 240], maxOpen: [1, 10] });
+    // an MCP caller's number outside them is still held to the nearest end
+    await hire({ hours: 1000 });
+    let v = (await desk.view())!;
+    expect([v.objective.hours, v.objective.venueName]).toEqual([336, "Ex"]);
+    // a caller cannot name the venue: the account's row does
+    await own({ type: "setDesk", desk: "desk", change: "objective", value: JSON.stringify({ venueName: "Something else" }) });
+    expect((await desk.view())!.objective.venueName).toBe("Ex");
+    expect(code(await own({ type: "disconnectVenue", venue: "ex" }))).toBe("account");
+    v = (await desk.view())!;
+    expect(v.venue).toMatchObject({ id: "ex", name: "Ex", connected: false });
+    expect((await desk.feed(0))!.venue).toMatchObject({ id: "ex", name: "Ex", connected: false });
+    await desk.cycle("test");
+    expect(readRoom(home).at(-1)?.text).toBe("Cycle 1 (test): Ex is not connected, so nothing is scanned.");
+  });
+
+  it("the first cycle comes soon after a hire and a resume — not at the clock's next tick — and the next one the objective's minutes after it", async () => {
+    const { desk, hire, own, advance } = await boot();
+    await hire();
+    expect((await desk.view())!.routines.nextCycleAt).toBe(new Date(START + FIRST_CYCLE_MS).toISOString());
+    advance(FIRST_CYCLE_MS);
+    await desk.tick();
+    expect((await desk.view())!.session?.cycles).toBe(1);
+    expect((await desk.view())!.routines.nextCycleAt).toBe(new Date(START + FIRST_CYCLE_MS + 15 * 60_000).toISOString());
+    await own({ type: "setDesk", desk: "desk", change: "pause", value: "" });
+    advance(60_000);
+    await own({ type: "setDesk", desk: "desk", change: "resume", value: "" });
+    expect((await desk.view())!.routines.nextCycleAt).toBe(new Date(START + 2 * FIRST_CYCLE_MS + 60_000).toISOString());
+  });
+
+  it("where the clock runs, the first cycle after a hire is its own one-shot timer", async () => {
+    const { desk, hire, home } = await boot({ tickMs: HOUR, firstCycleMs: 40 });
+    const stop = desk.start();
+    try {
+      await hire();
+      for (let i = 0; i < 100 && !readRoom(home).some((m) => m.kind === "cycle"); i++) await new Promise((r) => setTimeout(r, 20));
+      expect(readRoom(home).find((m) => m.kind === "cycle")?.text).toMatch(/^Cycle 1 \(the clock\): /);
+    } finally {
+      stop();
+    }
+  });
+
+  it("the floor's read is one moment: a room line written while the account's page was being read is in the same answer as the state it made", async () => {
+    const { desk, hire, own, svc } = await boot();
+    await hire();
+    const real = svc.accountView.bind(svc);
+    let release: (() => void) | undefined;
+    let held = false;
+    // the first page read the floor asks for is held until the owner's pause has landed
+    svc.accountView = (async (...a: Parameters<typeof real>) => {
+      const page = await real(...a);
+      if (!held) {
+        held = true;
+        await new Promise<void>((r) => (release = r));
+      }
+      return page;
+    }) as typeof svc.accountView;
+    const pending = desk.feed(0);
+    for (let i = 0; i < 100 && !release; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "pause", value: "" }))).toBe("account");
+    release!();
+    const f = (await pending)!;
+    expect(f.session?.state).toBe("paused");
+    expect(f.room.at(-1)?.text).toBe("You paused the desk: no cycle runs until you resume it. Open leads keep their plan when it does.");
+    expect(f.seq).toBe(f.room.at(-1)?.seq);
   });
 });

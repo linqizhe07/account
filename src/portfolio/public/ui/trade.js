@@ -611,12 +611,11 @@ function openTicket(preset = {}) {
   tkShowPanel();
 }
 
-/* on a phone the order panel sits under the chart: brought into view when a market is picked. Beside the chart (861 wide and more,
-   terminal.css) it is in view already: nothing is measured */
+/* where the order panel sits under the chart (a terminal narrower than 1080 pixels: terminal.css lays it out by its own width, not the
+   window's), it is brought into view when a market is picked, and only when it is out of view; beside the chart it is in view already */
 function tkShowPanel() {
   const p = $("tk-panel");
   if (!p || !p.getBoundingClientRect) return;
-  if (typeof matchMedia === "function" && matchMedia("(min-width: 861px)").matches) return;
   const r = p.getBoundingClientRect();
   if (r.top > window.innerHeight || r.bottom < 0) p.scrollIntoView({ behavior: tkNoMotion() ? "auto" : "smooth", block: "start" });
 }
@@ -773,6 +772,9 @@ function tkPctFill(a, share, { sell = false, qtyStep = 0, coinStep = 0 } = {}) {
   return { unit: "usd", amount: s > 0 && a && a.cash > 0 ? String(Math.floor(a.cash * s * 100) / 100) : "" };
 }
 
+/* the order type showing among the order panel's tabs: Market or Limit pressed, or Pro (a select) on — where its sliding line goes */
+const TK_OTAB_ON = '[aria-selected="true"], .tk-pro.on';
+
 /** THE TICKET. Find the market (at the connected venues and at the venues that publish prices without a key), pick where (the best price of
  * your accounts first; a venue not connected says "Connect to trade"), then the order as that market takes it: the side, the amount, what it
  * is paid with (a coin held: two steps), the type and its prices, the leverage (a perpetual), the rest under Advanced, and the face's own
@@ -791,24 +793,24 @@ function tkTicket(panel, kind0, preset) {
     <div class="tk-where-w" data-where-w hidden><div class="label">Where</div><div class="tk-where" data-where></div></div>
     <div class="tk-kb" data-kb hidden></div>
     <div class="tk-stack" data-body hidden>
+      <div class="tk-lev" data-lev hidden></div>
       <div class="tk-otabs" data-otabs role="tablist" aria-label="Order type"></div>
       <label class="fld tk-otype" hidden>Order<select name="orderType"><option value="market">Market</option><option value="limit">Limit</option></select></label>
       <div class="tk-side" data-side></div>
       <div class="tk-avail" data-avail></div>
       <div class="row2" data-limit-row hidden><label class="fld" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /></label></div>
-      <div class="row2"><label class="fld">Size<input name="amount" inputmode="decimal" placeholder="25" autocomplete="off" /></label><label class="fld"><span data-unit-l>In</span><select name="unit"><option value="usd">Dollars</option><option value="qty">Units</option></select></label></div>
+      <div class="row2"><label class="fld">Size<input name="amount" inputmode="decimal" placeholder="" autocomplete="off" /></label><label class="fld"><span data-unit-l>In</span><select name="unit"><option value="usd">Dollars</option><option value="qty">Units</option></select></label></div>
       <div class="tk-pct" data-pct hidden><input type="range" name="pct" min="0" max="100" step="1" value="0" aria-label="Share of what is available" /><span class="tab-nums" data-pct-v>0%</span></div>
       <div class="row2" data-pay-w hidden><label class="fld">Pay with<select name="pay"></select></label><span class="dim small tk-pay-n" data-pay-n></span></div>
       <div class="tk-flags"><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce only</label><label class="chk1" data-tpsl hidden><input type="checkbox" name="tpsl" /> Take profit / Stop loss</label></div>
       <div class="row2" data-stop hidden><label class="fld"><span data-stop-l>Stop price</span><input name="stopPrice" inputmode="decimal" autocomplete="off" /></label></div>
       <div class="row2" data-trail hidden><label class="fld">Trail by<input name="trail" inputmode="decimal" placeholder="2" autocomplete="off" /></label><label class="fld"><span>In</span><select name="trailBy"><option value="percent">Percent</option><option value="price">Price</option></select></label></div>
       <div class="row2" data-exits hidden><label class="fld">Take profit<input name="takeProfit" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label><label class="fld">Stop loss<input name="stopLoss" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label></div>
-      <div class="tk-lev" data-lev hidden></div>
-      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="dim small tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
+      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
+      <button type="submit" class="btn btn-primary btn-block" data-go disabled${LOOK ? ` title="${esc(LOOK)}"` : ""}>Sign and place</button>
       <div class="quote real" data-q><span class="dim">Type an amount.</span></div>
       <div data-sign></div>
       <div class="msg" data-msg role="status"></div>
-      <button type="submit" class="btn btn-primary btn-block" data-go disabled${LOOK ? ` title="${esc(LOOK)}"` : ""}>Sign and place</button>
     </div>
     <button type="button" class="btn btn-block" data-hand>${icon("agent")}Hand to agent instead</button>
   </form>`;
@@ -1001,28 +1003,43 @@ function tkTicket(panel, kind0, preset) {
     const unitOf = (r) => (r.implied && r.implied.unit && r.implied.unit !== commonUnit ? `<span class="why">${esc(r.implied.unit)}</span>` : "");
     const nobody = rows.length > 0 && rows.every((r) => r.state === "public" && r.refuses);
     // real money or paper: a switch between the two kinds of account that trade it (both there), and a band that says which the order
-    // picked is for — the one thing to see before signing
+    // picked is for — the one thing to see before signing. With the switch there, only the accounts of the kind it is on are listed (a
+    // paper account under Paper, a real one — and the public venues to connect — under Real money), so the list never mixes the two
     const ableRows = rows.filter((r) => r.state === "able");
     const hasReal = ableRows.some((r) => !r.paper);
     const hasPaper = ableRows.some((r) => r.paper);
     const pickedRow = picked ? ableRows.find((r) => r.venue === picked.venue) : null;
-    const money = `<div class="tk-money-row" data-money-row>${hasReal && hasPaper ? `<div class="seg tk-money-seg" role="group" aria-label="Real money or paper"><button type="button" data-money="real" aria-pressed="${String(!!pickedRow && !pickedRow.paper)}">Real money</button><button type="button" data-money="paper" aria-pressed="${String(!!pickedRow && !!pickedRow.paper)}">Paper</button></div>` : ""}<span data-money-band>${tkMoneyBand(pickedRow)}</span></div>`;
+    const both = hasReal && hasPaper;
+    const onPaper = pickedRow ? !!pickedRow.paper : lensNow().kind === "paper";
+    const listed = (r) => !both || (r.state === "public" ? !onPaper : !!r.paper === onPaper);
+    const money = `<div class="tk-money-row" data-money-row>${both ? `<div class="seg tk-money-seg" role="group" aria-label="Real money or paper"><button type="button" data-money="real" aria-pressed="${String(!!pickedRow && !pickedRow.paper)}">Real money</button><button type="button" data-money="paper" aria-pressed="${String(!!pickedRow && !!pickedRow.paper)}">Paper</button></div>` : ""}<span data-money-band>${tkMoneyBand(pickedRow)}</span></div>`;
     // the public venues that list it are folded under one line when an account of yours trades it: the order panel stays the order's
     const fold = !none && rows.some((r) => r.state === "public");
     const pubCount = rows.filter((r) => r.state === "public").length;
+    // a venue's terms that exclude where the user is: their word in the line, the venue's whole sentence folded under it (opened on purpose,
+    // never laid out beside the price)
+    const terms = (r) => (r.terms ? `<span class="why"><b>${esc(r.terms.word)}</b></span>${r.terms.said ? `<details class="tk-terms"><summary>Its terms</summary><p>${esc(r.terms.said)}</p></details>` : ""}` : "");
+    const pubRow = (r, i, note) => `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? terms(r) : note && !r.connector && r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>${r.connector ? '<span class="tk-sep"> · </span>' : ""}` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`;
     box2.innerHTML = `${ableRows.length ? money : ""}${!rows.length ? '<p class="dim small">No venue that lists it serves this network.</p>' : none ? `<p class="dim small">${rows.some((r) => r.state === "public" && r.connector) ? "None of your accounts trades it yet: connect one where it is listed." : nobody ? "None of the venues that list it would take you from where you are." : "None of your accounts can trade it now."}</p>` : ""}${rows.map((r, i) => {
-      if (fold && r.state === "public") return "";
+      if ((fold && r.state === "public") || !listed(r)) return "";
       // a venue that takes the user only in part (close-only) or wants something here first: its word, its whole sentence on hover
-      if (r.state === "public") return `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why"><b>${esc(r.terms.word)}</b>${r.terms.said ? ` — ${esc(r.terms.said)}` : ""}</span>` : !r.connector && r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>${r.connector ? '<span class="tk-sep"> · </span>' : ""}` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`;
-      if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
-      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why tk-at-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
-    }).join("")}${fold ? `<details class="tk-pubs"><summary>${esc(plural(pubCount, "other venue"))} list it <span class="dim">· connect one to trade there</span></summary>${rows.map((r, i) => (r.state !== "public" ? "" : `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why" title="${esc(r.terms.said || "")}"><b>${esc(r.terms.word)}</b></span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`)).join("")}</details>` : ""}`;
+      if (r.state === "public") return pubRow(r, i, true);
+      // a paper account's own name, without the "paper" its tag says already ("Momentum · paper" → "Momentum" with its Paper tag)
+      const name = r.paper ? tkPaperless(r.venueName) : r.venueName;
+      if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(name)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
+      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(name)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why tk-at-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
+    }).join("")}${fold && !onPaper ? `<details class="tk-pubs"><summary>${esc(pubCount === 1 ? "1 other venue lists it" : `${pubCount} other venues list it`)} <span class="dim">· connect one to trade there</span></summary>${rows.map((r, i) => (r.state !== "public" ? "" : pubRow(r, i, false))).join("")}</details>` : ""}`;
     for (const b of box2.querySelectorAll("button[data-at]")) b.addEventListener("click", () => choose(rows[Number(b.dataset.at)]));
-    // the switch: the best (else the first) account of that kind, the form kept as it is
+    // the switch: the best (else the first) account of that kind, the form kept as it is; the list then shows that kind's accounts
     for (const b of box2.querySelectorAll("button[data-money]")) b.addEventListener("click", () => {
       const want = b.dataset.money === "paper";
       const r = ableRows.find((x) => !!x.paper === want && x.best) || ableRows.find((x) => !!x.paper === want);
-      if (r) choose(r);
+      if (!r) return;
+      choose(r);
+      drawWhere(r);
+      // the switch is drawn again with the list: the key stays on the side just pressed
+      const again = q(`[data-where] button[data-money="${want ? "paper" : "real"}"]`);
+      if (again && typeof again.focus === "function") again.focus({ preventScroll: true });
     });
     for (const b of box2.querySelectorAll("button[data-connect]")) b.addEventListener("click", () => {
       // once the venue is connected (the next read of the account shows it), this market is looked up again so it is offered there
@@ -1128,9 +1145,13 @@ function tkTicket(panel, kind0, preset) {
       const allowed = (mk.tifsByType && mk.tifsByType[t]) || mk.tifs || [];
       setOptions(sel, [["", "The venue's default"], ...allowed.map((x) => [x, TK_TIF_NAMES[x] || x])], allowed.includes(sel.value) ? sel.value : "");
     }
+    // Advanced's line in a few letters (TIF and its code, as HL writes it), the whole rule on hover: never a sentence cut mid-word
     const sum = q("[data-adv-sum]");
-    const words = mk ? tkAdvSummary(mk, formFields(form)) : "";
-    if (sum.textContent !== words) sum.textContent = words;
+    const f = formFields(form);
+    const words = mk ? tkAdvSummary(mk, f) : "";
+    const short = mk ? tkAdvShort(mk, f) : "";
+    paint(sum, short ? `<abbr class="tk-tif" title="Time in force">TIF</abbr> ${esc(short)}` : "");
+    if (sum.title !== words) sum.title = words;
   };
   /* what is held at this venue's markets (perpetuals, event contracts), read again at most every ten seconds: the face's block, the
      leverage line and the position line say it. A venue the read could not reach (`missing`, in its own words), or a read refused whole,
@@ -1148,8 +1169,53 @@ function tkTicket(panel, kind0, preset) {
     });
   };
   const held = () => (positions || []).find((x) => picked && x.venue === picked.venue && mk && x.symbol === mk.symbol && x.qty > 0) || null;
+  /* the leverage this market is at now, as far as the venue has said: what the door just set (the venue confirmed it), else the position
+     held there; nothing said (no position, nothing set from here): unknown — no figure is shown that the venue did not give */
+  const levNow = () => {
+    const set = TK.lev && picked && mk && TK.lev.venue === picked.venue && TK.lev.symbol === mk.symbol ? TK.lev : null;
+    const h = held();
+    return set ? { leverage: Number(set.leverage), marginMode: set.marginMode || "" } : h && h.leverage ? { leverage: Number(h.leverage), marginMode: h.marginMode || "" } : null;
+  };
+  /* the two buttons at the panel's head and the field under them: the margin mode where the venue said one, and the leverage now ("3x"),
+     else "Leverage"; the field takes the leverage now while the owner has not typed another; Set leverage… waits for a whole number
+     between 1 and the market's most that differs from it */
+  let levShown = "";
+  const levPills = () => {
+    const box2 = q("[data-lev-pills]");
+    if (!box2) return;
+    const now = levNow();
+    const ed = q("[data-lev-ed]");
+    const open = !!ed && !ed.hidden;
+    const mode = now && now.marginMode ? now.marginMode.charAt(0).toUpperCase() + now.marginMode.slice(1) : "";
+    paint(box2, `${mode ? `<button type="button" class="btn tk-lev-pill" data-lev-open data-fk="lev-mode" aria-controls="tk-lev-ed" aria-expanded="${open}" title="Margin mode at ${esc(picked ? picked.venueName || nameOf(picked.venue) : "the venue")}">${esc(mode)}</button>` : ""}<button type="button" class="btn tk-lev-pill" data-lev-open data-fk="lev-now" aria-controls="tk-lev-ed" aria-expanded="${open}"${now ? ` aria-label="Leverage ${esc(String(now.leverage))}x: change it"` : ""}>${now ? `${esc(String(now.leverage))}x` : "Leverage"}</button>`);
+    const input = form.elements.leverage;
+    const shown = now ? String(now.leverage) : "";
+    if (input && document.activeElement !== input && (input.value === "" || input.value === levShown)) input.value = shown;
+    levShown = shown;
+    levReady();
+  };
+  const levReady = () => {
+    const b = q("[data-lev-prep]");
+    const input = form.elements.leverage;
+    if (!b || !input || !mk) return;
+    const n = Number(String(input.value || "").trim());
+    const now = levNow();
+    const mode = form.elements.marginMode ? form.elements.marginMode.value : "";
+    const ok = /^\d{1,3}$/.test(String(input.value || "").trim()) && n >= 1 && (!mk.maxLeverage || n <= mk.maxLeverage) && (!now || n !== now.leverage || (!!mode && mode !== now.marginMode));
+    b.disabled = !ok || !owns();
+  };
+  q("[data-lev]").addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("button[data-lev-open]");
+    if (!b) return;
+    const ed = q("[data-lev-ed]");
+    if (!ed) return;
+    ed.hidden = !ed.hidden;
+    levPills();
+    if (!ed.hidden && form.elements.leverage) form.elements.leverage.focus({ preventScroll: true });
+  });
   /* a perpetual's leverage line, when the venue does not set it from here: as set at the venue, and what is held at */
   const levLine = () => {
+    levPills();
     const ro = q("[data-lev-ro]");
     if (!ro) return;
     const h = held();
@@ -1202,8 +1268,13 @@ function tkTicket(panel, kind0, preset) {
       if (v.trade && v.trade.leverage) {
         const given = Array.isArray(m.marginModes) ? m.marginModes : Array.isArray(v.trade.marginModes) ? v.trade.marginModes : [];
         const modes = given.filter((x) => typeof x === "string" && x);
-        lev.innerHTML = `<div class="row2"><label class="fld">Leverage<input name="leverage" inputmode="numeric" placeholder="${m.maxLeverage ? `up to ${esc(String(m.maxLeverage))}` : "a whole number"}" /></label>${modes.length ? `<label class="fld">Margin${select("marginMode", [["", "As it is"], ...modes.map((x) => [x, x.charAt(0).toUpperCase() + x.slice(1)])])}</label>` : ""}</div><div class="tk-lev-go"><button type="button" class="btn btn-sm" data-lev-prep>Set leverage…</button><span class="dim small">Its own signature, before the order.</span></div><div data-lev-sign></div>`;
-        tkLeverage(lev, picked, m, live, () => drawKind());
+        // HL's two buttons at the panel's head — the margin mode (where the venue says it) and the leverage now — open the editor under
+        // them: the field (the leverage now in it, once known), the margin mode where the venue sets one, and Set leverage…, signed apart
+        lev.innerHTML = `<div class="tk-lev-pills" data-lev-pills></div><div class="tk-lev-ed" id="tk-lev-ed" data-lev-ed hidden><div class="row2"><label class="fld">Leverage<input name="leverage" inputmode="numeric" placeholder="${m.maxLeverage ? `1 to ${esc(String(m.maxLeverage))}` : "a whole number"}" /></label>${modes.length ? `<label class="fld">Margin${select("marginMode", [["", "As it is"], ...modes.map((x) => [x, x.charAt(0).toUpperCase() + x.slice(1)])])}</label>` : ""}</div><div class="tk-lev-go"><button type="button" class="btn btn-sm" data-lev-prep disabled>Set leverage…</button><span class="dim small">Changing leverage is signed on its own, before the order.</span></div><div data-lev-sign></div></div>`;
+        tkLeverage(lev, picked, m, live, () => {
+          drawKind();
+          levPills();
+        });
       } else lev.innerHTML = `<div class="label">Leverage</div><div class="dim small" data-lev-ro></div>`;
     } else lev.innerHTML = "";
     // the positions read are this venue's from here: none said until its read lands
@@ -1230,6 +1301,8 @@ function tkTicket(panel, kind0, preset) {
     const pro = types.filter((x) => x !== "market" && x !== "limit");
     const html = `${["market", "limit"].filter((x) => types.includes(x)).map((x) => `<button type="button" role="tab" data-otype="${x}" aria-selected="${String(t === x)}">${esc(TK_TYPE_NAMES[x])}</button>`).join("")}${pro.length ? `<label class="tk-pro${pro.includes(t) ? " on" : ""}"><span class="sr">More order types</span><select data-pro>${[["", "Pro"], ...pro.map((x) => [x, TK_TYPE_NAMES[x] || x])].map(([v, w]) => `<option value="${v}"${v === (pro.includes(t) ? t : "") ? " selected" : ""}>${esc(w)}</option>`).join("")}</select></label>` : ""}`;
     paint(box2, html);
+    // the line under the type showing slides to it in the terminal's order panel (book.js bkSlideUnder, trade.css): Pro is a select, marked on
+    if (typeof bkSlideUnder === "function") bkSlideUnder(box2, TK_OTAB_ON);
   };
   q("[data-otabs]").addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest("button[data-otype]");
@@ -1259,9 +1332,15 @@ function tkTicket(panel, kind0, preset) {
     const plan = payCoin() ? payPlanNow() : null;
     return plan && plan.market ? Number(plan.market.qtyStep) || 0 : 0;
   };
+  /* the slider's track filled to its share (trade.css reads --tk-pct) */
+  const pctFill = (v) => {
+    const st = form.elements.pct && form.elements.pct.style;
+    if (st && typeof st.setProperty === "function") st.setProperty("--tk-pct", `${v}%`);
+  };
   form.elements.pct.addEventListener("input", () => {
     const a = availOf();
     setText(q("[data-pct-v]"), `${form.elements.pct.value}%`);
+    pctFill(form.elements.pct.value);
     if (!a) return;
     const fill = tkPctFill(a, Number(form.elements.pct.value) / 100, { sell: side === "sell", qtyStep: mk.qtyStep, coinStep: a.coin ? payStep() : 0 });
     form.elements.unit.value = fill.unit;
@@ -1406,7 +1485,8 @@ function tkTicket(panel, kind0, preset) {
     if (!live() || !prepared || !el) return false;
     const ms = prepared.action.deadline - Date.now();
     if (ms <= 0) return void requote(true);
-    const t = `Your signature is good for ${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")} more.`;
+    // how long the order as prepared stands: signed before then, it goes as shown; after, it is prepared again from the fields
+    const t = `Ready to sign for ${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
     if (el.textContent !== t) return () => setText(el, t);
   };
   const leftNow = () => {
@@ -1458,6 +1538,9 @@ function tkTicket(panel, kind0, preset) {
       show(`<div class="big"><span>${esc(mk.name)}</span><span>${mk.kind === "event" ? esc(tkCents(mk.price)) : mk.price ? `${esc(px(mk.price))} ${esc(mk.quote)}` : "no price"}</span></div><div class="path">${two ? `${esc(tkSwapHow(payPlan))} ` : ""}${noChance ? "A price in cents is between 0 and 100: a contract pays $1.00 at most." : !(amount > 0) ? "Type an amount." : noTrail ? "Type how far the stop trails: a percent or a price." : TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0) ? "Type the limit price." : "Type the stop price."}</div>`);
       return;
     }
+    // below the smallest order the venue takes (its own rules, as the market read gave them): said at once, nothing asked of the account
+    const small = two ? "" : tkTooSmall(mk, d, picked.venueName || nameOf(picked.venue));
+    if (small) return void show(`<div class="msg no">${esc(small)}</div>`);
     show(`<span class="dim">Asking ${esc(picked.venueName || nameOf(picked.venue))}…</span>`);
     const r = await Owner.prepare(d);
     if (!live() || my !== seq) return;
@@ -1471,12 +1554,30 @@ function tkTicket(panel, kind0, preset) {
       thenWords = `<div class="path"><b>2 · then</b> ${r2.status === 200 ? `${esc(r2.body.quote.order.words)}, with about ${money(est)} of ${esc(payPlan.via)}: sized by what the sale brings, prepared and signed once it has filled.` : `buy ${esc(item.base)}: ${esc(Owner.why(r2) || "refused")}`}</div>`;
     }
     prepared = r.body;
-    show(`${two ? '<div class="path"><b>Two steps, two signatures.</b> 1 · first</div>' : ""}${tkOrderWords(prepared, two ? payPlan.market : mk)}${thenWords}<div class="left-t" data-left></div>`);
+    const now = levNow();
+    show(`${two ? '<div class="path"><b>Two steps, two signatures.</b> 1 · first</div>' : ""}${tkOrderWords(prepared, two ? payPlan.market : mk, { lev: now ? now.leverage : 0 })}${thenWords}<div class="left-t" data-left></div>`);
     signed(whatYouSign(prepared, { open, notes: tkSignNotes(prepared, mk.kind === "event") }));
     btn.textContent = two ? "Sign the sale (1 of 2)" : tkSignWord(venueOf());
     btn.disabled = !owns() || !writesOn();
+    drawKind();
+    pctOf(prepared);
     leftNow();
     stopLeft = everySecond(left);
+  };
+  /* the slider follows the order prepared: its share of what is available (tkPctFill's other way round — dollars of the cash for a buy or a
+     perpetual, units of the holding for a sell), unless the owner has the slider in hand, which the order then follows */
+  const pctOf = (prep) => {
+    const el = form.elements.pct;
+    if (!el || document.activeElement === el || !prep || !prep.quote || !prep.quote.order) return;
+    const a = availOf();
+    if (!a) return;
+    const sell = side === "sell" && !(a.perp);
+    const of = a.coin ? null : sell ? (a.qty > 0 ? Number(prep.action.qty) / a.qty : null) : a.cash > 0 ? Number(prep.quote.order.notionalUsd) / a.cash : null;
+    if (of === null || !Number.isFinite(of)) return;
+    const v = String(Math.max(0, Math.min(100, Math.round(of * 100))));
+    if (el.value !== v) el.value = v;
+    setText(q("[data-pct-v]"), `${v}%`);
+    pctFill(v);
   };
   const later = debounce(requote);
   /* the buy of a two-step, from what the sale brought: prepared, shown, signed on its own */
@@ -1509,9 +1610,9 @@ function tkTicket(panel, kind0, preset) {
   let rankTimer = 0;
   form.addEventListener("input", (e) => {
     const n = e.target && e.target.name;
-    // the leverage typed changes the margin line, nothing the account prepares
-    if (n === "leverage") return void drawKind();
-    if (n === "q" || n === "marginMode" || n === "chain") return;
+    // the leverage typed is set on its own (Set leverage…): it changes nothing the account prepares for the order
+    if (n === "leverage" || n === "marginMode") return void levReady();
+    if (n === "q" || n === "chain") return;
     keep();
     if (n === "amount" || n === "unit") {
       clearTimeout(rankTimer);
@@ -1521,7 +1622,8 @@ function tkTicket(panel, kind0, preset) {
   });
   form.addEventListener("change", async (e) => {
     const n = e.target && e.target.name;
-    if (n === "q" || n === "leverage" || n === "marginMode" || n === "chain") return;
+    if (n === "leverage" || n === "marginMode") return void levReady();
+    if (n === "q" || n === "chain") return;
     if (n === "pay") {
       pay = form.elements.pay.value;
       const coin = payCoin();
@@ -1670,7 +1772,10 @@ function tkOfFace(r, face) {
  * a key ("Connect to trade"; a read-only server offers no connection: the line is a price). A pre-IPO venue carries its implied valuation
  * and unit, which differ by venue */
 /* the band above the venues: which kind of account the order picked is for — PAPER (no real money) or REAL MONEY — and at which venue */
-const tkMoneyBand = (r) => (!r ? "" : r.paper ? `<span class="tk-money paper" title="A paper account: no real money changes hands">PAPER · no real money · ${esc(r.venueName)}</span>` : `<span class="tk-money real" title="A real account: real money">REAL MONEY · ${esc(r.venueName)}</span>`);
+const tkMoneyBand = (r) => (!r ? "" : r.paper ? `<span class="tk-money paper" title="A paper account: no real money changes hands">PAPER · no real money · ${esc(tkPaperless(r.venueName))}</span>` : `<span class="tk-money real" title="A real account: real money">REAL MONEY · ${esc(r.venueName)}</span>`);
+/* a paper account's name without the word its Paper tag already says: "Momentum · paper" is "Momentum" beside the tag. A name that is only
+   that word stays as it is */
+const tkPaperless = (name) => String(name || "").replace(/\s*[·-]\s*paper\s*$/i, "") || String(name || "");
 /* the sign button's word: PAPER on it at a paper account, so the last thing before signing says which money this is */
 const tkSignWord = (v) => (v && v.paper ? "Sign and place · PAPER" : "Sign and place");
 function tkWhereRows(item, ranked, kind = "") {
@@ -1750,11 +1855,16 @@ function tkHowToFix(venue, r) {
   return `<div class="path">${esc(keyHowFor(v))} Then connect it again.</div>`;
 }
 
-/** an order the account prepared, in words: how much, at what, what it may cost at most; an event contract's in cents with what it pays */
-function tkOrderWords(p, m) {
+/** an order the account prepared, in words — HL's summary under its button: a headline (the side as the ticket's toggle says it, Long or
+ * Short on a perpetual; the size; about what it is worth), then label · value rows from the prepared order itself — its value, the margin it
+ * needs at the leverage the venue holds the market at (`lev`, where the venue said one: tkTicket levNow), the most a market buy may cost,
+ * the worst price it may fill at — then how it goes, its flags and the venue's note. Every figure is the prepared order's, so nothing here
+ * can disagree with what is signed. An event contract's in cents, with what it pays */
+function tkOrderWords(p, m, { lev = 0 } = {}) {
   const a = p.action;
   const q = p.quote.order;
   const ev = q.kind === "event";
+  const perp = q.kind === "perp" || q.kind === "future";
   const unit = UNITS[q.kind] || q.base;
   const at = (n) => (ev ? tkCents(n) : `${px(n)} ${q.quote}`);
   const trail = a.trailPercent ? `${a.trailPercent}%` : a.trailPrice ? at(a.trailPrice) : "";
@@ -1763,7 +1873,39 @@ function tkOrderWords(p, m) {
   const flags = [a.tif ? TK_TIF_NAMES[a.tif] : "", a.postOnly ? "post-only" : "", a.reduceOnly ? "reduce-only" : "", a.extendedHours ? "extended hours" : "", exits ? `then ${exits} (one cancels the other)` : ""].filter(Boolean).join(" · ");
   const n = Number(a.qty);
   const what = ev ? `${m && m.outcome ? m.outcome : q.name}` : unit === q.base ? q.base : `${unit} · ${q.base}`;
-  return `<div class="big"><span>${a.side === "buy" ? "Buy" : "Sell"} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(q.notionalUsd)}</span></div><div class="path">${esc(q.name)} ${how}${(a.orderType === "market" || a.orderType === "stop" || a.orderType === "trailing_stop") && a.side === "buy" ? ` · up to ${money(q.maxUsd)} if the price moves` : ""}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(q.notionalUsd)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(q.notionalUsd)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<details class="path tk-qnote"><summary>How it fills here</summary>${esc(q.note)}</details>` : ""}`;
+  const sideWord = perp ? (a.side === "sell" ? "Short" : "Long") : a.side === "buy" ? "Buy" : "Sell";
+  const value = Number(q.notionalUsd);
+  const atMarket = a.orderType === "market" || a.orderType === "stop" || a.orderType === "trailing_stop";
+  const rows = [
+    ["Order value", money(value)],
+    perp && lev > 0 && value > 0 ? ["Margin required", `${money(value / lev)} at ${esc(String(lev))}x`] : null,
+    atMarket && a.side === "buy" && Number(q.maxUsd) > value ? ["Most it may cost", money(q.maxUsd)] : null,
+    atMarket && q.worstPrice !== undefined ? ["Fills no worse than", esc(at(q.worstPrice))] : null,
+  ].filter(Boolean);
+  return `<div class="big"><span>${esc(sideWord)} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(value)}</span></div><dl class="tk-qrows">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl><div class="path">${esc(q.name)} ${how}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(value)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(value)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<details class="path tk-qnote"><summary>How it fills here</summary>${esc(q.note)}</details>` : ""}`;
+}
+
+/** THE SMALLEST ORDER, judged before the account is asked: a market or limit order's size against the market's own rules as its venue
+ * lists them (minQty, qtyStep, minNotional) — a size in dollars turned into units at the price it would be valued at (its limit, else the
+ * ask for a buy and the bid for a sell, else the last price), down to the step, as the account turns it. Below the smallest the venue takes,
+ * its words — what the venue takes, and about what that is worth — so the ticket says so at once instead of asking the account for a
+ * refusal it knows. Anything it cannot judge (a stop, no price, no rule) is "": the account judges it as before */
+function tkTooSmall(m, d, venueName = "") {
+  if (!m || !d || !["market", "limit"].includes(d.orderType)) return "";
+  const byQty = d.qty !== undefined && d.qty !== "";
+  const size = Number(byQty ? d.qty : d.usd);
+  if (!(size > 0)) return "";
+  const price = d.orderType === "limit" && Number(d.limitPrice) > 0 ? Number(d.limitPrice) : Number((d.side === "sell" ? m.bid : m.ask) ?? m.price);
+  if (!(price > 0)) return "";
+  const each = price * (Number(m.contractSize) > 0 ? Number(m.contractSize) : 1);
+  const step = Number(m.qtyStep) > 0 ? Number(m.qtyStep) : 0;
+  const qty = byQty ? size : tkFloor(size / each, step);
+  const least = Math.max(Number(m.minQty) > 0 ? Number(m.minQty) : 0, byQty ? 0 : step);
+  const where = venueName || "the venue";
+  const unit = m.kind === "event" ? "contracts" : tkSizeUnit(m) || m.base || "";
+  if (least > 0 && qty < least - 1e-12) return `The smallest order ${where} takes here is ${qtyOf(least)}${unit ? ` ${unit}` : ""} (about ${money(least * each)}).`;
+  if (Number(m.minNotional) > 0 && qty * each < Number(m.minNotional) - 1e-9) return `The smallest order ${where} takes here is worth ${money(m.minNotional)}.`;
+  return "";
 }
 
 /** a ticket opened on one market at one venue: the row it would be on Markets, with its outcomes (an event) and the other places it is
@@ -1822,6 +1964,17 @@ function tkAdvSummary(m, f = {}) {
   if (allowed.length && allowed.every((x) => x === "ioc" || x === "fok")) return `A ${(TK_TYPE_NAMES[t] || t).toLowerCase()} order here fills now or is cancelled (${allowed.join("/")})`;
   if (allowed.length && !allowed.includes("gtc")) return `Never rests until cancelled here: ${allowed.map(word).join(" or ")}`;
   return `${allowed.length ? `The venue's default · ${allowed.map(word).join(" · ")}` : "The venue's default time in force"}${m.postOnly && t === "limit" ? " · post-only possible" : ""}${m.reduceOnly ? " · reduce-only possible" : ""}${eh && t === "limit" ? " · extended hours possible" : ""}`;
+}
+
+/** Advanced's line in a few letters, as HL writes its own ("TIF GTC"): the time in force set, by its code (GTC, IOC, FOK, DAY) — else, where
+ * every time in force this order type takes here fills now, those (IOC/FOK) — else "Default", the venue's own — and a flag that is set.
+ * The whole rule in words (tkAdvSummary) is its title, so nothing is cut to fit */
+function tkAdvShort(m, f = {}) {
+  const t = f.orderType || "market";
+  const allowed = (m.tifsByType && m.tifsByType[t]) || m.tifs || [];
+  const tif = f.tif ? String(f.tif).toUpperCase() : allowed.length && allowed.every((x) => x === "ioc" || x === "fok") ? allowed.map((x) => String(x).toUpperCase()).join("/") : "Default";
+  const eh = !!(m.session && m.session.extendedHours);
+  return [tif, t === "limit" && f.postOnly ? "Post-only" : "", t === "limit" && eh && f.extendedHours ? "Extended hours" : ""].filter(Boolean).join(" · ");
 }
 
 /* a stock market's session as the face says it — open now and when it closes, or closed and when it opens — from the venue's own clock or
@@ -1894,10 +2047,8 @@ function tkKindBlock(kind, m, at, item, c = {}) {
       if (m.price && !pre) L.push(`Mark ${esc(px(m.price))} ${esc(m.quote)}${m.changePct24h !== undefined ? ` · 24h ${chg(m.changePct24h)}` : ""}`);
       if (m.fundingRate !== undefined) L.push(`Funding ${esc((m.fundingRate * 100).toFixed(4))}% a period${m.nextFundingAt ? `, next paid ${esc(nyTime(m.nextFundingAt))} New York` : ""}${m.maxLeverage ? ` · up to ${esc(String(m.maxLeverage))}x here` : ""}.`);
       else if (m.maxLeverage) L.push(`Up to ${esc(String(m.maxLeverage))}x here.`);
-      const lev = Number(c.leverage) >= 1 ? Number(c.leverage) : c.held && c.held.leverage ? Number(c.held.leverage) : 0;
-      const n = Number(c.amount);
-      const notional = n > 0 ? (c.unit === "qty" ? n * (m.contractSize || 1) * (m.price || 0) : n) : 0;
-      if (notional > 0 && lev > 0) L.push(`Margin ≈ ${money(notional / lev)} for ${money(notional)} at ${esc(String(lev))}x.`);
+      // the margin an order needs is the quote's (tkOrderWords: Margin required), worked out from the order the account prepared — never
+      // from the amount typed, which a market's step may round down
       // the leverage the door just set here is shown as the venue confirmed it, until the venue's positions read says the same
       const h = c.held || null;
       const set = TK.lev && at && TK.lev.venue === at.venue && TK.lev.symbol === m.symbol ? TK.lev : null;
@@ -1965,26 +2116,31 @@ const tkOpenOrders = () => (A.orders || []).filter((o) => isLive(o) && inLens(o.
 const tkTradeCard = (c) => /order|amend|close|earn|trade/i.test(String(c.kind || ""));
 const tkCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {}).value || "";
 
-/** Under way: orders on a book or waiting for a wallet (Change, Cancel, Send from wallet), money on its way and money going in or out of
- * earn — in the lens; an agent's card as a status row whose one action is Review (it is answered under Portfolio, the one place). Drawn
- * again only when it changed, the focused button (by its data-fk) focused again: core paint */
+/** Under way — the terminal's Open orders tab: the orders on a book or waiting for a wallet in HL's columns (Time · Type · Market ·
+ * Direction · Size · Original size · Order value · Price · Reduce only · Trigger, then the state, who placed it and its buttons: Change,
+ * Cancel, Send from wallet), the account's id for each order on hover; Cancel all heads the buttons' column, as HL's Cancel All does. Under
+ * that table, what else is under way — an agent's card (a status row whose one action is Review: it is answered under Portfolio, the one
+ * place), money on its way, money going in or out of earn — in the lens. Drawn again only when it changed, the focused button (by its
+ * data-fk) focused again: core paint */
 function tkDrawOpen(sec, owner) {
   const orders = tkOpenOrders();
   const cards = A.cards.filter((c) => tkTradeCard(c) && inLens(tkCardVenue(c), c.agent));
   const pays = A.payments.filter((p) => p.live && ["pending", "authorized"].includes(p.status) && inLens(p.from, p.agent));
   const earns = (A.earns || []).filter((x) => x.status === "pending" && inLens(x.venue, x.agent));
   const cancellable = orders.filter((o) => !(o.walletTxs && !o.ref) && !o.canceling);
-  const rows = [...cards.map((c) => ({ c })), ...orders.map((o) => ({ o })), ...pays.map((p) => ({ p })), ...earns.map((x) => ({ x }))];
-  const n = rows.length;
-  // where it is and who placed it: one line under the order
+  const rows = [...cards.map((c) => ({ c })), ...pays.map((p) => ({ p })), ...earns.map((x) => ({ x }))];
+  // where it is and who placed it: one line under what it is
   const whereOf = (r) => (r.c ? nameOf(tkCardVenue(r.c)) || "—" : r.o ? r.o.venueName : r.p ? nameOf(r.p.from) : r.x.venueName);
   const who = (r) => (r.c ? r.c.agentName || "An agent" : byOf(r.o || r.p || r.x));
   const byLine = (r) => { const b = who(r); return `by ${b === "You" || b === "An agent" ? b.toLowerCase() : b}`; };
-  const html = `<div class="sec-head"><h2 class="h2" id="tp-open-h">Under way</h2><span class="tools">${n ? `<span class="dim small">${n}</span>` : ""}${owner && cancellable.length > 1 ? `<button type="button" class="link" data-cancel-all data-fk="cancel-all">Cancel all ${cancellable.length}</button>` : ""}</span></div>${table([
-    { label: "Order", cell: (r) => `${tkOpenWhat(r)}<span class="why tp-wb">${esc(whereOf(r))} · ${esc(byLine(r))}</span>` },
+  const all = owner && cancellable.length > 1 ? `<button type="button" class="link" data-cancel-all data-fk="cancel-all">Cancel all ${cancellable.length}</button>` : "";
+  const ordersHtml = orders.length ? `<div class="t-wrap"><table class="t tt-t tk-open-t"><thead><tr><th>Time</th><th>Type</th><th>Market</th><th>Direction</th><th class="r">Size</th><th class="r">Original size</th><th class="r">Order value</th><th class="r">Price</th><th>Reduce only</th><th>Trigger</th><th>Status</th><th>By</th><th class="r">${all || '<span class="sr">Actions</span>'}</th></tr></thead><tbody>${orders.map((o) => tkOpenRow(o, owner)).join("")}</tbody></table></div>` : '<p class="empty">No open orders yet.</p>';
+  const rest = rows.length ? `<h3 class="label tk-open-also">Also under way</h3>${table([
+    { label: "What", cell: (r) => `${tkOpenWhat(r)}<span class="why tp-wb">${esc(whereOf(r))} · ${esc(byLine(r))}</span>` },
     { label: "Status", cell: (r) => tkOpenStatus(r) },
     { label: "", r: true, cell: (r) => (r.c || owner ? tkOpenActs(r) : "") },
-  ], rows, { empty: "Nothing under way. Orders on a book, money on its way, and what an agent asks you for show up here." })}`;
+  ], rows)}` : "";
+  const html = `<h2 class="sr" id="tp-open-h">Open orders</h2>${ordersHtml}${rest}`;
   // what Cancel all takes off, as last drawn; the rows' buttons are heard once, on the section (they are drawn again in place)
   sec.tkCancellable = cancellable;
   paint(sec, html);
@@ -2010,6 +2166,19 @@ function tkDrawOpen(sec, owner) {
     if (!(await confirmSheet(`Cancel all ${all.length} open orders${lensNow().kind === "all" ? "" : ` in ${lensNow().name}`}? Each comes off its venue's book, one signature each.`, { title: "Cancel every open order", yes: `Cancel ${all.length} orders`, no: "Keep them", danger: true }))) return;
     for (const o of all) await own({ type: "liveCancel", venue: o.venue, order: o.id });
   });
+}
+/** one open order as a row of HL's Open orders: when it was placed (New York), its type, the market by its name (the venue beside it,
+ * quieter; the account's id and the venue on hover — never the raw symbol), the side in its word and colour, what is left of it and what it
+ * was, what it is worth, its limit (Market for one at market; an event's in cents), whether it only reduces, what triggers it, its state,
+ * who placed it, and its buttons */
+function tkOpenRow(o, owner) {
+  const ev = o.kind === "event";
+  const at = (n) => (n === undefined || n === null ? "—" : esc(ev ? tkCents(n) : px(n)));
+  const left = Math.max(0, Number(o.qty) - Number(o.filledQty || 0));
+  const unit = ev || o.contractSize ? " contracts" : "";
+  const trigger = o.type === "stop" || o.type === "stop_limit" ? `${o.side === "buy" ? "Rises to" : "Falls to"} ${at(o.stopPrice)}` : o.type === "trailing_stop" ? `Trails ${o.trailPercent !== undefined ? esc(`${o.trailPercent}%`) : at(o.trailPrice)}` : "—";
+  const r = { o };
+  return `<tr><td class="tab-nums nw">${esc(nyDay(o.at))} ${esc(nyTime(o.at))}</td><td class="nw">${esc(TK_TYPE_NAMES[o.type] || o.type || "—")}</td><td class="tt-c-mkt" title="${esc(`${o.id} · ${o.venueName}`)}"><b>${esc(o.name || o.base)}</b>${o.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(o.venueName)}</span></td><td class="${o.side === "sell" ? "down" : "up"}">${o.side === "sell" ? "Sell" : "Buy"}</td><td class="r">${esc(qtyOf(left))}${unit}</td><td class="r">${esc(qtyOf(o.qty))}${unit}</td><td class="r">${o.usd !== undefined ? money(o.usd) : "—"}</td><td class="r">${o.limitPrice !== undefined ? at(o.limitPrice) : "Market"}</td><td>${o.reduceOnly ? "Yes" : "No"}</td><td class="nw">${trigger}</td><td>${tkOpenStatus(r)}</td><td>${esc(byOf(o))}</td><td class="r">${owner ? tkOpenActs(r) : ""}</td></tr>`;
 }
 function tkOpenWhat(r) {
   if (r.c) return `${esc(r.c.reason)}<details class="inl"><summary>details</summary><pre class="tk-pre">${esc((r.c.shown || []).map((f) => `${f.name}: ${f.value}`).join("\n"))}</pre></details>`;
