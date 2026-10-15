@@ -14,6 +14,11 @@
  *                                                                              in Beast inside the per-supply line
  *   a payment                      pay-real.ts                              · Beast pays a payee paid before at once; a first payment is a card
  *                                                                              unless the limit names any payee (`*`)
+ *   the desk's own seats at its    live-orders.ts agent() · close()        · Guard's one exception, the superagent (desk.ts autonomyFor): once
+ *   paper account                    (AutonomyHook)                           the owner signs the desk's autonomy on paper, the orders and
+ *                                                                              closes of the desk's own trading seats at its paper account go as
+ *                                                                              Beast's do, inside each seat's limit; any other agent or venue as
+ *                                                                              the mode says
  * In both modes anything over a limit is refused before a card is raised, and the owner's own actions are the owner's to sign. */
 
 /** how long a card waits for the owner before it closes unanswered (account/exchange.ts expireCards gives back what it held) */
@@ -41,6 +46,7 @@ export const MODE_RULES: readonly ModeRule[] = [
   { door: "Pay from its agent wallet", guard: "Waits on a card", beast: "At once for a payee it paid before; the first payment to a payee still waits on a card, unless its limit says any payee" },
   { door: "Cancel its own order", guard: "At once, never a card", beast: "At once, never a card" },
   { door: "Set leverage with no position open", guard: "At once", beast: "At once" },
+  { door: "The desk's own seats at its paper account", guard: "At once inside each seat's trading limit once you sign the desk's autonomy on paper; until then, waits on a card", beast: "At once" },
 ];
 
 /** the rules as the account page carries them (AccountPage.modeRules) */

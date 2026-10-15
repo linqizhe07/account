@@ -456,7 +456,10 @@ function pfPaperWorthHtml(l) {
   const since = startUsd > 0 ? (h && !h.error && h.sinceStartUsd !== undefined ? h.sinceStartUsd : usd - startUsd) : null;
   const realUsd = PF.holdReal && Number.isFinite(Number(PF.holdReal.totalUsd)) ? Number(PF.holdReal.totalUsd) : A.liveUsd;
   const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)} <span class="tag paper">Paper</span></div><div class="num">${money(usd)}</div><div class="pf-today">${pfPaperRangeLine(h)}${pfInfo(notes)}</div>${since !== null ? `<div class="pf-aside small">${chg(since, "$")} <span class="dim">since ${L.length === 1 ? "it" : "they"} started with ${money(startUsd)}${h && h.first ? ` · ${esc(nyDay(h.first))}` : ""}</span></div>` : ""}</div><div class="pf-worth-c">${pfBookSeg(l, "paper")}${pfSeg("range", PF_RANGES, PF.range, "Range")}</div></div>`;
-  const foot = `<p class="dim small pf-note">Paper money, not counted in your net worth${l.kind === "all" || l.kind === "paper" ? ` (real money: ${money(realUsd)})` : ""}.${l.kind === "venue" || l.kind === "paper" ? ` ${pfBtn("all", "Show all accounts", { cls: "link" })}` : ""}</p>`;
+  // the superagent: Trade's second mode, the account's desk trading a paper account by itself (#/trade?mode=superagent, ui/superagent.js),
+  // reached from the book it would trade. A link only: it does not change the mode the rail's Trade opens (only the switch keeps that)
+  const superagent = ` <a class="link" href="${esc(hashOf("superagent", one ? { venue: one.id } : {}))}">${icon("superagent", "sm")}Let the superagent trade it ›</a>`;
+  const foot = `<p class="dim small pf-note">Paper money, not counted in your net worth${l.kind === "all" || l.kind === "paper" ? ` (real money: ${money(realUsd)})` : ""}.${l.kind === "venue" || l.kind === "paper" ? ` ${pfBtn("all", "Show all accounts", { cls: "link" })}` : ""}${superagent}</p>`;
   return `${head}${pfCurveHtml(h, { paper: true })}${foot}`;
 }
 /* the paper curve's change over the range: since the first point when the range starts before it */

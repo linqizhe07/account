@@ -57,7 +57,7 @@ import { BUCKET_MS, paperCurve, paperRangeStart, type PaperHistory, type PaperVe
 import { paperBarsWanted, paperBookStart, rebuildEquity, type PriceSeries } from "./live/paper-history.ts";
 import { loadBook, paperBookPath, paperDir, type PaperBook } from "./live/paper.ts";
 import { costBasis, ordersOf, type CostBasis, type LoggedOrder, type VenuePosition } from "./account/costbasis.ts";
-import type { LiveOrder } from "./account/live-orders.ts";
+import type { AutonomyHook, LiveOrder } from "./account/live-orders.ts";
 import type { LiveEarn } from "./account/live-earn.ts";
 import type { Payment } from "./account/payments.ts";
 import { exploreAcross, type Exploration, type ExploreSort, type ExploreVenue } from "./live/explore.ts";
@@ -155,7 +155,7 @@ export interface ServiceOptions {
   /** THE DESK (account/desk.ts), on a real account: the brain its house seats think with (default: a Claude model through the Anthropic
    * API, account/brain-claude.ts; a scripted one in tests) and how often its clock ticks (0: only when asked, as in tests) */
   /** the desk's brains: by default Claude (the Anthropic API) and any OpenAI-format endpoint, each ready when its key is there */
-  desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined } | undefined;
+  desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined; firstCycleMs?: number | undefined } | undefined;
 }
 
 /** one slice of an order (or any step an agent flies): where, what, and the agent's words for it */
@@ -364,7 +364,7 @@ export class PortfolioService {
     this.account = opts.account !== undefined || opts.venues === "frontline" ? new AccountEngine(this.host(), opts.account ?? {}) : undefined;
     if (this.account) this.catalog = opts.connectable ?? loadConnectable();
     // the desk lives on a real account only: its seats are keys at the real door, its leads orders at a venue connected live
-    this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? [claudeBrain({ home: opts.home }), openaiBrain({ home: opts.home })], tickMs: opts.desk?.tickMs }) : undefined;
+    this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? [claudeBrain({ home: opts.home }), openaiBrain({ home: opts.home })], tickMs: opts.desk?.tickMs, firstCycleMs: opts.desk?.firstCycleMs }) : undefined;
     // the payees are simulated hosts: a real account has none. A real account pays real ones, from agent wallets (account/pay-real.ts)
     this.payees = this.account && !opts.real ? mountPayees(this.account) : undefined;
     if (this.account && opts.real && opts.liveWrites) this.account.usePayer(new RealPayer(this.account, { http: opts.payHttp ?? guardedHttp, chain: this.liveDeps().chain, wallet: (name) => agentWalletKey(opts.home, name), clock: () => this.liveDeps().clock(), capUsd: () => this.capUsd }));
@@ -384,8 +384,10 @@ export class PortfolioService {
   }
 
   /** what the account layer may use of the service: the venues, the dial, the flight board, the ledger. A real account sees only the venues
-   * connected live: the simulated ones stay on the statement page */
-  private host(): ConstructorParameters<typeof AccountEngine>[0] {
+   * connected live: the simulated ones stay on the statement page. And the order door's one question beyond the dial (AutonomyHook): is
+   * this order the desk's own, at its paper account, under the autonomy the owner signed — asked of the desk only for a venue that is a
+   * paper account on this account (the door checks the same of the venue it is placing at) */
+  private host(): ConstructorParameters<typeof AccountEngine>[0] & AutonomyHook {
     const real = this.opts.real === true;
     const shown = (a: AccountAdapter | undefined) => (!real || a?.account.watchOnly ? a : undefined);
     return {
@@ -572,6 +574,7 @@ export class PortfolioService {
       pairingCode: () => this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode,
       memory: () => this.memory,
       desk: (action, who) => (this.desk ? this.desk.apply(action, who) : Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk: it is the real account's" }))),
+      autonomy: (signer, venue) => (this.desk && this.paperVenue(venue) ? this.desk.autonomyFor(signer, venue) : undefined),
       ...(real && this.opts.liveWrites
         ? {
             agentWalletAddress: (name: string) => {
@@ -1291,8 +1294,14 @@ export class PortfolioService {
 
   /** ONE MARKET'S LATEST TRADES, newest first, `limit` of them at most (1 to 100), from where `marketBook` reads its book: a connected venue's
    * trader, else the public source that names the same connection (its refusal, where it knows the market, is the answer), else — a venue
-   * not connected — its public source. A trade's side only where the source says which side took. A venue or source that publishes none (a
-   * US stock's public quote: none) says so. Kept three seconds (TRADES_KEEP_MS). A read */
+   * not connected — its public source. A trade's side only where the source says which side took. Kept three seconds (TRADES_KEEP_MS). A
+   * read.
+   *
+   * A venue or source that publishes no trades at all (a US stock's public quote; a paper account's market priced from one; a connection
+   * with neither a trades read nor a public twin) is not refused: that is the source's fact, as a book that is only its best bid and ask is
+   * answered as that. The answer is an empty list with `none`, the sentence saying so ("US stocks publishes no trades the account can
+   * read"), and the page's Trades tab shows the sentence and stops asking until the market changes. Every other refusal — no answer in
+   * time, a place rule, a market the source does not list — stays the refusal it is */
   async marketTrades(venue: string, symbol: string, limit = 30): Promise<TradesView | Refusal> {
     const asked = this.oneMarket(venue, symbol);
     if (isRefusal(asked)) return asked;
@@ -1304,15 +1313,19 @@ export class PortfolioService {
       if (!t) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${live.name}: ${live.noTradeBecause ?? "no markets are read here from the account"}` });
       if (t.trades) {
         const got = await within(BOOK_WAIT_MS, this.marketReads.get(`trades|${id}|${sym}|${limit}`, TRADES_KEEP_MS, () => t.trades!(sym, limit).catch((err: unknown) => thrownBy(id, live.name, err)), id, true), id, live.name);
+        // a paper account's market priced from a source with no trades (live/paper.ts trades: "Paper: US stocks publishes no trades") is
+        // that source's fact, said as one; the paper account's own name is dropped, since the sentence is about the source
+        const none = isRefusal(got) ? noTradesSaid(got, live.name) : undefined;
+        if (none !== undefined) return { venue: id, venueName: live.name, symbol: sym, trades: [], none };
         return isRefusal(got) ? got : { venue: id, venueName: live.name, symbol: sym, trades: got };
       }
       const got = await this.twinRead(live, id, sym, "trades", limit);
       if (got !== undefined) return isRefusal(got) ? got : { venue: id, venueName: live.name, symbol: sym, trades: got as PublicTrade[] };
-      return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${live.name} publishes no trades the account can read` });
+      return { venue: id, venueName: live.name, symbol: sym, trades: [], none: `${live.name} publishes no trades the account can read` };
     }
     const src = this.publicMarkets().find((x) => x.id === id);
     if (!src) return no("E_WALLET_ACCOUNT_UNKNOWN", { venue: id, message: `"${id.slice(0, 40)}" is neither a venue connected live nor a public market source: Markets names both` });
-    if (!src.trades) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${src.name} publishes no trades` });
+    if (!src.trades) return { venue: id, venueName: src.name, symbol: sym, trades: [], none: `${src.name} publishes no trades the account can read`, public: true };
     const got = await this.publicRead(src, "trades", sym, limit);
     return isRefusal(got) ? got : { venue: id, venueName: src.name, symbol: sym, trades: got as PublicTrade[], public: true };
   }
@@ -3170,7 +3183,21 @@ export interface TradesView {
   venueName: string;
   symbol: string;
   trades: PublicTrade[];
+  /** the source publishes no trades at all, in a sentence ("US stocks publishes no trades the account can read"); `trades` is then empty and
+   * asking again would say the same, so the page stops asking until the market changes */
+  none?: string | undefined;
   public?: true | undefined;
+}
+
+/** A paper account's trades read for a market whose public source publishes none says so as a refusal of its own (live/paper.ts trades:
+ * E_VENUE_RAIL_CLOSED, "<paper account>: <source> publishes no trades"). That one sentence is the source's fact, not a failure, so
+ * marketTrades answers it as `none`: the source's words, with the paper account's name taken off the front. Any other refusal is undefined
+ * here and stays the refusal it is */
+function noTradesSaid(r: Refusal, venueName: string): string | undefined {
+  if (r.code !== "E_VENUE_RAIL_CLOSED" || typeof r.message !== "string") return undefined;
+  const m = /^(?:(.+?): )?(.+) publishes no trades(?: the account can read)?$/.exec(r.message);
+  if (!m || (m[1] !== undefined && m[1] !== venueName)) return undefined;
+  return `${m[2]} publishes no trades the account can read`;
 }
 
 export interface CandleSeries {

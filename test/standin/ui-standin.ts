@@ -4,6 +4,16 @@
  *   npx tsx test/standin/ui-standin.ts --port 4821      (never 4820: that port is the real account's)
  *     --cap 250        the most one order or movement may be worth (the server's --live-cap)
  *     --tick 3000      how often prices move, in milliseconds
+ *     --no-desk        no desk hired: the page's own setup, with the real brains behind it, each saying honestly that this home holds no
+ *                      key for it (the no-key fix: the key file's path and the command that makes it)
+ *     --superagent     the desk hired as the SUPERAGENT at the account's own paper account (paper-momentum), its autonomy on paper signed,
+ *                      its clock running every ten seconds and a cycle every minute, the first a few seconds after the start
+ *     --cards          with --superagent: hired with the autonomy OFF, so in Guard every lead it clears waits for you on a card — the
+ *                      Superagent pane's "Waits for you" strip, with real cards to approve or reject
+ *     --brain-refuses  the scripted brain answers as the API does to a key it refuses (E_BRAIN_KEY_REJECTED, brain-key.ts): the desk's
+ *                      standing turns "not ready" with the rejected-key fix, and the room says so once. The stand-in writes a stand-in key
+ *                      to <home>/credentials/anthropic/api-key.json at the start; change what that file holds (the fix's command opens
+ *                      it) and the next call is answered, as a replaced key would be
  *
  * It starts the account exactly as `npm run account` does — real accounts only, trading on with a small cap, a pairing code printed here —
  * on a fresh temporary home, with every live connection's reach replaced by a stand-in (test/standin/venues.ts): the venues, the public
@@ -45,15 +55,16 @@
  * is open), a stop fires, the fifteen-minute bitcoin market rolls over and settles; Claude Code reports when its order fills, and when its
  * card expires unanswered the seed key closes it and Claude Code asks again (in Guard only).
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
-import { scriptedBrain, seatName, type RoleId } from "../../src/portfolio/account/desk.ts";
-import { claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
+import { scriptedBrain, seatName, type Brain, type BrainAnswer, type BrainRequest, type RoleId } from "../../src/portfolio/account/desk.ts";
+import { ANTHROPIC_KEY_REF, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
+import { keyRejected, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
 import { openaiBrain } from "../../src/portfolio/account/brain-openai.ts";
 import { agentWalletKey } from "../../src/portfolio/account/keystore.ts";
 import { NetWorthLog, networthPath } from "../../src/portfolio/account/networth.ts";
@@ -90,6 +101,15 @@ export interface StandinOptions {
   home?: string | undefined;
   /** the desk hired and run twice (true unless said): false leaves it to the page, with the scripted brain behind it (`--no-desk`) */
   desk?: boolean | undefined;
+  /** the desk hired as a SUPERAGENT instead (`--superagent`): at the account's own paper account (paper-momentum), the paper autonomy
+   * signed on, its clock running every ten seconds and a cycle every minute, the script picking from the very rows Search is shown — so
+   * the Superagent pane's floor (#/trade?mode=superagent) plays real cycles: scans, handoffs, a rejection now and then, orders, fills and
+   * exits */
+  superagent?: boolean | undefined;
+  /** with `superagent`: hired with its autonomy off (`--cards`), so in Guard each lead it clears waits for the owner on a card */
+  cards?: boolean | undefined;
+  /** the scripted brain refuses its key as the API would (`--brain-refuses`), until the stand-in's key file is changed (refusingBrain) */
+  brainRefuses?: boolean | undefined;
 }
 
 /** what was seeded, by id */
@@ -153,7 +173,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     publicMarkets: publicSources(),
     // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds
     // no desk seeded: the real brains stand behind the hire form, each saying honestly that this home holds no key for it
-    desk: { brain: o.desk === false ? [claudeBrain({ home }), openaiBrain({ home })] : standinBrain(), tickMs: 0 },
+    desk: { brain: o.desk === false ? [claudeBrain({ home }), openaiBrain({ home })] : refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home), tickMs: o.superagent ? 10_000 : 0 },
     payHttp: async () => ({ status: 0, headers: {}, body: undefined, error: "the stand-in pays no one: it reaches no network" }),
     liveDeps: {
       http: noNetwork,
@@ -268,7 +288,16 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     ok(`the ${role} seat let in`, await own({ type: "approveAgent", agentAddress: k.address, agentName: seatName(role), validUntil: now + 30 * DAY }));
     if (role === "sniper" || role === "exit") ok(`the ${role} seat's limit`, await own({ type: "approveSpend", agent: k.address, scope: "trade", allow: "ex", perPayment: "80", budget: "400", windowHours: 0, validUntil: now + 7 * DAY }));
   }
-  if (o.desk !== false) {
+  if (o.desk !== false && o.superagent) {
+    for (const role of deskRoles) {
+      const k = svc.desk!.seatKeyOf(role);
+      if (isRefusal(k)) throw new Error(`the stand-in could not make the ${role} seat's key: ${k.message}`);
+      if (role === "sniper" || role === "exit") ok(`the ${role} seat's paper limit`, await own({ type: "approveSpend", agent: k.address, scope: "trade", allow: "paper-momentum", perPayment: "250", budget: "5000", windowHours: 0, validUntil: now + 7 * DAY }));
+    }
+    ok("the superagent hired", await own({ type: "setDesk", desk: "desk", change: "hire", value: JSON.stringify({ name: "Momentum desk", objective: { text: "Ride the majors' momentum on paper, small and quick", venue: "paper-momentum", universe: "crypto", targetPct: 3, maxRiskPct: 1, maxDailyLossPct: 5, hours: 22, everyMin: 1, reportAt: "21:00", maxOpen: 3 }, brain: { model: "claude-opus-5-5", effort: "medium" }, roles: deskRoles.map((role) => ({ role, kind: "house" })), ...(o.cards ? {} : { autonomy: { paper: true } }) }) }));
+    // the autonomy on paper is signed in the hire itself (account/desk.ts hire `autonomy`), so the desk never runs a moment without it;
+    // `--cards`: it is never signed, so the desk's orders wait for the owner on cards (the account is in Guard by now)
+  } else if (o.desk !== false) {
     ok("the desk hired", await own({ type: "setDesk", desk: "desk", change: "hire", value: JSON.stringify({ name: "The desk", objective: { text: "Small, careful entries on the majors this week; nothing I could not explain", venue: "ex", universe: "all", targetPct: 3, maxRiskPct: 1, maxDailyLossPct: 5, hours: 22, everyMin: 15, reportAt: "21:00" }, brain: { model: "claude-opus-5-5", effort: "medium" }, roles: deskRoles.map((role) => ({ role, kind: "house" })) }) }));
     ok("Beast for the desk", await own({ type: "setPolicy", change: "mode", value: "open" }));
     await svc.desk!.cycle("the stand-in");
@@ -368,6 +397,9 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     await agentLooks();
     await svc.desk?.tick();
   });
+  // the superagent's own clock, as the real server runs it (service.ts watchDesk): every ten seconds, and its first cycle a few seconds
+  // after the start rather than at the agent's next look. Not where prices only move when asked (tests: tickMs 0)
+  const stopDesk = o.superagent && o.desk !== false && (o.tickMs ?? 3_000) > 0 ? svc.watchDesk() : undefined;
 
   const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", "paper", "paper-momentum", walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
   return {
@@ -381,6 +413,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     agent,
     step,
     close: async () => {
+      stopDesk?.();
       for (const t of timers) clearInterval(t);
       await server.close();
       // a home made for a test goes with it; the one the command line made is kept (its ledger, and the agent wallet's key)
@@ -444,6 +477,57 @@ async function drawThePast(svc: PortfolioService, world: World, home: string, wa
   return written;
 }
 
+/** the superagent's brain in the stand-in: a script that picks from the very table Search is shown (the paper account's rows), in turn;
+ * Risk clears most at $60 with a quick 0.4% take-profit and stop, and rejects every third with its reason; Exit holds; the Head writes
+ * two fixed sentences. A script, so nothing here is any model's judgement: it only makes the desk's real steps happen on the stand-in */
+function superagentBrain() {
+  let n = 0;
+  let r = 0;
+  return scriptedBrain(({ role, input }) => {
+    if (role === "search") {
+      const symbols = [...new Set([...input.matchAll(/"symbol":\s*"([^"]+)"/g)].map((m) => m[1]!))];
+      if (!symbols.length) return { leads: [], note: "nothing listed to pick from" };
+      const symbol = symbols[n++ % Math.min(symbols.length, 6)]!;
+      return { leads: [{ symbol, side: "buy", thesis: `${symbol.split(/[/:@-]/)[0]} keeps its momentum on volume`, confidence: 0.55 + (n % 4) * 0.1 }], note: "" };
+    }
+    if (role === "risk") return ++r % 3 === 0 ? { verdict: "reject", why: "the move is already spent on the day", sizeUsd: 0, tpPct: 0.4, slPct: 0.4, maxHours: 1 } : { verdict: "clear", why: "a tight spread, the day's loss room untouched", sizeUsd: 60, tpPct: 0.4, slPct: 0.4, maxHours: 1 };
+    if (role === "exit") return { decisions: [] };
+    if (role === "head") return { worked: "Quick entries, each with its numbers said first.", change: "Keep the size small while the tape is thin." };
+    return null;
+  });
+}
+
+/** The stand-in's brain answering as the Anthropic API does to a key it refuses (`--brain-refuses`): every call throws E_BRAIN_KEY_REJECTED
+ * with the fix brain-claude.ts gives for a key from the file (the file opened again, no restart), so the page shows the rejected-key
+ * standing with real paths. A stand-in key is written to <home>/credentials/anthropic/api-key.json, the user's alone, at the start: while
+ * the file holds exactly that, the calls are refused; once it holds anything else — the owner "replaced the key" — the script answers
+ * again, and the desk clears the fault on that answer. Its standing (ready) stays the script's: a refused key's shape looks fine, which is
+ * the point — only a call finds it out */
+function refusingIf(on: boolean, brain: Brain, home: string): Brain {
+  if (!on) return brain;
+  const file = join(home, ANTHROPIC_KEY_REF);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, '{"apiKey": "sk-ant-standin-key-the-api-refuses-0000"}\n', { mode: 0o600 });
+  const refused = readFileSync(file, "utf8");
+  const now = (): string => {
+    try {
+      return readFileSync(file, "utf8");
+    } catch {
+      return "";
+    }
+  };
+  return {
+    id: brain.id,
+    label: brain.label,
+    models: brain.models,
+    ready: (model?: string) => brain.ready(model),
+    async decide<T>(r: BrainRequest<T>): Promise<BrainAnswer<T>> {
+      if (now() === refused) throw keyRejected("the API did not accept the key", "Anthropic", rejectedFix(file, undefined, "Anthropic"));
+      return brain.decide(r);
+    },
+  };
+}
+
 /** the desk's brain in the stand-in: a script. Search names ETH, SOL and BTC at the exchange in turn; Risk clears at $60 with a 1.2%
  * take-profit, a 0.8% stop and twelve hours; Exit holds; the Head writes two fixed sentences */
 function standinBrain() {
@@ -478,7 +562,8 @@ if (isMain) {
   const capUsd = Number(at("--cap") ?? 250);
   const tickMs = Number(at("--tick") ?? 3_000);
   if (!(capUsd > 0) || !(tickMs > 0)) throw new Error("--cap is dollars and --tick milliseconds, both more than zero");
-  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk") }).catch((e: NodeJS.ErrnoException) => {
+  if (args.includes("--cards") && !args.includes("--superagent")) throw new Error("--cards goes with --superagent: it hires the superagent with its autonomy off");
+  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses") }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EADDRINUSE") {
       console.error(`port ${port} is already in use: is a stand-in running already? Open http://127.0.0.1:${port}, or pick another with --port`);
       process.exit(1);
@@ -495,6 +580,8 @@ if (isMain) {
       `  trading       on, at most $${capUsd} an order or a movement`,
       `  agent wallet  ${v.agent.wallet} holds a real key made in this home, so its address is a real one: send it nothing real`,
       `  seeded        venues ${v.venues.join(", ")} · ${Object.keys(v.orders).length} orders · ${v.agent.name} with trade, venues and payees limits and an agent wallet · 1 card waiting (${v.card}) · ${v.intents.length} intents · a report · ${v.asks} asks · ${v.watch} watched markets · ${v.curvePoints} net worth points over 7 days`,
+      ...(args.includes("--superagent") ? [`  superagent    the desk at paper-momentum (paper money), ${args.includes("--cards") ? "its autonomy off: in Guard each lead it clears waits for you on a card" : "trading on its own on paper"} · ${s.url}/#/trade?mode=superagent`] : []),
+      ...(args.includes("--brain-refuses") ? [`  brain         refuses its key, as the API does, until ${join(s.home, ANTHROPIC_KEY_REF)} holds something else`] : []),
       `  prices move every ${tickMs / 1000} s · Ctrl-C to stop`,
     ].join("\n"),
   );

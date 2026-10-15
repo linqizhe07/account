@@ -151,7 +151,7 @@ function dkViewHtml(v, owner) {
   const curve = pfCurve((eq.points || []).map(([at, usd]) => ({ at: new Date(at).toISOString(), usd })), 600, 110);
   const cls = eq.changeUsd > 0 ? "up" : eq.changeUsd < 0 ? "down" : "flat";
   const progress = Math.max(-100, Math.min(100, t.progressPct));
-  const hero = `<section class="sec dk-hero" aria-labelledby="dk-h"><div class="dk-hero-h"><div class="dk-title"><h2 class="h2" id="dk-h">${esc(v.name)}</h2>${pill}<span class="dim small">${esc(v.venue.name)}${v.venue.paper ? ' <span class="tag paper">Paper</span>' : ""}</span></div><div class="dk-tools">${tools}</div></div>
+  const hero = `<section class="sec dk-hero" aria-labelledby="dk-h"><div class="dk-hero-h"><div class="dk-title"><h2 class="h2" id="dk-h">${esc(v.name)}</h2>${pill}<span class="dim small">${esc(v.venue.name)}${v.venue.paper ? ' <span class="tag paper">Paper</span>' : ""}</span>${v.venue.paper ? `<span class="tag${v.autonomy && v.autonomy.paper ? " up" : ""}" title="${v.autonomy && v.autonomy.paper ? "The desk's own paper orders go without a card for you, each inside its seat's limit" : "Each order the desk's seats want to place waits for you as a card"}">${v.autonomy && v.autonomy.paper ? "Auto on paper" : "Cards"}</span><a class="link" href="${esc(hashOf("superagent"))}">See it on the floor ›</a>` : ""}</div><div class="dk-tools">${tools}</div></div>
     <p class="dk-objective">“${esc(o.text)}” <span class="dim small">· target ${esc(dkPct(o.targetPct))} this week · at most ${esc(String(o.maxRiskPct))}% a lead · halt at -${esc(String(o.maxDailyLossPct))}% in a day · a cycle every ${esc(String(o.everyMin))} min${s && s.halted ? ` · <span class="warn-t">halted: ${esc(s.halted.why)}</span>` : ""}</span></p>
     <div class="dk-eq"><div class="dk-eq-n"><div class="label">Equity</div><div class="num" data-dk-eq>${esc(money(eq.nowUsd))}</div><div class="dk-eq-c ${cls}">${chg(eq.changeUsd, "$")} <span class="dim">(${esc(dkPct(eq.changePct))}) · ${esc(eq.mult.toFixed(2))}x from ${esc(money(eq.startUsd))}</span></div></div>
     <div class="dk-curve-box">${curve ? `<svg class="spark dk-curve" viewBox="0 0 600 110" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="${curve.area}"></path><path class="line" d="${curve.line}"></path></svg>` : `<p class="dim small dk-nocurve">The curve draws as the session runs: a point a minute.</p>`}</div></div>
@@ -247,10 +247,12 @@ async function dkAct(act, d) {
   }
 }
 
-/* the brain's fields: which one thinks, the model (listed, or named as the endpoint names it), the owner's price, the effort */
-function dkBrainFields(brains, cur) {
+/* the brain's fields: which one thinks, the model (listed, or named as the endpoint names it), the owner's price, the effort. opts.fix(b):
+   where a brain that is not ready gets its key, drawn in that brain's own block in place of its reason (the superagent's setup says it
+   there, once) */
+function dkBrainFields(brains, cur, opts = {}) {
   const pick = (cur && cur.provider) || brains[0].id;
-  const standing = (b) => (b.ok ? `<span class="tag up">ready</span> <span class="dim small">through ${esc(b.how || "the API")}</span>` : `<span class="tag warn">not ready</span> <span class="dim small">${esc(b.why || "")}</span>`);
+  const standing = (b) => (b.ok ? `<span class="tag up">ready</span> <span class="dim small">through ${esc(b.how || "the API")}</span>` : typeof opts.fix === "function" ? `<span class="tag warn">not ready</span>${opts.fix(b)}` : `<span class="tag warn">not ready</span> <span class="dim small">${esc(b.why || "")}</span>`);
   const blocks = brains.map((b) => {
     const mine = !!cur && cur.provider === b.id;
     const model = mine ? cur.model : b.model || (b.models[0] ? b.models[0].id : "");
@@ -258,7 +260,7 @@ function dkBrainFields(brains, cur) {
     const fields = b.models.length
       ? `<div class="row2">${field("Model", select(`model-${b.id}`, b.models.map((m) => [m.id, `${m.name} · $${m.inUsd}/$${m.outUsd} per M tokens`]), model))}<div></div></div>`
       : `<div class="row2">${field("Model, as the endpoint names it", `<input name="model-${esc(b.id)}" value="${esc(model)}" placeholder="e.g. deepseek-chat" />`)}${field("Its price per M tokens ($ in · $ out, optional)", `<div class="dk-price"><input name="in-${esc(b.id)}" inputmode="decimal" placeholder="in" value="${price ? esc(String(price.inUsd)) : ""}" /><input name="out-${esc(b.id)}" inputmode="decimal" placeholder="out" value="${price ? esc(String(price.outUsd)) : ""}" /></div>`)}</div>`;
-    return `<div class="dk-brain-of" data-brain="${esc(b.id)}"${b.id === pick ? "" : " hidden"}>${fields}<p class="small">${standing(b)}</p></div>`;
+    return `<div class="dk-brain-of" data-brain="${esc(b.id)}"${b.id === pick ? "" : " hidden"}>${fields}<${!b.ok && typeof opts.fix === "function" ? "div" : "p"} class="small dk-standing">${standing(b)}</${!b.ok && typeof opts.fix === "function" ? "div" : "p"}></div>`;
   }).join("");
   return `<div class="row2">${field("Brain", select("provider", brains.map((b) => [b.id, `${b.label} · ${b.ok ? "ready" : "no key"}`]), pick))}${field("Effort", select("effort", [["low", "low"], ["medium", "medium"], ["high", "high"]], (cur && cur.effort) || "medium"))}</div>${blocks}`;
 }

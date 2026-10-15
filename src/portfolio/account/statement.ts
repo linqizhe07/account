@@ -4,7 +4,7 @@
  * kind "statement" that carries the line itself. The ledger files outlive the process, so the statement does too: it is read back from every
  * ledger in the account's home, and the last line written for a transaction is the one shown. Nothing here moves anything.
  */
-import { notionalOf, plain } from "../live/trade.ts";
+import { notionalOf } from "../live/trade.ts";
 import type { LiveOrder } from "./live-orders.ts";
 import type { Payment } from "./payments.ts";
 
@@ -45,6 +45,17 @@ export interface StatementLine {
 }
 
 const qty = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 8 });
+
+/** A price (or a trail, a take-profit, a stop) as a person reads it in a sentence the server writes: grouped the en-US way, at the figure's
+ * own places (at most ten), trailing zeros dropped — 63226.6 is "63,226.6", 0.00001234 is "0.00001234", 66000 is "66,000". Only for words:
+ * a value that is signed, hashed, sent to a venue or read back by code keeps plain() (live/trade.ts), which never groups. The statement's
+ * lines, the account's order notes and refusals (live-orders.ts) write their prices with it */
+export function figure(x: number): string {
+  if (!Number.isFinite(x)) return "0";
+  // -0 and a negative that rounds to nothing read as 0, as plain() writes them
+  const s = x.toLocaleString("en-US", { maximumFractionDigits: 10, useGrouping: true });
+  return s === "-0" ? "0" : s;
+}
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** an order, as one line */
@@ -52,6 +63,9 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
   const filled = o.filledQty > 0 ? notionalOf(o, o.filledQty, o.avgPrice ?? o.price) : 0;
   const sign = o.side === "buy" ? -1 : 1;
   const done = o.filledQty > 0 && o.filledQty < o.qty ? ` · ${qty(o.filledQty)} of ${qty(o.qty)} filled` : "";
+  // one fixed shape, its prices grouped (figure): "Buy 0.5 SOL · SOL / USDT · limit 142.44 · at 141.9 · 0.2 of 0.5 filled",
+  // "Sell 0.002 BTC · BTC / USDT · limit 63,226.6". The Trade terminal's history reads an order it does not have back from these words
+  // (ui/terminal.js ttOrderRec), so a figure there may carry commas
   return {
     key: `order:${o.clientId}`,
     id: o.id,
@@ -61,7 +75,7 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     kind: o.side,
     account: o.venue,
     accountName: o.venueName,
-    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${plain(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${plain(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${plain(o.stopPrice ?? 0)}, limit ${plain(o.limitPrice ?? 0)}` : o.type === "trailing_stop" ? `trailing stop ${o.trailPercent !== undefined ? `${plain(o.trailPercent)}%` : plain(o.trailPrice ?? 0)}` : "market"}${o.exitOf ? ` · ${o.exitOf.kind} of ${o.exitOf.order}` : ""}${o.takeProfit !== undefined || o.stopLoss !== undefined ? ` · exits ${[o.takeProfit !== undefined ? `take-profit ${plain(o.takeProfit)}` : "", o.stopLoss !== undefined ? `stop-loss ${plain(o.stopLoss)}` : ""].filter(Boolean).join(", ")}` : ""}${o.avgPrice ? ` · at ${plain(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}`,
+    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${figure(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${figure(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${figure(o.stopPrice ?? 0)}, limit ${figure(o.limitPrice ?? 0)}` : o.type === "trailing_stop" ? `trailing stop ${o.trailPercent !== undefined ? `${figure(o.trailPercent)}%` : figure(o.trailPrice ?? 0)}` : "market"}${o.exitOf ? ` · ${o.exitOf.kind} of ${o.exitOf.order}` : ""}${o.takeProfit !== undefined || o.stopLoss !== undefined ? ` · exits ${[o.takeProfit !== undefined ? `take-profit ${figure(o.takeProfit)}` : "", o.stopLoss !== undefined ? `stop-loss ${figure(o.stopLoss)}` : ""].filter(Boolean).join(", ")}` : ""}${o.avgPrice ? ` · at ${figure(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}`,
     amountUsd: Number((sign * filled).toFixed(2)) || 0,
     worthUsd: Number(notionalOf(o, o.qty, o.limitPrice ?? o.price).toFixed(2)),
     ...(o.feeUsd !== undefined ? { feeUsd: o.feeUsd } : {}),
@@ -119,7 +133,7 @@ export function paperFillLine(f: { venue: string; venueName: string; ref: string
     kind: f.side,
     account: f.venue,
     accountName: f.venueName,
-    description: `${cap(f.side)} ${qty(f.qty)} ${f.base}${f.name && f.name !== f.base ? ` · ${f.name}` : ""} · ${what} · at ${plain(Number(f.avgPrice.toPrecision(10)))}${f.note ? ` · ${f.note}` : ""}`,
+    description: `${cap(f.side)} ${qty(f.qty)} ${f.base}${f.name && f.name !== f.base ? ` · ${f.name}` : ""} · ${what} · at ${figure(Number(f.avgPrice.toPrecision(10)))}${f.note ? ` · ${f.note}` : ""}`,
     amountUsd: Number((sign * amount).toFixed(2)) || 0,
     worthUsd: Number(amount.toFixed(2)),
     feeUsd: f.feeUsd,

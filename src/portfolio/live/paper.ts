@@ -74,7 +74,7 @@ import { no } from "../refuse.ts";
 import type { Listing, PublicSource } from "./public-markets.ts";
 import { usClock } from "../account/calendar.ts";
 import { CBOE_DELAY_MS, cboeQuoteInSession, US_STOCKS_ID, usSession } from "./public-stocks.ts";
-import { badOrder, CANDLE_INTERVALS, inDollars, onStep, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type SessionPhase, type Side, type TimeInForce } from "./trade.ts";
+import { badOrder, CANDLE_INTERVALS, inDollars, onStep, pick, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type SessionPhase, type Side, type TimeInForce } from "./trade.ts";
 import { isStable, type LiveBalance, type LiveSource } from "./types.ts";
 
 export const PAPER_DEFAULT_CASH = 10_000;
@@ -242,6 +242,10 @@ const round = (x: number, places: number): number => Number(x.toFixed(places));
 const iso = (ms: number): string => new Date(ms).toISOString();
 const usd = (n: number): string => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qtyText = (n: number): string => n.toLocaleString("en-US", { maximumFractionDigits: 8 });
+/** a price or a step in the paper account's words — its notes and refusals, which the page shows: grouped the en-US way, at the figure's
+ * own places (at most ten), as the account's statement writes prices (account/statement.ts figure) — 62548.3 is "62,548.3". The book's
+ * numbers stay numbers */
+const fig = (x: number): string => (Number.isFinite(x) ? x.toLocaleString("en-US", { maximumFractionDigits: 10 }).replace(/^-0$/, "0") : "0");
 const pos = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
 const signed = (n: number): string => `${n < 0 ? "−" : "+"}${usd(Math.abs(n))}`;
 
@@ -851,7 +855,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     // a market order queued for the session, or a stop that triggered: at the quote, inside the worst price its door gave it — past it, it
     // waits there as a limit would
     if (pastWorst(o, px)) {
-      const note = `waiting: the quote (${plain(px)}) is past the worst price the order allows (${plain(o.worstPrice!)})`;
+      const note = `waiting: the quote (${fig(px)}) is past the worst price the order allows (${fig(o.worstPrice!)})`;
       if (o.note !== note) {
         o.note = note;
         o.updatedAt = iso(now);
@@ -919,7 +923,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         const fee = round((notional * b.feeBps) / 10_000, 6);
         const back = round(Math.max(0, left - fee), 6);
         b.cashUsd = round(b.cashUsd + back, 6);
-        const o: PaperOrder = { ref: `p${++b.seq}`, clientId: `liquidation-${b.seq}`, symbol, side: p.side === "long" ? "sell" : "buy", type: "market", qty: p.qty, reduceOnly: true, status: "filled", filledQty: p.qty, avgPrice: mark, feeUsd: fee, lossPastMarginUsd: round(Math.max(0, fee - left), 6), at: iso(at), updatedAt: iso(at), filledAt: iso(at), note: `liquidated at the mark (${plain(mark)}): the margin left (${usd(left)}) fell to the maintenance margin (${usd(maintenance)}); ${usd(back)} went back to cash` };
+        const o: PaperOrder = { ref: `p${++b.seq}`, clientId: `liquidation-${b.seq}`, symbol, side: p.side === "long" ? "sell" : "buy", type: "market", qty: p.qty, reduceOnly: true, status: "filled", filledQty: p.qty, avgPrice: mark, feeUsd: fee, lossPastMarginUsd: round(Math.max(0, fee - left), 6), at: iso(at), updatedAt: iso(at), filledAt: iso(at), note: `liquidated at the mark (${fig(mark)}): the margin left (${usd(left)}) fell to the maintenance margin (${usd(maintenance)}); ${usd(back)} went back to cash` };
         b.orders[o.ref] = o;
         record({ ref: o.ref, symbol, side: o.side, qty: p.qty, price: mark, feeUsd: fee, at: iso(at), realizedUsd: round(pnl, 6), note: o.note });
         delete b.positions[symbol];
@@ -1046,9 +1050,9 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     } else if (trail) return badOrder(venue, b.name, "a trail belongs to a trailing stop");
     if (o.extendedHours && !(o.type === "limit" && m.kind === "stock" && m.session?.extendedHours)) return badOrder(venue, b.name, o.type !== "limit" ? "extended hours take a limit order only" : `${m.name} takes no extended-hours order now`);
     if (o.extendedHours && o.tif !== undefined && o.tif !== "day" && o.tif !== "gtc") return badOrder(venue, b.name, "an extended-hours order is good for the day or till canceled");
-    if (!onStep(o.qty, m.qtyStep)) return badOrder(venue, b.name, `a size in ${m.name} moves in steps of ${plain(m.qtyStep ?? 1)}`, { qty: o.qty, qtyStep: m.qtyStep });
+    if (!onStep(o.qty, m.qtyStep)) return badOrder(venue, b.name, `a size in ${m.name} moves in steps of ${fig(m.qtyStep ?? 1)}`, { qty: o.qty, qtyStep: m.qtyStep });
     for (const [what, p] of [["limit", o.limitPrice], ["stop", o.stopPrice], ["take-profit", o.takeProfit], ["stop-loss", o.stopLoss]] as const) {
-      if (p !== undefined && !onStep(p, m.priceStep)) return badOrder(venue, b.name, `${m.name} moves in steps of ${plain(m.priceStep!)}: a ${what} price of ${plain(p)} is between steps`, { price: p, priceStep: m.priceStep });
+      if (p !== undefined && !onStep(p, m.priceStep)) return badOrder(venue, b.name, `${m.name} moves in steps of ${fig(m.priceStep!)}: a ${what} price of ${fig(p)} is between steps`, { price: p, priceStep: m.priceStep });
     }
     if (o.reduceOnly && m.kind !== "perp") return badOrder(venue, b.name, `reduce-only is for a perpetual: ${m.name} sells only what is held`);
     if (o.takeProfit !== undefined || o.stopLoss !== undefined) {
@@ -1065,8 +1069,8 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       const atBook = up ? (pos(m.ask) ?? pos(m.price)) : (pos(m.bid) ?? pos(m.price));
       const ref = o.type === "limit" ? o.limitPrice! : atBook;
       const slRef = o.type === "limit" && atBook !== undefined ? (up ? Math.min(o.limitPrice!, atBook) : Math.max(o.limitPrice!, atBook)) : ref;
-      if (ref !== undefined && o.takeProfit !== undefined && (up ? o.takeProfit <= ref : o.takeProfit >= ref)) return badOrder(venue, b.name, `the take-profit (${plain(o.takeProfit)}) must be ${up ? "above" : "below"} the entry (${plain(ref)}) for a ${o.side}`);
-      if (slRef !== undefined && o.stopLoss !== undefined && (up ? o.stopLoss >= slRef : o.stopLoss <= slRef)) return badOrder(venue, b.name, `the stop-loss (${plain(o.stopLoss)}) must be ${up ? "below" : "above"} the entry (${plain(slRef)}) for a ${o.side}${slRef !== ref ? `: a ${o.side} limited at ${plain(ref!)} crosses the book and fills there, at ${plain(slRef)}` : ""}`);
+      if (ref !== undefined && o.takeProfit !== undefined && (up ? o.takeProfit <= ref : o.takeProfit >= ref)) return badOrder(venue, b.name, `the take-profit (${fig(o.takeProfit)}) must be ${up ? "above" : "below"} the entry (${fig(ref)}) for a ${o.side}`);
+      if (slRef !== undefined && o.stopLoss !== undefined && (up ? o.stopLoss >= slRef : o.stopLoss <= slRef)) return badOrder(venue, b.name, `the stop-loss (${fig(o.stopLoss)}) must be ${up ? "below" : "above"} the entry (${fig(slRef)}) for a ${o.side}${slRef !== ref ? `: a ${o.side} limited at ${fig(ref!)} crosses the book and fills there, at ${fig(slRef)}` : ""}`);
     }
     return undefined;
   };
@@ -1155,7 +1159,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       if (o.type === "market") {
         if (fillable) {
           // the account's worst price holds here as a marketable limit does: a quote past it fills nothing
-          if (pastWorst(order, px)) return no("E_VENUE_REJECTED", { venue, message: `${b.name}: the quote (${plain(px)}) is past the worst price the order allows (${plain(o.worstPrice!)}): nothing was filled`, detail: { quoted: px, worstPrice: o.worstPrice } });
+          if (pastWorst(order, px)) return no("E_VENUE_REJECTED", { venue, message: `${b.name}: the quote (${fig(px)}) is past the worst price the order allows (${fig(o.worstPrice!)}): nothing was filled`, detail: { quoted: px, worstPrice: o.worstPrice } });
           const r = fill(order, px, at, q);
           if (r) return r;
           b.orders[order.ref] = order;

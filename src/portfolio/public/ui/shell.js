@@ -3,7 +3,13 @@
    the search is being typed, and the page is in view.
    The look is round 7's (the Demo v2 canvas, F1 and F5): a white rail with Markets · Trade and the agents, and the Account at its foot —
    a wallet button with the net worth and the mode — which opens Portfolio · Venues · Memory under the Account's own header (the mode,
-   trading on or off, Settings). Markets and Trade keep the search in their top bar. */
+   trading on or off, Settings). Markets and Trade keep the search in their top bar.
+   THE TRADING AREA (core TRADE_AREA): Trade in its two modes, Regular (the terminal) and Superagent (the desk's floor), is one item on the
+   rail, current in both. While it shows, html[data-area="trade"] gives the area Hyperliquid's dark green (ui/tokens.css) — the rail
+   beside it too, in colour only, like HL's own nav (shell.css) — and the top bar carries the Regular · Superagent switch (account.html
+   #trade-mode): drawn once, never redrawn, so it stands in the same place in both modes and keeps the focus; one click swaps the pane with
+   the shell's cross-fade (a cut under reduced motion) and keeps the mode for the rail's next visit (core setTradeMode). The rail's Trade
+   opens that mode from outside the area; inside it, it points at the mode showing, so pressing the item the viewer is on changes nothing. */
 
 /** the whole page from A: the chrome, the visible pane, whatever sheet or drawer is open, then what was done or refused as a toast */
 function render() {
@@ -113,12 +119,20 @@ function speak() {
 function drawPane(L, owner) {
   const tab = ROUTE.tab;
   const el = $(`pane-${tab}`);
-  const draw = { portfolio: typeof renderPortfolio === "function" ? renderPortfolio : null, venues: typeof renderVenues === "function" ? renderVenues : null, memory: typeof renderMemory === "function" ? renderMemory : null, markets: typeof renderMarkets === "function" ? renderMarkets : null, trade: typeof renderTrade === "function" ? renderTrade : null, desk: typeof renderDesk === "function" ? renderDesk : null }[tab];
+  const draw = { portfolio: typeof renderPortfolio === "function" ? renderPortfolio : null, venues: typeof renderVenues === "function" ? renderVenues : null, memory: typeof renderMemory === "function" ? renderMemory : null, markets: typeof renderMarkets === "function" ? renderMarkets : null, trade: typeof renderTrade === "function" ? renderTrade : null, desk: typeof renderDesk === "function" ? renderDesk : null, superagent: typeof renderSuperagent === "function" ? renderSuperagent : null }[tab];
   try {
     if (!draw) throw new Error(`its script did not load. Reload the page`);
     draw({ el, owner, lens: lensNow(), params: ROUTE.params });
   } catch (err) {
     console.error(err);
+    // the floor listens on the window and the document while it is mounted: a pane that failed to draw lets it go before it is written over
+    if (tab === "superagent" && typeof sgUnmount === "function") {
+      try {
+        sgUnmount();
+      } catch (e) {
+        console.error(e);
+      }
+    }
     el.innerHTML = `<p class="pane-error" role="alert">This part of the page could not be drawn: ${esc((err && err.message) || err)}</p>`;
   }
 }
@@ -135,10 +149,21 @@ onRoute((tab, params, moved) => {
     else if (motion && !s.hidden && !s.paneGoing) paneOut(s);
     else if (!s.paneGoing) s.hidden = true;
   }
+  // the trading area: its look (html[data-area], ui/tokens.css), the switch saying which mode shows (never disabled: Superagent with no
+  // paper account or no desk shows its own setup), the rail's Trade current in both modes. Its link: from outside the area, the mode used
+  // last (a read only); inside it, the place showing — the item the viewer is on is current, and pressing it never swaps the mode (the
+  // browser's Back, or a link to #/trade?kind=…, can show Regular while the mode kept is Superagent, and the other way round)
+  const area = TRADE_AREA.includes(tab);
+  if (area) document.documentElement.dataset.area = "trade";
+  else delete document.documentElement.dataset.area;
+  for (const b of document.querySelectorAll("#trade-mode button[data-trade-mode]")) b.setAttribute("aria-pressed", String((b.dataset.tradeMode === "superagent") === (tab === "superagent")));
+  const railTab = area ? "trade" : tab;
   for (const a of document.querySelectorAll(".rail-nav a[data-tab]")) {
-    if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
+    if (a.dataset.tab === railTab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
+  const railTrade = document.querySelector('.rail-nav a[data-tab="trade"]');
+  if (railTrade) railTrade.setAttribute("href", area ? hashOf(tab, params) : tradeModeLast() === "superagent" ? hashOf("superagent") : "#/trade");
   // the Account's three under its own header, the wallet at the rail's foot marked while one of them is shown; Markets and Trade keep the search
   const account = ACCOUNT_TABS.includes(tab);
   $("main").dataset.at = account ? "account" : "trading";
@@ -201,7 +226,9 @@ function railPill(motion) {
   const nav = document.querySelector(".rail-nav");
   const pill = nav && nav.querySelector(".rail-pill");
   if (!pill || !RAIL.at || !pill.style) return;
-  const i = [...nav.querySelectorAll("a[data-tab]")].findIndex((a) => a.dataset.tab === ROUTE.tab);
+  // the trading area's two modes are one item on the rail: Trade's
+  const tab = TRADE_AREA.includes(ROUTE.tab) ? "trade" : ROUTE.tab;
+  const i = [...nav.querySelectorAll("a[data-tab]")].findIndex((a) => a.dataset.tab === tab);
   const at = RAIL.at[i];
   // the Account's tabs are marked at the rail's foot: no pill in the nav
   if (!at) return void (pill.hidden = true);
@@ -234,7 +261,14 @@ function lensMenu(open) {
   // is open; before that, the Portfolio offers to start one)
   const papers = L.filter((v) => v.paper);
   const money2 = papers.length ? `${item("real", "Real money", money(L.filter((v) => !v.paper).reduce((s, v) => s + num(v.usd), 0)))}${item("paper", "Paper", `${money(papers.reduce((s, v) => s + num(v.usd), 0))} · ${plural(papers.length, "paper account")}, no real money`)}` : "";
-  m.innerHTML = `${item("", "All accounts", money(A.liveUsd))}${money2}${L.length ? `<div class="menu-h" role="presentation">Accounts</div>${L.map((v) => item(`venue:${v.id}`, v.name, v.paper ? `${money(v.usd)} paper` : money(v.usd))).join("")}` : ""}${keys.length ? `<div class="menu-h" role="presentation">Agents</div>${keys.map((k) => item(`agent:${k.address}`, k.name, k.status === "expired" ? "expired" : short(k.address))).join("")}` : ""}`;
+  m.innerHTML = `${item("", "All accounts", money(A.liveUsd))}${money2}${L.length ? `<div class="menu-h" role="presentation">Accounts</div>${L.map((v) => item(`venue:${v.id}`, v.paper ? String(v.name || "").replace(/\s*[·-]\s*paper\s*$/i, "") || v.name : v.name, v.paper ? `${money(v.usd)} paper` : money(v.usd))).join("")}` : ""}${keys.length ? `<div class="menu-h" role="presentation">Agents</div>${keys.map((k) => item(`agent:${k.address}`, k.name, k.status === "expired" ? "expired" : short(k.address))).join("")}` : ""}`;
+  // under its button wherever the top bar put it (the trading area's switch stands before it; a narrow window wraps the bar): placed from
+  // the button's own box, read once as the menu opens
+  const lens = $("lens");
+  if (lens && m.style && Number.isFinite(lens.offsetLeft)) {
+    m.style.left = `${lens.offsetLeft}px`;
+    m.style.top = `${lens.offsetTop + lens.offsetHeight + 4}px`;
+  }
   m.hidden = false;
   (m.querySelector('[aria-checked="true"]') || m.querySelector("button")).focus();
 }
@@ -310,12 +344,21 @@ $("mode-more").addEventListener("click", () => A && openMode());
 $("open-agents").addEventListener("click", () => go("desk"));
 $("open-settings").addEventListener("click", () => A && openSettings());
 
-/* one click handler for what is drawn over and over: a toggle (seg), the mode (the rail's seg and the Mode sheet's), a sheet's or the
-   drawer's close button, and a click outside the lens's menu */
+/* one click handler for what is drawn over and over: the trading area's Regular · Superagent, a toggle (seg), the mode (the rail's seg
+   and the Mode sheet's), a sheet's or the drawer's close button, and a click outside the lens's menu */
 document.addEventListener("click", (e) => {
   const t = e.target;
   if (!t || !t.closest) return;
   if (!$("lens-menu").hidden && !t.closest("#lens-menu") && !t.closest("#lens")) lensMenu(false);
+  // Regular · Superagent: the mode not showing, pressed, goes there (the paper account Trade is on goes with it to the superagent); the
+  // switch itself is never drawn again, so the focus stays on the button pressed
+  const tm = t.closest("button[data-trade-mode]");
+  if (tm) {
+    if (tm.getAttribute("aria-pressed") === "true") return;
+    const sup = tm.dataset.tradeMode === "superagent";
+    const at = sup && typeof TT !== "undefined" && TT && TT.at && paperVenue(TT.at.venue) ? { venue: TT.at.venue } : {};
+    return void setTradeMode(tm.dataset.tradeMode, at);
+  }
   const sb = t.closest("[data-seg] button");
   if (sb) {
     if (sb.disabled || sb.getAttribute("aria-pressed") === "true") return;

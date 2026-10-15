@@ -6,7 +6,7 @@ import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
 import type { LiveOrder } from "../../src/portfolio/account/live-orders.ts";
-import { orderLine } from "../../src/portfolio/account/statement.ts";
+import { figure, orderLine } from "../../src/portfolio/account/statement.ts";
 import { seatOrderAction, signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import type { LiveTrader, Market, OrderRequest, OrderState } from "../../src/portfolio/live/trade.ts";
@@ -156,7 +156,7 @@ describe("orders at venues connected live", () => {
     // the venue gets the worst price it may fill at (2% over the ask, down to the price step) and a client id no other run sends
     expect(x.venue.placed).toEqual([{ symbol: "BTC/USDT", side: "buy", type: "market", qty: 0.0004, worstPrice: 61_210.2, clientId: o.clientId }]);
     expect(o.clientId).toMatch(/^[0-9a-f]{32}$/);
-    expect([o.id, o.status, o.filledQty, o.avgPrice, o.authority, o.note]).toEqual(["ord-0001", "filled", 0.0004, 60_010, "owner", "filled at 60010 · fee $0.06"]);
+    expect([o.id, o.status, o.filledQty, o.avgPrice, o.authority, o.note]).toEqual(["ord-0001", "filled", 0.0004, 60_010, "owner", "filled at 60,010 · fee $0.06"]);
     // the page shows it
     expect((await x.page()).orders.map((y) => [y.id, y.status])).toEqual([["ord-0001", "filled"]]);
   });
@@ -193,7 +193,7 @@ describe("orders at venues connected live", () => {
     x.venue.markets["BTC/USDT"] = { ...BTC, ask: 63_010, price: 63_000 };
     const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveOrder" }>;
     const moved = refusal(await x.own(rest));
-    expect([moved.code, moved.message]).toEqual(["E_ACCOUNT_REQUOTE", "the price moved: at 63010 the order is worth $31.51 now, more than the $30.61 signed for. Nothing was placed"]);
+    expect([moved.code, moved.message]).toEqual(["E_ACCOUNT_REQUOTE", "the price moved: at 63,010 the order is worth $31.51 now, more than the $30.61 signed for. Nothing was placed"]);
     x.venue.markets["BTC/USDT"] = { ...BTC };
     x.tick(11 * 60_000);
     expect(refusal(await x.own({ ...rest, maxNotional: "40.00" })).code).toBe("E_ACCOUNT_EXPIRED");
@@ -281,7 +281,7 @@ describe("orders at venues connected live", () => {
     await x.engine.settle();
     expect((await x.page()).orders[0]!.status).toBe("open");
     x.tick(11_000);
-    expect((await x.page()).orders[0]!.note).toBe("0.0002 of 0.0005 filled at 59000");
+    expect((await x.page()).orders[0]!.note).toBe("0.0002 of 0.0005 filled at 59,000");
     x.venue.next[o.ref] = { status: "filled", filledQty: 0.0005, avgPrice: 59_000 };
     x.tick(11_000);
     expect((await x.page()).orders[0]!.status).toBe("filled");
@@ -519,7 +519,7 @@ describe("orders: what the review found", () => {
     const entry = placed(await x.order({ symbol: "BTC/USDT", side: "buy", orderType: "market", qty: "0.001", takeProfit: "66000", stopLoss: "57000" }));
     const exit = (kind: string) => x.engine.orders.find((o) => o.exitOf?.order === entry.id && o.exitOf.kind === kind)!;
     expect(exit("take-profit")).toMatchObject({ status: "filled", qty: 0.0005, filledQty: 0.0005, usd: 33 });
-    expect(orderLine(exit("take-profit"), () => "").description).toMatch(/^Sell 0\.0005 BTC · BTC\/USDT · limit 66000 · take-profit of ord-/);
+    expect(orderLine(exit("take-profit"), () => "").description).toMatch(/^Sell 0\.0005 BTC · BTC\/USDT · limit 66,000 · take-profit of ord-/);
     // the other, canceled with nothing filled, keeps the size it was placed at
     expect(exit("stop-loss")).toMatchObject({ status: "canceled", qty: 0.001, filledQty: 0 });
   });
@@ -536,7 +536,7 @@ describe("the statement", () => {
       [resting.id, "sell", "canceled", 0],
       [bought.id, "buy", "filled", -24],
     ]);
-    expect(lines[1]!.description).toBe("Buy 0.0004 BTC · BTC/USDT · market · at 60010");
+    expect(lines[1]!.description).toBe("Buy 0.0004 BTC · BTC/USDT · market · at 60,010");
     expect([lines[1]!.by, lines[1]!.feeUsd, lines[0]!.worthUsd]).toEqual(["You", 0.06, 32.5]);
     // the ledger outlives the process: a new run on the same home reads the same statement back
     const again = await boot({ home: x.home, nonceFrom: 100 });
@@ -603,5 +603,30 @@ describe("extended hours", () => {
     const plain = placed(await order({ ...draft, extendedHours: "" }));
     expect(plain.extendedHours).toBeUndefined();
     expect(venue.placed.at(-1)).not.toHaveProperty("extendedHours");
+  });
+});
+
+describe("prices in the account's words", () => {
+  it("figure: grouped the en-US way, at the figure's own places, trailing zeros dropped", () => {
+    expect([figure(63226.6), figure(66000), figure(0.00001234), figure(142.44), figure(-0), figure(1234567.891), figure(Number.NaN), figure(-2455.76)]).toEqual(["63,226.6", "66,000", "0.00001234", "142.44", "0", "1,234,567.891", "0", "-2,455.76"]);
+  });
+
+  it("an agent's limit order: the card's reason, the quote's words, the order's note and its statement line group the price; the offer the owner signs and the action keep the plain figure", async () => {
+    const x = await boot();
+    await x.letIn();
+    const r = await x.ag(ask({ orderType: "limit", limitPrice: "59000.5" }));
+    if (isRefusal(r) || r.kind !== "card") throw new Error(`expected a card, got ${JSON.stringify(r).slice(0, 200)}`);
+    expect(r.card.reason).toBe("Claude Code asks to buy 0.0005 BTC at Stand-in · limit 59,000.5 · about $29.50");
+    // what is hashed into the card and signed: written as it always was, a figure with no grouping
+    expect(r.card.offer?.protocol).toBe("real order · limit at 59000.5");
+    expect((r.card.action as Extract<AgentAction, { type: "agentLiveOrder" }>).limitPrice).toBe("59000.5");
+    const o = placed(await x.own({ type: "approveCard", card: r.card.id, action: cardHash(r.card), decision: "approve" }));
+    expect([o.limitPrice, o.note]).toEqual([59000.5, "on Stand-in's book at 59,000.5"]);
+    expect(x.svc.statement().find((l) => l.id === o.id)?.description).toBe("Buy 0.0005 BTC · BTC/USDT · limit 59,000.5");
+    // the owner's own order: the quote the page shows groups; the action the device signs does not
+    const p = await x.prepared({ symbol: "BTC/USDT", side: "buy", orderType: "limit", qty: "0.0005", limitPrice: "58000.5" });
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.quote?.order?.words).toBe("buy 0.0005 BTC at Stand-in · limit 58,000.5 · about $29.00");
+    expect((p.action as Extract<OwnerAction, { type: "liveOrder" }>).limitPrice).toBe("58000.5");
   });
 });

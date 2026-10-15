@@ -11,7 +11,8 @@ import { describe, expect, it } from "vitest";
  * stylesheet is read for that, since a vm lays nothing out), nothing asked while the chart's pane is hidden, a live price that is no longer
  * the venue's word never laid over the source's close, a share's daily bar moved only in its regular session, and what release stops */
 const UI = fileURLToPath(new URL("../../src/portfolio/public/ui/", import.meta.url));
-const FILES = ["core.js", "chart.js"];
+// book.js after the chart, as account.html loads them: the chart asks it whether a read reached the account (bkUnanswered)
+const FILES = ["core.js", "chart.js", "book.js"];
 
 type Listener = (e: Record<string, unknown>) => void;
 /** a stand-in element: what the chart writes into it (innerHTML through paint, attributes, classes, words) is kept to be read; its parts are
@@ -460,11 +461,19 @@ describe("the chart mounted", () => {
     expect(p.asked.some((x) => x.startsWith("/api/account/quotes"))).toBe(false);
     p.run("chRelease(EL)");
 
+    // a read that never reached the account (core api's { ok: false, error } with the browser's own words): said in the page's words,
+    // never the browser's error as it was thrown, with how long the chart now waits before asking again
     const none = page(() => ({ ok: false, error: "fetch failed" }));
     none.run('chMount(EL, { venue: "okx", symbol: "BTC/USDT" })');
     await settle();
-    expect(none.el.querySelector(".ch-draw").innerHTML).toBe('<p class="ch-msg ch-no">fetch failed.</p>');
+    expect(none.el.querySelector(".ch-draw").innerHTML).toBe('<p class="ch-msg ch-no">No price history: the account is not answering. Asking again every 2 s.</p>');
     none.run("chRelease(EL)");
+    // an error the account wrote itself is its own words, said as they are
+    const own = page(() => ({ ok: false, error: "The account hit an error answering this; it was recorded." }));
+    own.run('chMount(EL, { venue: "okx", symbol: "BTC/USDT" })');
+    await settle();
+    expect(own.el.querySelector(".ch-draw").innerHTML).toBe('<p class="ch-msg ch-no">The account hit an error answering this; it was recorded. Asking again every 2 s.</p>');
+    own.run("chRelease(EL)");
 
     const empty = page(() => candles([], { venueName: "OKX <x>" }));
     empty.run('chMount(EL, { venue: "okx", symbol: "BTC/USDT" })');
@@ -826,6 +835,38 @@ describe("the chart mounted", () => {
     expect(p.el.querySelector(".ch-ohlc").innerHTML).toContain('H</span> <span class="ch-v up">67.5¢</span>');
     // whose bars: the source the account read for the paper account, not the paper account's own name
     expect(p.el.querySelector(".ch-foot").innerHTML).toMatch(/^Polymarket · 1h bars · prices in cents · /);
+    p.run("chRelease(EL)");
+  });
+
+  it("asks a refused read of the bars again later and later — two seconds, doubling, at most a minute apart — each a read of its own, and once a minute once bars come", async () => {
+    let refuse = true;
+    const p = page((path) => (path.startsWith("/api/account/candles") ? (refuse ? { ok: false, refusal: { code: "E_VENUE_NOT_CONNECTED", message: "Momentum is not connected" } } : candles(hourly(30))) : { ok: true, quotes: [] }));
+    p.run("globalThis.NOW = Date.now(); Date.now = () => NOW");
+    const reads = () => p.asked.filter((x) => x.startsWith("/api/account/candles")).length;
+    p.run('chMount(EL, { venue: "paper-momentum", symbol: "BTC/USD" })');
+    await settle();
+    p.run("clearTimeout(CH.get(EL).timer)");
+    expect(reads()).toBe(1);
+    expect(p.run<number>("CH.get(EL).wait")).toBe(2_000);
+    // one-second steps for three minutes: read at +2, +6, +14, +30, +62, +122 (each wait doubled, at most a minute), then a minute apart —
+    // each asked of the account, never the refusal the page kept
+    const at: number[] = [];
+    for (let k = 1; k <= 180; k++) {
+      const n = reads();
+      p.run("NOW += 1000; chPoll(CH.get(EL))");
+      await settle(2);
+      if (reads() > n) at.push(k);
+    }
+    expect(at).toEqual([2, 6, 14, 30, 62, 122]);
+    expect(p.run<number>("CH.get(EL).wait")).toBe(60_000);
+    // the source comes back: bars drawn, the wait gone, read once a minute again
+    refuse = false;
+    for (let k = 0; k < 60; k++) {
+      p.run("NOW += 1000; chPoll(CH.get(EL))");
+      await settle(2);
+    }
+    expect(p.run<number>("CH.get(EL).wait")).toBe(0);
+    expect(p.el.querySelector(".ch-draw").innerHTML).toContain("<svg");
     p.run("chRelease(EL)");
   });
 });

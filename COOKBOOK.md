@@ -45,7 +45,7 @@
 
 页面是一个桌面钱包：
 
-- **左边的 rail**（第七轮 F1 / F5 的样子）：圆的 "A" 和名字；Markets · Trade；"Agents"（数是敲门等放行的 agent）；最下面纽约时间的钟（账户不应答时一枚 "Not answering since HH:MM"），和 **Account** 钱包按钮：净值 · 模式（"$12,480 · Guard"），旁边的数是等你批的卡加 agent 的请求（浏览器标签页的标题也带着，比如 "(2) Account"）。手机宽度上 rail 变成顶上一条：第一行圆标和 Account，第二行 Markets · Trade · Agents。
+- **左边的 rail**（第七轮 F1 / F5 的样子；在 Trade 里时换成交易区的 Hyperliquid 颜色，形状不变）：圆的 "A" 和名字；Markets · Trade；"Agents"（数是敲门等放行的 agent）；最下面纽约时间的钟（账户不应答时一枚 "Not answering since HH:MM"），和 **Account** 钱包按钮：净值 · 模式（"$12,480 · Guard"），旁边的数是等你批的卡加 agent 的请求（浏览器标签页的标题也带着，比如 "(2) Account"）。手机宽度上 rail 变成顶上一条：第一行圆标和 Account，第二行 Markets · Trade · Agents。
 - **Account 的头**（Portfolio · Venues · Memory 三页上）：Account · Lens（All accounts / 一个场所 / 一个 agent，表都按它筛）；右边 Mode（Guard | Beast 两个按钮，ⓘ 打开 "What changes"，第 4 条）· "Trading on · $250 a move"（或 "Read-only"）· "Settings" · 时钟图标（Statement）；下面一行三页的切换，和这一档模式的一句说明。
 - **Markets 和 Trade 的顶栏**：Lens、搜索（按 `/`，打字就去 Markets 搜；在 Account 的三页上按 `/` 先去 Markets）、时钟图标。按 `t` 打开下单票。重启过的，顶栏下面一行写着接回了什么。没有 Menu。
 - **几页**：Portfolio（第 2b 条）、Venues（第 2 条）、Memory（第 8c 条，照画布的 F13）、Markets（第 2c 条）、Trade（第 5 条）。
@@ -211,19 +211,37 @@ trading limit: every venue on the account now · up to $25 an order · $100 of o
 
 ```
 LEAD L-0001 | ETH/USDT | long | ETH leads the majors on volume today | confidence 0.66 → RISK
-RISK CLEARANCE L-0001 | market open · price 2455.75 · spread 0.03% · volume $322,173,865.00 · day's loss room $1,081.95 · size up to $80.00 | a tight spread, the day's loss room untouched | size $60.00 · TP +1.2% · SL -0.8% · 12 h | Verdict: CLEAR → SNIPER
-L-0001: filled 0.0239 ETH at 2455.75 at Stand-in Exchange (Beast, inside the limit).
-Cycle 1 (the clock): 1 lead scanned, 1 cleared, 1 placed, 1 open.
+RISK CLEARANCE L-0001 | market open · price 2,455.75 · spread 0.03% · volume $322.2M · day's loss room $1,081.95 · size up to $80.00 | a tight spread, the day's loss room untouched | size $60.00 · TP +1.2% · SL -0.8% · 12 h | Verdict: CLEAR → SNIPER
+L-0001: filled 0.0239 ETH at 2,455.75 at Stand-in Exchange (Beast, inside the limit).
+Cycle 1 (the clock): 1 lead scanned, 1 cleared, 1 placed, 0 waiting for you, 1 open.
 ```
 
-- **脑子的钥匙**：服务环境里的 `ANTHROPIC_API_KEY`（或 `ANTHROPIC_AUTH_TOKEN`、`ant auth login` 的 profile），或者文件 `~/.buyer-agent-demo/credentials/anthropic/api-key.json`：`{"apiKey": "sk-ant-…"}`，`chmod 600`；文件每次检查时重新读，改完不用重启（环境变量那条要 `npm run account:service -- restart`）。把示例值 `sk-ant-…` 原样写进去不算有钥匙：雇佣表单会说文件里还是示例。
-- **OpenAI 格式的脑子**：雇佣表单第 4 步 "Brain" 里选 "OpenAI-format endpoint"，可以是 OpenAI 自己、DeepSeek、Kimi、通义、xAI、OpenRouter，或本机的 vLLM / Ollama——凡是 `…/v1/chat/completions` 这一套。钥匙放 `~/.buyer-agent-demo/credentials/openai/api-key.json`：`{"apiKey": "…", "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat"}`（`chmod 600`；`baseUrl` 不写就是 OpenAI 自己的；`model` 是表单里的默认值），或者环境变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`（要重启）。模型名按那家接口的叫法填；价格（每百万 token 的 $ in / $ out）可填可不填，不填就只数 token、页面标 "unpriced"。各家收的字段不一样（`max_tokens` 还是 `max_completion_tokens`、认不认 `reasoning_effort`、支不支持 JSON schema），脑子先按 base URL 猜，接口回 400 就换它点名的那个字段再问，最多三次，被拒的请求不计费，试出来的写法记住下次直接用。雇了以后右栏 "Brain…" 随时换脑子、换模型、改价格，一个签名。没有钥匙：desk 雇得了，计划里的止盈止损照跑，房间每小时说一次它没法想；不编线索。
+房间里的数字按人读的写：价格按 en-US 分组、按市场自己的小数位，24 小时成交额写成 $322.2M；`|` 分段和最后的 "Verdict: …" 是外来席位照着走的协议，不变。Guard 下变成卡的线索记在 "waiting for you"，不算 "placed"。脑子没回答时，Search 只写一行 "Scanned N markets, but the brain did not answer (…): no lead this cycle."，Head 写 "Search's brain did not answer, so no lead was looked for."——不说市场冷清。会话开始的报告叫 SESSION START，席位按名字列；在晚报时间之后开始的会话，当天不再补一份全是零的晚报。
+
+- **脑子的钥匙**：文件 `~/.buyer-agent-demo/credentials/anthropic/api-key.json`，一行 `{"apiKey": ""}`，钥匙（`sk-ant-` 开头，console.anthropic.com › API keys）粘在引号里，只有你可读；每次检查时重新读，放进去、换掉都不用重启——装好的 LaunchAgent 也是这样拿钥匙的。没有能用的钥匙时，雇佣表单和 Superagent 页上有一块「怎么修」（服务给的 `brain.fix`：`code`、`file`、`command`、`restart`、`words`）：一句话、文件的绝对路径和一条命令，各带 Copy。没有文件时那条命令建目录、写空模板（只有你可读）、用编辑器打开（Mac 上是 TextEdit，别处是 `$EDITOR`），你粘进钥匙存盘就好；文件谁都能读时是 `chmod 600`；文件还是空模板、旧的示例值或坏了时是重新打开它。命令照抄就能跑，里面没有要先替换的值。手动起服务的话，环境里的 `ANTHROPIC_API_KEY`（或 `ANTHROPIC_AUTH_TOKEN`、`ant auth login` 的 profile）也行，但改了要重启（`npm run account:service -- restart`），修法里也这么写。钥匙被 API 拒了（形状对、被拒）：从那一次起页面说「不能用」并给同样的修法，房间说一次 "Anthropic refused the brain's key. Replace it in <文件>; the next cycle reads it, no restart."；每一轮照样去问，换好的钥匙一有回答就恢复，房间也说一句。没回答的调用另计（`spend.failed`），不花钱。
+- **OpenAI 格式的脑子**：雇佣表单第 4 步 "Brain" 里选 "OpenAI-format endpoint"，可以是 OpenAI 自己、DeepSeek、Kimi、通义、xAI、OpenRouter，或本机的 vLLM / Ollama——凡是 `…/v1/chat/completions` 这一套。钥匙放 `~/.buyer-agent-demo/credentials/openai/api-key.json`，空模板是 `{"apiKey": "", "baseUrl": "https://api.openai.com/v1", "model": ""}`：钥匙和模型名填进各自的引号，`baseUrl` 换成那家的（比如 `https://api.deepseek.com/v1`；不写就是 OpenAI 自己的），只有你可读；`model` 是表单里的默认值——文件里的和表单上的至少有一个写了模型名，空的或旧示例里的 `<the model, as the endpoint names it>` 都算没写。没有能用的钥匙时修法和 Claude 的一样（建空模板、打开、存盘，不用重启）。手动起服务的话也可以用环境变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`（要重启）。模型名按那家接口的叫法填；价格（每百万 token 的 $ in / $ out）可填可不填，不填就只数 token、页面标 "unpriced"。各家收的字段不一样（`max_tokens` 还是 `max_completion_tokens`、认不认 `reasoning_effort`、支不支持 JSON schema），脑子先按 base URL 猜，接口回 400 就换它点名的那个字段再问，最多三次，被拒的请求不计费，试出来的写法记住下次直接用。雇了以后右栏 "Brain…" 随时换脑子、换模型、改价格，一个签名。没有钥匙：desk 雇得了，计划里的止盈止损照跑，房间每小时说一次它没法想；不编线索。
 - **花费**：每轮至多三次调用（Exit 有在手线索时、Search、Risk 有线索时），晚报和周评各一次；按 API 返回的 token 数和模型标价算，写在 Brain 卡里（估算）。
 - **哪些是真的**：线索来自账户自己的 Markets 列表（`/api/account/explore`），清算的硬检查来自场所的报价（`/api/account/market`），每一单从门走（`agentLiveOrder` / `agentLiveClose`），成交从账户的订单读回来，权益 = 会话开始时场所的权益 + 已实现 + 在手线索按最新价的未实现。房间里"brain"标的句子是脑子说的，其余是账户的数。
 - **会被拒**：目标里的场所没接上或不能交易 `E_ACCOUNT_BAD_ACTION`；没有 Head 不能雇；Flow / Sentiment 不能由房里坐；不是席位的钥匙 `portfolio_desk_say` 是 `E_ACCOUNT_OWNER_ONLY`；没额度的席位下单是 `E_MANDATE_NONE`——这就是"章程变成额度"。
 - 文件：`~/.buyer-agent-demo/desk/desk.json`、`desk/room.jsonl`（600）；席位钥匙 `seats/desk-<role>.json`。重启继续。
 
 **单笔上限也在这里改**：头上的 "Trading on · $20 a move" 点开 Settings，"Change the cap" 一次签名（`setPolicy cap`），升降都行，立刻生效，重启按最后一次签的恢复；启动参数 `--live-cap` 只是起点。纸上账户不受它。
+
+## 3c · Superagent：让 Desk 在纸上账户上自己交易
+
+rail 上的 **Trade**，顶栏最前面的开关按 **Superagent**（`#/trade?mode=superagent`；旧的 `#/superagent` 落到同一处，Portfolio 的 Paper book 卡上的链接也到这里）。Trade 是一个地方、两种模式：开关 **Regular · Superagent** 两种模式共用、位置不动，点一下就换，键盘也能按；这个浏览器记得你上次用哪一种（只在你按开关时记），下次从 rail 进 Trade 就开那一种。Regular 是你自己下单的终端，Superagent 是 Desk 替你在纸上账户上下单、你看着——只有纸上的钱，不进净值。整块交易区是 Hyperliquid 交易 app 的暗绿样子，Cream 和 Black 下一样；在交易区里时 rail 也换成同一组颜色（形状不变），离开就换回 Account 的样子。
+
+1. **还没有 Desk**：启动面板。最上面一张三步清单，从账户实时读、做完的打 ✓：**一个纸上账户**（没有就按 "Open a paper account"）→ **脑子的钥匙**（没放好时是「怎么修」那一块：钥匙文件 `~/.buyer-agent-demo/credentials/anthropic/api-key.json` 的绝对路径和一条照抄就能跑的命令，各带 Copy，放进去不用重启）→ **Start**。下面的表单：选纸上账户，写一句目标，填目标 %、每笔最多占权益 %、当日亏损熔断 %、会话小时数、几分钟一轮（默认 5）、最多同时几笔（每个数的范围是 `/api/account/desk/catalog` 的 `bounds`：目标 0.1–100 %、每笔 0.1–50 %、熔断 0.1–50 %、1–336 小时、1–240 分钟一轮、1–10 笔，范围外的表单用字拒；MCP 送来的还是就近取到边上）、脑子（不能用时写它自己的原因和「怎么修」那一块：钥匙文件在哪、一条照抄就能跑的命令、要不要重启）。按 **"Start the superagent"**，依次签：每个房里席位放进来（`approveAgent`）→ 每个会交易的席位一个额度（`approveSpend`，只给这个纸上账户）→ 雇 Desk（`setDesk hire`）→ 开纸上自主（`setDesk autonomy {paper: true}`）。按钮旁边写明会发生什么：纸上下单不再出卡、每个席位不超额度、脑子的调用花你钥匙的钱、随时可以停。
+2. **Desk 已经在真场所上**：页面直说，给一个"挪到纸上账户"（没有在手线索时）或去 Agents 页看。
+3. **跑起来**：第一轮在雇好、恢复后几秒（5 秒）就来，不等时钟的下一跳，时钟的下一跳也不会抢在它前面——所以紧跟着 hire 签的自主赶得上第一轮；MCP 或脚本雇的时候可以把自主直接写进 hire 的值（`{"…", "autonomy": {"paper": true}}`，只在纸上账户收，不然整个 hire 被拒），一个签名、没有空档。**顶栏**照 Hyperliquid 市场栏写：Desk 的名字、PAPER、纸上账户、会话状态和计时，四个读数 **Equity · Target · Next cycle · Brain**（权益和涨跌、目标进度、下一轮倒计时、哪个脑子和它的调用与花费——替身的脚本脑子就写脚本），右边是控制。纽约时间是大厅墙上的翻牌钟，实测帧率小字写在大厅面板的角上。顶栏的 **Autonomy**（Cards | Auto on paper）随时切回出卡；切到 Cards 时，它清过的线索在 Guard 下等你批，大厅上面一条 **Waits for you** 列出这些卡，就地批或拒。**Pause / Resume**、**Cycle now**（另一轮正在跑时直说"正在跑"，不叠一轮；没有会话时直说）、**End**。Head 的一轮那一行把「已下单」和「等你批」分开数；脑子没回答时它直说 "Search's brain did not answer"，不说市场冷清。
+4. **看什么**：八张角色卡、大厅、余额、分析图、规则和流水线、房间——都来自 Desk 的真记录和市场的真读数；没有数据的地方写字，不画东西。系统设为"减少动画"时大厅是静止的，每次有新数据重画一帧。
+
+```
+GET /api/account/desk/feed?since=0     房间里 seq 之后的新行（最多 200）、谁在做什么、几个脑子调用在跑、上一轮扫描、自主、会话、权益尾巴、目标、漏斗、今天、最近的线索、下一轮、脑子
+```
+
+- 纸上自主只认这个 Desk 自己的房里交易席位（Sniper · Exit · Watch）、只在它的纸上账户、只在会话没结束时；Guard 模式表里多一行 "The desk's own seats at its paper account"。
+- MCP：`portfolio_desk` 的答复带 `autonomy` 和上一轮扫描的计数。
 
 ## 4 · 选模式：Guard 还是 Beast
 
@@ -701,7 +719,12 @@ Agent 的管理（放谁进来、给多少额度、它们在做什么、它们�
 ```bash
 npx tsx test/standin/ui-standin.ts --port 4821          # 或 .claude/launch.json 里的 ui-standin
 npx tsx test/standin/ui-standin.ts --port 4822 --cap 250 --tick 3000   # 单笔上限 $250，价格每 3 秒动一次
+npx tsx test/standin/ui-standin.ts --port 4823 --superagent              # Desk 雇成 Superagent：纸上账户 paper-momentum，自主开着，一分钟一轮
+npx tsx test/standin/ui-standin.ts --port 4823 --superagent --cards      # 自主关着：清过的线索在 Guard 下变成卡，Waits for you 那一条有真卡可批
+npx tsx test/standin/ui-standin.ts --port 4823 --superagent --brain-refuses   # 脑子像 API 拒钥匙那样答：页面显示被拒钥匙的修法
 ```
+
+`--no-desk` 不雇 Desk，留给页面的启动面板，后面是真的两个脑子，各自老实说这个 home 里没有它的钥匙（没有钥匙的那种修法）。`--brain-refuses` 开始时往 `<home>/credentials/anthropic/api-key.json` 写一把替身钥匙；文件里还是它时每次调用都被拒，你改了文件里的内容（修法的命令就是打开它），下一次调用就有回答，故障跟着撤掉，和真的换钥匙一样。
 
 它起的就是 `npm run account` 那个服务、那个页面、那扇门，只是真实连接够得着的东西全换成替身：场所、公开行情、网络（每个请求都答"没有网络"）、链、收款方、`mm`。什么都不出这个进程，从不用 4820。
 

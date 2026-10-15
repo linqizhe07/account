@@ -56,9 +56,11 @@ const raw = (path: string) =>
 function browser(opts: { fetch?: (path: string) => Promise<unknown> } = {}) {
   const opened: string[] = [];
   const stored: string[] = [];
+  // what the scripts listen for on the document, kept so a test can hand them an event as a browser would (the shell's one click handler)
+  const heard: Record<string, Array<(e: unknown) => void>> = {};
   const element = (): Record<string, unknown> => ({ addEventListener() {}, removeAttribute() {}, setAttribute() {}, querySelectorAll: () => [], querySelector: () => null, classList: { add() {}, remove() {}, toggle() {} }, dataset: {}, style: {}, hidden: false, value: "", textContent: "", innerHTML: "" });
   const sandbox: Record<string, unknown> = {
-    document: { getElementById: element, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, body: element(), documentElement: { dataset: { theme: "cream" }, setAttribute() {} }, hidden: false, activeElement: null },
+    document: { getElementById: element, querySelector: () => null, querySelectorAll: () => [], addEventListener: (type: string, fn: (e: unknown) => void) => void (heard[type] ||= []).push(fn), body: element(), documentElement: { dataset: { theme: "cream" }, setAttribute() {} }, hidden: false, activeElement: null },
     location: { hash: "", origin: "http://127.0.0.1:4820" },
     history: { replaceState() {} },
     localStorage: {
@@ -91,7 +93,7 @@ function browser(opts: { fetch?: (path: string) => Promise<unknown> } = {}) {
   sandbox.window = runInContext("globalThis", ctx);
   const files = scripts().map((src) => ({ src, text: source(src) }));
   for (const f of files) new Script(f.text, { filename: f.src }).runInContext(ctx);
-  return { ctx, opened, stored, run: (code: string) => runInContext(code, ctx) as unknown };
+  return { ctx, opened, stored, heard, run: (code: string) => runInContext(code, ctx) as unknown };
 }
 
 describe("the account page's scripts", () => {
@@ -105,11 +107,11 @@ describe("the account page's scripts", () => {
     expect(named.filter((s) => s.startsWith("/ui/")).sort()).toEqual(onDisk.sort());
     // the order the contract names: what moves money and what connects before the panes that use it, the statement and the agents' mount
     // point after them, the shell last
-    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/live.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/chart.js", "/ui/book.js", "/ui/terminal.js", "/ui/desk.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
+    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/live.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/chart.js", "/ui/book.js", "/ui/terminal.js", "/ui/desk.js", "/ui/floor.js", "/ui/superagent.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
     // each ui script waits for the page to be parsed and runs in the order named
     for (const m of html.matchAll(/<script\b([^>]*)\bsrc="(\/ui\/[^"]+)"/g)) expect(m[1], m[2] ?? "").toMatch(/\bdefer\b/);
     // the tokens first (both backgrounds), then the shell, then what the earlier renderers still draw; the classic page's sheet is not needed
-    expect(styles()).toEqual(["/ui/tokens.css", "/ui/shell.css", "/account.css", "/ui/portfolio.css", "/ui/markets.css", "/ui/trade.css", "/ui/terminal.css", "/ui/chart.css", "/ui/book.css", "/ui/live.css", "/ui/desk.css"]);
+    expect(styles()).toEqual(["/ui/tokens.css", "/ui/shell.css", "/account.css", "/ui/portfolio.css", "/ui/markets.css", "/ui/trade.css", "/ui/terminal.css", "/ui/chart.css", "/ui/book.css", "/ui/live.css", "/ui/desk.css", "/ui/superagent.css"]);
     for (const path of [...named, ...styles()]) {
       const r = await fetch(`${srv.url}${path}`);
       expect(r.status, path).toBe(200);
@@ -129,6 +131,9 @@ describe("the account page's scripts", () => {
     const font = await fetch(`${srv.url}${preload[0]}`);
     expect([font.status, font.headers.get("content-type"), font.headers.get("cache-control")]).toEqual([200, "font/woff2", "public, max-age=31536000, immutable"]);
     expect(html).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
+    // the trading area's face (Inter) is this account's too, declared in the tokens and not preloaded: no stylesheet asks another host
+    for (const css of styles()) expect(source(css), css).not.toMatch(/fonts\.(googleapis|gstatic)\.com|@import/);
+    expect(source("ui/tokens.css")).toMatch(/@font-face \{ font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url\(\/fonts\/inter-v4-latin-400\.woff2\) format\("woff2"\)/);
     for (const path of ["/fonts/../server.ts", "/fonts/OFL.txt", "/fonts/nope.woff2"]) expect((await raw(path)).status, path).toBe(404);
   });
 
@@ -186,7 +191,7 @@ describe("the account page's scripts", () => {
     expect(b.stored).toEqual(["account.theme"]);
     // the shell and the contract it gives the panes
     const contract = ["render", "load", "own", "cancelOrder", "api", "forget", "refusalOf", "toast", "openSheet", "closeSheet", "openDrawer", "closeDrawer", "confirmSheet", "pickSheet", "whatYouSign", "quoteDialog", "paint", "go", "onRoute", "routed", "lensNow", "inLens", "chg", "avatar", "icon", "table", "seg", "field", "select", "formFields", "setOptions", "debounce", "thenLoad", "download", "copyText", "esc", "money", "fine", "px", "usd", "cents", "short", "qtyOf", "typeText", "isLive", "byOf", "readOnlyWords", "owns", "writesOn", "canTrade", "canMove", "isAgentWallet", "modeOf", "dollarsOf", "isDollar", "networksOf", "bridgeChainsOf", "walletFor", "mined"];
-    const mine = ["openStatement", "renderStatement", "openAgents", "openSettings", "openMode", "renderAgents", "renderDevices", "renderDial", "setMode", "setTheme", "copySetup", "downloadBalances", "lensMenu", "drawPane"];
+    const mine = ["openStatement", "renderStatement", "openAgents", "openSettings", "openMode", "renderAgents", "renderDevices", "renderDial", "setMode", "setTheme", "copySetup", "downloadBalances", "lensMenu", "drawPane", "tradeModeLast", "setTradeMode"];
     // what the other parts already define, and the shell calls
     const there = ["openPicker", "openConnect", "connectVia", "keyHowFor", "openLiveMove", "openAmend", "renderWallets", "openClose", "declineAsk"];
     const all = [...contract, ...mine, ...there];
@@ -195,6 +200,100 @@ describe("the account page's scripts", () => {
     const panes = ["renderPortfolio", "renderVenues", "renderMemory", "renderMarkets", "renderTrade", "openTicket", "openHandToAgent", "openReceive", "openAsset", "openMarket"];
     for (const p of panes) expect(["function", "undefined"], p).toContain(b.run(`typeof ${p}`));
     expect(b.run("[A, busy, flash, said, S.length, ROUTE.tab, view.lens]")).toEqual([null, false, "", "", 0, "portfolio", ""]);
+  });
+
+  it("makes Trade one place in two modes: html[data-area] set in the area and taken away outside it, the switch pressed for the mode showing, the rail's Trade current in both, the mode kept only by the switch", () => {
+    const b = browser();
+    b.run(`
+      var mk = (data) => ({ dataset: data, attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); }, removeAttribute(k) { delete this.attrs[k]; }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } });
+      var LINKS = [mk({ tab: "markets" }), mk({ tab: "trade" })];
+      var MODES = [mk({ tradeMode: "regular" }), mk({ tradeMode: "superagent" })];
+      document.querySelectorAll = (sel) => (sel === ".rail-nav a[data-tab]" ? LINKS : sel === "#trade-mode button[data-trade-mode]" ? MODES : []);
+      document.querySelector = (sel) => (sel === '.rail-nav a[data-tab="trade"]' ? LINKS[1] : null);
+      // the browser writes the canonical hash in place, as history.replaceState does (no hashchange of its own)
+      history.replaceState = (_s, _t, h) => { location.hash = h; };
+      var state = () => JSON.stringify({ area: document.documentElement.dataset.area || null, pressed: MODES.map((m) => m.attrs["aria-pressed"]), current: LINKS.map((a) => a.attrs["aria-current"] || null), href: LINKS[1].attrs.href, tab: ROUTE.tab, hash: location.hash });
+    `);
+    const at = (hash: string) => JSON.parse(String(b.run(`location.hash = ${JSON.stringify(hash)}; routed(); state()`)));
+    // Superagent: the area, its half of the switch pressed, the rail's Trade current; the older link written as the canonical one, in place.
+    // Inside the area the rail's Trade points at the place showing: the item the viewer is on goes nowhere else
+    expect(at("#/superagent?venue=paper-1")).toEqual({ area: "trade", pressed: ["false", "true"], current: [null, "page"], href: "#/trade?mode=superagent&venue=paper-1", tab: "superagent", hash: "#/trade?mode=superagent&venue=paper-1" });
+    expect(at("#/trade?mode=superagent")).toMatchObject({ area: "trade", pressed: ["false", "true"], current: [null, "page"], href: "#/trade?mode=superagent", tab: "superagent" });
+    expect(at("#/trade")).toMatchObject({ area: "trade", pressed: ["true", "false"], current: [null, "page"], href: "#/trade", tab: "trade" });
+    // outside the area: no area, the rail marks Markets, and its Trade opens the mode kept (none kept here: Regular)
+    expect(at("#/markets")).toMatchObject({ area: null, current: ["page", null], href: "#/trade", tab: "markets" });
+    expect(at("#/portfolio")).toMatchObject({ area: null, current: [null, null], tab: "portfolio" });
+    // the switch keeps the mode (storage off here: it says so by throwing, and the page goes on) and goes there
+    b.run('setTradeMode("superagent", { venue: "paper-1" })');
+    expect(b.stored).toEqual(["account.theme", "account.tradeMode"]);
+    expect(b.run("location.hash")).toBe("#/trade?mode=superagent&venue=paper-1");
+    // storage on: the rail's Trade opens the mode used last — from outside the area
+    b.run('var KEPT = { "account.tradeMode": "superagent" }; localStorage.getItem = (k) => (k in KEPT ? KEPT[k] : null); localStorage.setItem = (k, v) => { KEPT[k] = String(v); }; location.hash = "#/markets"; routed()');
+    expect(b.run("LINKS[1].attrs.href")).toBe("#/trade?mode=superagent");
+    expect(b.run("tradeModeLast()")).toBe("superagent");
+    // Superagent kept, Regular showing (the browser's Back, or a link to #/trade?kind=…): the rail's Trade is current and stays on Regular,
+    // so pressing the item the viewer is on never throws them into the other mode
+    expect(at("#/trade?kind=perps")).toMatchObject({ area: "trade", pressed: ["true", "false"], current: [null, "page"], href: "#/trade?kind=perps", tab: "trade" });
+    expect(at("#/trade")).toMatchObject({ href: "#/trade", tab: "trade" });
+    // the switch itself, pressed as a browser presses it: through the shell's one click handler on the document. The half not pressed goes
+    // to its mode and keeps it; the half pressed does nothing
+    const click = (mode: string) =>
+      b.run(`(() => { const btn = MODES.find((m) => m.dataset.tradeMode === ${JSON.stringify(mode)}); const target = { closest: (sel) => (sel === "button[data-trade-mode]" ? btn : null) }; for (const fn of HEARD) fn({ target }); routed(); return state(); })()`);
+    (b.ctx as Record<string, unknown>).HEARD = b.heard.click ?? [];
+    expect(b.heard.click?.length).toBeGreaterThan(0);
+    b.run('KEPT["account.tradeMode"] = "regular"');
+    expect(JSON.parse(String(click("regular")))).toMatchObject({ tab: "trade", hash: "#/trade" });
+    expect(b.run('KEPT["account.tradeMode"]')).toBe("regular");
+    expect(JSON.parse(String(click("superagent")))).toMatchObject({ tab: "superagent", pressed: ["false", "true"], hash: "#/trade?mode=superagent", href: "#/trade?mode=superagent" });
+    expect(b.run('KEPT["account.tradeMode"]')).toBe("superagent");
+    expect(JSON.parse(String(click("regular")))).toMatchObject({ tab: "trade", pressed: ["true", "false"], hash: "#/trade", href: "#/trade" });
+    expect(b.run('KEPT["account.tradeMode"]')).toBe("regular");
+  });
+
+  it("gives the rail the trading area's colours while the area shows — the page behind it too, so no light strip shows under it — over a short fade (none under reduced motion), its shape, face and weights the Account's", () => {
+    const tokens = source("ui/tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const shell = source("ui/shell.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    // the colours on html itself (so the rail and the page's background take them), the shape and face on the area's containers only
+    const colours = /:root\[data-area="trade"\],\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
+    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-panel);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-panel);", "--hl-panel: #0f1a1f;", "--warn: var(--hl-warn);", "color-scheme: dark;"]) expect(colours, d).toContain(d);
+    for (const d of ["--font-sans", "--radius-pill", "font-weight", "font-family"]) expect(colours, d).not.toContain(d);
+    const shape = [...tokens.matchAll(/(?:^|\})\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/g)].map((m) => m[1] ?? "").join("");
+    for (const d of ['--font-sans: "Inter"', "--radius-pill: 8px;", "font-weight: 400;"]) expect(shape, d).toContain(d);
+    // the rail: no edge beside the main column, its current item in HL's bright accent, its colours fading over 0.2 s — and cut under
+    // reduced motion
+    expect(shell).toContain(':root[data-area="trade"] .rail { border-right-color: transparent; }');
+    expect(shell).toContain(':root[data-area="trade"] .rail-nav a[aria-current="page"] { color: var(--hl-accent); }');
+    // the page fades its background only — never its text colour, which every word in a pane inherits: a fade from the area's near-white
+    // back to the Account's ink would leave Markets' words near-white on white cards for its length — and .main takes its ink at once
+    expect(shell).toMatch(/\nhtml, body \{ transition: background-color 0\.2s ease-in-out; \}/);
+    expect(shell).not.toMatch(/\nhtml, body[^{]*\{ transition:[^}]*[\s,]color 0\.2s/);
+    expect(shell).toMatch(/\n\.main \{ color: var\(--text\); \}/);
+    expect(shell).toMatch(/\n\.rail, \.rail-wallet, \.rail-pill, [^{]*\{ transition: background-color 0\.2s ease-in-out, color 0\.2s ease-in-out, border-color 0\.2s ease-in-out; \}/);
+    const reduced = shell.slice(shell.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
+    expect(reduced).toMatch(/html, body, \.rail, \.rail-wallet, \.rail-pill, \.rail-nav\.moves \.rail-pill, [^{]*\{ transition: none; \}/);
+    // nothing of the area's grammar reaches the rail: every shared-class rule of the area is scoped to its containers
+    expect(shell).not.toMatch(/:where\(:root\[data-area="trade"\]\) (?!:is\(#modal, #drawer, #ask\))/);
+    // a hover's colour only where there is a pointer: outside (hover: hover) a hover rule of the area only sets the rest look back
+    const top: string[] = [];
+    let depth = 0;
+    let media = "";
+    let start = 0;
+    for (let i = 0; i < shell.length; i++) {
+      const ch = shell[i];
+      if (ch === "{") {
+        const head = shell.slice(start, i).trim();
+        if (depth === 0 && head.startsWith("@media")) media = head;
+        else if (!(media === "@media (hover: hover)" && depth === 1)) top.push(head + " {" + shell.slice(i + 1, shell.indexOf("}", i)) + "}");
+        depth++;
+        start = i + 1;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) media = "";
+        start = i + 1;
+      }
+    }
+    const lit = top.filter((r) => /data-area="trade"/.test(r) && /:hover/.test(r.split("{")[0] ?? "") && /var\(--hl-(accent|title|inset-hover)\)/.test(r.split("{")[1] ?? ""));
+    expect(lit).toEqual([]);
   });
 
   it("gives the panes helpers that say up and down without colour alone, tables, toggles and the route, each as written in the contract", () => {
@@ -226,6 +325,9 @@ describe("the account page's scripts", () => {
     expect(r('routeOf("#/nowhere").tab')).toBe("portfolio");
     expect(r('routeOf("").tab')).toBe("portfolio");
     expect(r('hashOf("trade", { tile: "swap", q: "" })')).toBe("#/trade?tile=swap");
+    // Trade's two modes: the mode in the query, never a pane's param
+    expect(r('JSON.stringify(routeOf("#/trade?mode=superagent&venue=p"))')).toBe('{"tab":"superagent","params":{"venue":"p"}}');
+    expect(r('hashOf("superagent", { venue: "p" })')).toBe("#/trade?mode=superagent&venue=p");
     // before the account is read, the lens is every account and every row is in it
     expect(r('JSON.stringify(lensNow())')).toBe('{"kind":"all","id":"","name":"All accounts"}');
     expect(r('inLens("okx", "0xabc")')).toBe(true);

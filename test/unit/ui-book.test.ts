@@ -321,4 +321,306 @@ describe("what the review found", () => {
       vi.useRealTimers();
     }
   });
+
+  it("fits HL's rows: 23 high with 2 between, under HL's tabs (41), the controls row (31), the column heads (17), the spread row (23) and room for the quiet line", () => {
+    const p = page();
+    expect(p.run("[BK_ROW_PX, BK_GAP_PX, BK_CHROME_PX]")).toEqual([25, 2, 41 + 31 + 17 + 23 + 30]);
+    const css = readFileSync(`${UI}book.css`, "utf8");
+    expect(css).toMatch(/\.bk \{[^}]*--bk-row: var\(--hl-h-bookrow\);[^}]*--bk-gap: var\(--hl-bookgap\);/);
+    // the bars grow from the left, at HL's 15 %, never a tint over the whole row
+    expect(css).toMatch(/\.bk-bar \{[^}]*transform-origin: left center;[^}]*opacity: \.15;/);
+    // the column heads are one word each (the units are said once, at the controls row's right): nothing to cut
+    const { el } = panel();
+    p.fn("bkMount")(el, { venue: "hyperliquid", symbol: "BTC-PERP", kind: "perp", quote: "USDC", base: "BTC", priceStep: 1 });
+    mounted.push({ release: () => p.fn("bkRelease")(el) });
+    expect(el.innerHTML).toContain('<span class="bk-unit" title="Sizes and totals in BTC">BTC</span>');
+    expect(el.innerHTML).toContain('<div class="bk-cols"><span>Price<span class="sr"> in USDC</span></span><span>Size<span class="sr"> in BTC</span></span><span>Total</span></div>');
+    expect(el.innerHTML).not.toContain("Size (BTC)");
+  });
+
+  it("draws the spread row as HL's three figures, read out as one sentence", () => {
+    const p = page();
+    expect(p.fn("bkSpreadHtml")(BTC, { priceStep: 1 })).toBe('<span class="bk-spread" role="text" aria-label="Spread 1 · 0.0012%"><span aria-hidden="true">Spread</span><span aria-hidden="true">1</span><span aria-hidden="true">0.0012%</span></span>');
+    expect(p.fn("bkSpreadHtml")({ bids: [], asks: [], depth: "full" }, {})).toBe('<span class="bk-spread">Spread —</span>');
+  });
+
+  it("marks a book of its best bid and ask only on its root (bk-top), and takes the mark away when a full book comes", async () => {
+    let answer: unknown = { ok: true, book: { bids: [[189.98, null]], asks: [[190.02, null]], at: new Date().toISOString(), from: "Nasdaq", depth: "top", topOnly: "none" } };
+    const p = page(async () => answer);
+    const { el } = panel();
+    const classes = new Set<string>();
+    const root = { classList: { toggle: (c: string, on: boolean) => void (on ? classes.add(c) : classes.delete(c)) }, style: { setProperty() {} }, clientHeight: 0 };
+    const q0 = el.querySelector.bind(el);
+    el.querySelector = (sel: string) => (sel === ".bk" ? root : q0(sel)) as never;
+    p.fn("bkMount")(el, { venue: "us-stocks", symbol: "AAPL", kind: "stock", quote: "USD", priceStep: 0.01 });
+    mounted.push({ release: () => p.fn("bkRelease")(el) });
+    await settle();
+    await settle();
+    expect(classes.has("bk-top")).toBe(true);
+    answer = { ok: true, book: BTC };
+    await p.fn<Promise<void>>("bkReadBook")(el, p.run<WeakMap<object, unknown>>("BK").get(el));
+    expect(classes.has("bk-top")).toBe(false);
+  });
+
+  it("hears a source that publishes no trades (the account's `none`, and its older refusal) as a quiet fact: its words, and no asking again until the tab changes", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const answer of [{ ok: true, venue: "kalshi", symbol: "KXFED:YES", trades: [], none: "Kalshi publishes no trades the account can read" }, { ok: false, refusal: { code: "E_VENUE_RAIL_CLOSED", message: "Kalshi publishes no trades the account can read" } }]) {
+        const p = page(async (path) => (path.startsWith("/api/account/trades") ? answer : { ok: true, book: BTC }));
+        const { el, html, fire } = panel();
+        p.fn("bkMount")(el, { venue: "kalshi", symbol: "KXFED:YES", kind: "event", quote: "USD", priceStep: 0.01 });
+        fire("click", { target: { closest: (sel: string) => (sel === "[data-bk-tab]" ? { dataset: { bkTab: "trades" } } : null) } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(html("[data-bk-tape]")).toBe('<p class="bk-wait" role="status">Kalshi publishes no trades the account can read</p>');
+        const trades = () => p.asked.filter((x) => x.startsWith("/api/account/trades")).length;
+        expect(trades()).toBe(1);
+        // a minute on the tab: nothing asked again
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(trades()).toBe(1);
+        // the tab pressed again (the book, then the trades): asked once more
+        fire("click", { target: { closest: (sel: string) => (sel === "[data-bk-tab]" ? { dataset: { bkTab: "book" } } : null) } });
+        fire("click", { target: { closest: (sel: string) => (sel === "[data-bk-tab]" ? { dataset: { bkTab: "trades" } } : null) } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(trades()).toBe(2);
+        p.fn("bkRelease")(el);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks a refused book again later and later — two seconds, doubling, at most a minute apart — and on its own beat again once answered", async () => {
+    vi.useFakeTimers();
+    try {
+      let refuse = true;
+      const p = page(async () => (refuse ? { ok: false, refusal: { code: "E_VENUE_NOT_CONNECTED", message: "Momentum is not connected" } } : { ok: true, book: BTC }));
+      // the page's clock is the test's (the vm keeps a Date of its own, which the fake timers would not move)
+      p.sandbox.Date = Date;
+      const { el } = panel();
+      p.fn("bkMount")(el, { venue: "paper-momentum", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 0.1 });
+      const books = () => p.asked.filter((x) => x.startsWith("/api/account/book")).length;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(books()).toBe(1);
+      // the next five minutes: 2, 4, 8, 16, 32, then a minute apart (rounded up to the two-second beat) — not 150 reads
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(books()).toBeGreaterThanOrEqual(8);
+      expect(books()).toBeLessThanOrEqual(11);
+      expect(p.run<WeakMap<object, { wait: { book: number } }>>("BK").get(el)!.wait.book).toBe(60_000);
+      // answered: back on the two-second beat
+      refuse = false;
+      await vi.advanceTimersByTimeAsync(62_000);
+      const n = books();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(books() - n).toBe(5);
+      expect(p.run<WeakMap<object, { wait: { book: number } }>>("BK").get(el)!.wait.book).toBe(0);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the account not answering", () => {
+  it("tells a read the account never got (the browser's own error, a gateway's page) from the account's own words", () => {
+    const p = page();
+    const un = (b: unknown) => p.fn<boolean>("bkUnanswered")(b);
+    expect(un(undefined)).toBe(true);
+    expect(un({ ok: false, error: "Failed to fetch" })).toBe(true);
+    expect(un({ ok: false, error: "Load failed" })).toBe(true);
+    expect(un({ ok: false, error: "NetworkError when attempting to fetch resource." })).toBe(true);
+    expect(un({ ok: false, error: "502 Bad Gateway" })).toBe(true);
+    expect(un("Failed to fetch")).toBe(true);
+    // the account's own sentences: a refusal, an error it wrote itself, an answer
+    expect(un({ ok: false, refusal: { code: "E_VENUE_NOT_CONNECTED", message: "Momentum is not connected" } })).toBe(false);
+    expect(un({ ok: false, error: "The account hit an error answering this; it was recorded." })).toBe(false);
+    expect(un({ ok: true, book: BTC })).toBe(false);
+    expect(un("Exchange did not answer in time")).toBe(false);
+  });
+
+  it("keeps the book last read while the account does not answer — dimmed, said as not read since then, with how long it now waits — asks later and later, and is live again once answered", async () => {
+    vi.useFakeTimers();
+    try {
+      let down = false;
+      const p = page(async () => {
+        if (down) throw new TypeError("Failed to fetch");
+        return { ok: true, book: BTC };
+      });
+      p.sandbox.Date = Date;
+      const { el, html } = panel();
+      const classes = new Set<string>();
+      const root = { classList: { toggle: (c: string, on: boolean) => void (on ? classes.add(c) : classes.delete(c)) }, style: { setProperty() {} }, clientHeight: 0 };
+      const q0 = el.querySelector.bind(el);
+      el.querySelector = (sel: string) => (sel === ".bk" ? root : q0(sel)) as never;
+      p.fn("bkMount")(el, { venue: "ex", symbol: "BTC/USDT", kind: "spot", quote: "USDT", priceStep: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(html("[data-bk-asks]")).toContain("81,769");
+      const books = () => p.asked.filter((x) => x.startsWith("/api/account/book")).length;
+      // the account stops answering: the next read fails — the book stays, dimmed, under the words, never the browser's error
+      down = true;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(html("[data-bk-asks]")).toContain("81,769");
+      expect(classes.has("bk-old")).toBe(true);
+      expect(html("[data-bk-note]")).toMatch(/^<span class="bk-oldline" role="status">Not read since \d\d:\d\d:\d\d: the account is not answering\. Asking again every 2 s\.<\/span>$/);
+      expect(html("[data-bk-note]") + html("[data-bk-mid]")).not.toContain("Failed to fetch");
+      // a minute down: asked 2, 4, 8, 16, 32 s apart — not thirty times — and the words follow the wait
+      const n = books();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(books() - n).toBeLessThanOrEqual(5);
+      expect(html("[data-bk-note]")).toMatch(/Asking again every (32|60) s\./);
+      // answered again: live, the words and the dimming gone
+      down = false;
+      await vi.advanceTimersByTimeAsync(62_000);
+      expect(classes.has("bk-old")).toBe(false);
+      expect(html("[data-bk-note]")).toBe("");
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the account is not answering in the page's own words when nothing was read yet, and a refusal in its own with how long it now waits — a source's quiet fact alone", async () => {
+    vi.useFakeTimers();
+    try {
+      let answer: () => unknown = () => {
+        throw new TypeError("Failed to fetch");
+      };
+      const p = page(async () => answer());
+      p.sandbox.Date = Date;
+      const { el, html } = panel();
+      p.fn("bkMount")(el, { venue: "ex", symbol: "BTC/USDT", kind: "spot", quote: "USDT", priceStep: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(html("[data-bk-mid]")).toBe('<span class="bk-no" role="status">The account is not answering. Asking again every 2 s.</span>');
+      answer = () => ({ ok: false, refusal: { code: "E_VENUE_NOT_CONNECTED", message: "Momentum is not connected." } });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(html("[data-bk-mid]")).toBe('<span class="bk-no" role="status">Momentum is not connected. Asking again every 4 s.</span>');
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the trades last read while the account does not answer, under a line that says since when", async () => {
+    vi.useFakeTimers();
+    try {
+      let down = false;
+      const trades = [{ price: 81769, size: 0.5, side: "buy", at: "2026-10-14T17:30:00.000Z" }];
+      const p = page(async (path) => {
+        if (down) throw new TypeError("Failed to fetch");
+        return path.startsWith("/api/account/trades") ? { ok: true, trades } : { ok: true, book: BTC };
+      });
+      p.sandbox.Date = Date;
+      const { el, html, fire } = panel();
+      p.fn("bkMount")(el, { venue: "ex", symbol: "BTC/USDT", kind: "spot", quote: "USDT", priceStep: 1 });
+      fire("click", { target: { closest: (sel: string) => (sel === "[data-bk-tab]" ? { dataset: { bkTab: "trades" } } : null) } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(html("[data-bk-tape]")).toContain("81,769");
+      down = true;
+      await vi.advanceTimersByTimeAsync(4_000);
+      const tape = html("[data-bk-tape]");
+      expect(tape).toMatch(/^<p class="bk-oldline" role="status" data-k="old">Not read since \d\d:\d\d:\d\d: the account is not answering\. Asking again every 2 s\.<\/p>/);
+      expect(tape).toContain("81,769");
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a level that changed, and what a row reaches (HL's flash and hover card)", () => {
+  it("flashes a level whose size changed since the last read — once, the two names in turn — never on the first draw, never a level that only came into view", async () => {
+    let book: unknown = BTC;
+    const p = page(async () => ({ ok: true, book }));
+    const { el, html } = panel();
+    p.fn("bkMount")(el, { venue: "hyperliquid", symbol: "BTC-PERP", kind: "perp", quote: "USDC", base: "BTC", priceStep: 1 });
+    mounted.push({ release: () => p.fn("bkRelease")(el) });
+    await settle();
+    await settle();
+    // the first draw: nothing flashes
+    expect(html("[data-bk-asks]") + html("[data-bk-bids]")).not.toMatch(/bk-f[ab]/);
+    const st = () => p.run<WeakMap<object, unknown>>("BK").get(el);
+    // the best ask's size changes, a new bid comes in at the far end: only the ask flashes
+    book = { ...BTC, asks: [[81769, 1.5], [81770, 0.03668], [81772, 0.01202]], bids: [...BTC.bids, [81765, 2]] };
+    await p.fn<Promise<void>>("bkReadBook")(el, st());
+    expect(html("[data-bk-asks]")).toContain('class="bk-row bk-ask bk-fa" role="button" tabindex="0" data-k="ask:81769"');
+    expect((html("[data-bk-asks]") + html("[data-bk-bids]")).match(/bk-f[ab]/g)).toHaveLength(1);
+    // the same level again on the next read: the other name, so it flashes again
+    book = { ...BTC, asks: [[81769, 2.5], [81770, 0.03668], [81772, 0.01202]], bids: [...BTC.bids, [81765, 2]] };
+    await p.fn<Promise<void>>("bkReadBook")(el, st());
+    expect(html("[data-bk-asks]")).toContain('class="bk-row bk-ask bk-fb"');
+    // nothing changed: nothing flashes
+    await p.fn<Promise<void>>("bkReadBook")(el, st());
+    expect(html("[data-bk-asks]") + html("[data-bk-bids]")).not.toMatch(/bk-f[ab]/);
+    // the flash is HL's 800 ms, and none under reduced motion
+    const css = readFileSync(`${UI}book.css`, "utf8");
+    expect(css).toMatch(/\.bk-fa::after \{ animation: bk-flash-a 800ms ease; \}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*\}\s*\.bk-fa::after, \.bk-fb::after, \.bk-card \{ animation: none; \}/);
+  });
+
+  it("adds up what a row reaches from the source's own levels — never the grouped rows' prices — and says it in the card's four lines", () => {
+    const p = page();
+    // the best ask 81,769 (6.21438), then 81,770 and 81,772: hovering 81,770 reaches the first two
+    const r = p.fn<{ dist: number; avg: number; base: number; quote: number }>("bkReach")(BTC, "ask", 81770);
+    expect(r.base).toBe(6.25106);
+    expect(r.quote).toBeCloseTo(81769 * 6.21438 + 81770 * 0.03668, 6);
+    expect(r.avg).toBeCloseTo(r.quote / r.base, 9);
+    expect(r.dist).toBeCloseTo(((81770 - 81768.5) / 81768.5) * 100, 9);
+    // grouped by 10 (asks ceiled): the row at 81,770 holds 81,769 and 81,770 — the same levels, the same sums, from their own prices
+    expect(p.fn("bkReach")(BTC, "ask", 81770)).toEqual(r);
+    // a bid row reaches every bid at or above it
+    expect(p.fn<{ base: number }>("bkReach")(BTC, "bid", 81767).base).toBe(14.52743);
+    // a quote with no depth: no sizes to add, no card
+    expect(p.fn("bkReach")({ bids: [[189.98, null]], asks: [[190.02, null]], depth: "top" }, "ask", 190.02)).toBeNull();
+    const lines = p.fn<Array<[string, string]>>("bkReachLines")(r, { kind: "perp", quote: "USDC", base: "BTC", priceStep: 1 });
+    expect(lines).toEqual([
+      ["Distance from mid", "+0.0018%"],
+      ["Average price", "81,769"],
+      ["Total (BTC)", "6.25106"],
+      ["Total (USDC)", "511,142.96"],
+    ]);
+    // a row only part of whose range was read: its totals at least
+    expect(p.fn<Array<[string, string]>>("bkReachLines")(r, { kind: "perp", quote: "USDC", base: "BTC", priceStep: 1 }, true)[2]![1]).toBe("≥\u20096.25106");
+    // an event contract: its average in cents, its total in dollars
+    const ev = p.fn<Array<[string, string]>>("bkReachLines")({ dist: -2.5, avg: 0.6234, base: 100, quote: 62.34 }, { kind: "event", quote: "USD", priceStep: 0.01 });
+    expect(ev).toEqual([
+      ["Distance from mid", "−2.50%"],
+      ["Average price", "62.3¢"],
+      ["Total", "100"],
+      ["Total (USD)", "62.34"],
+    ]);
+  });
+});
+
+describe("the line under the tab showing (HL's sliding underline)", () => {
+  it("sets the bar's --tab-x and --tab-w from the pressed tab's place and width, marks the bar so it draws the line, and leaves a bar with no box with the tab's own line", () => {
+    const p = page();
+    const props: Record<string, string> = {};
+    const classes = new Set<string>();
+    const tab = { offsetLeft: 140, offsetWidth: 139 };
+    const bar = { querySelector: (sel: string) => (sel === '[aria-selected="true"]' ? tab : null), style: { setProperty: (k: string, v: string) => void (props[k] = v) }, classList: { add: (c: string) => void classes.add(c) } };
+    p.fn("bkSlideUnder")(bar);
+    expect(props).toEqual({ "--tab-x": "140px", "--tab-w": "139px" });
+    expect([...classes]).toEqual(["slide-under"]);
+    // a bar put aside (its tab has no width): nothing set, so the pressed tab keeps its own line
+    const props2: Record<string, string> = {};
+    const hidden = { querySelector: () => ({ offsetLeft: 0, offsetWidth: 0 }), style: { setProperty: (k: string, v: string) => void (props2[k] = v) }, classList: { add() {} } };
+    p.fn("bkSlideUnder")(hidden);
+    expect(props2).toEqual({});
+    // the stylesheets: the line slides over HL's .3 s, the pressed tab's own line goes only once the bar draws one, and nothing moves under
+    // reduced motion
+    const book = readFileSync(`${UI}book.css`, "utf8");
+    const term = readFileSync(`${UI}terminal.css`, "utf8");
+    expect(book).toContain(".bk-tabs.slide-under::after { content: \"\"; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease;");
+    expect(book).toContain('.bk-tabs.slide-under .bk-tab[aria-selected="true"] { box-shadow: none; }');
+    expect(book).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.bk-tabs\.slide-under::after \{ transition: none; \}/);
+    expect(term).toContain(":is(.tt-tabs, .tt-mtabs).slide-under::after {");
+    expect(term).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*:is\(\.tt-tabs, \.tt-mtabs\)\.slide-under::after \{ transition: none; \}/);
+    // the order panel's types too, where Pro (a select) is marked on rather than pressed: the bar measures whichever the caller names
+    const trade = readFileSync(`${UI}trade.css`, "utf8");
+    expect(trade).toContain('.tt-order .tk-otabs.slide-under :is(button[aria-selected="true"], .tk-pro.on) { box-shadow: none; }');
+    const pro = { offsetLeft: 180, offsetWidth: 90 };
+    const set: Record<string, string> = {};
+    const types = { querySelector: (sel: string) => (sel === '[aria-selected="true"], .tk-pro.on' ? pro : null), style: { setProperty: (k: string, v: string) => void (set[k] = v) }, classList: { add() {} } };
+    p.fn("bkSlideUnder")(types, '[aria-selected="true"], .tk-pro.on');
+    expect(set).toEqual({ "--tab-x": "180px", "--tab-w": "90px" });
+  });
 });

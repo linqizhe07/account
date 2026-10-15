@@ -53,6 +53,12 @@ const CH_MS = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
    only while it is fresh: read within the last two asks, or after that read was asked */
 const CH_POLL_MS = 5_000;
 const CH_READ_MS = 60_000;
+/* a read of the bars the account refused, with no bars standing (a venue not connected, a source that keeps no history): asked again two
+   seconds later, then twice as long each refusal more, at most a minute apart (the minute the bars are read on anyway) — each a read of
+   its own, never the refusal the page kept — so a source that comes back is drawn soon, and one that does not is not asked every few
+   seconds for ever. Bars read reset it */
+const CH_BACKOFF_MS = 2_000;
+const CH_BACKOFF_MAX_MS = 60_000;
 const CH_ENDED_MS = 30_000;
 const CH_QUOTE_WAIT_MS = 60_000;
 const CH_LATE_MS = 20 * 60_000;
@@ -465,6 +471,8 @@ function chMount(el, opts = {}) {
     onInterval: typeof opts.onInterval === "function" ? opts.onInterval : null,
     interval: CH_MS[opts.interval] ? opts.interval : "1h",
     alive: true,
+    // how long after a refused read with no bars the next one waits (0: bars stand, or nothing refused yet)
+    wait: 0,
     // the reads: how many were asked (the latest answer is the one drawn), one on its way, when the last landed
     reads: 0,
     reading: false,
@@ -597,9 +605,13 @@ function chRead(s, fresh) {
     s.labels = null;
     s.hover = null;
     s.quote = null;
+    s.wait = 0;
     chDraw(s);
   }
-  return api(`/api/account/candles?${new URLSearchParams({ venue: s.venue, symbol: s.symbol, interval: iv })}`, { ttl: 30_000 }).then((b) => {
+  // after a refusal with no bars, the read is asked of the account again, not answered from the refusal the page kept
+  const path = `/api/account/candles?${new URLSearchParams({ venue: s.venue, symbol: s.symbol, interval: iv })}`;
+  if (!fresh && !s.bars && s.wait && typeof forget === "function") forget(path);
+  return api(path, { ttl: 30_000 }).then((b) => {
     if (!chLive(s) || n !== s.reads || iv !== s.interval) return;
     s.reading = false;
     s.readAt = Date.now();
@@ -615,7 +627,9 @@ function chRead(s, fresh) {
    account read (`from`, where the answer names it: a paper account's bars are its market's public source's), else the venue's name. The
    live price taken before is laid over them only while it is fresh — read within the last two asks, or after this read was asked
    (`asked`, ms): an older one never stands in for the source's own close. A refusal is kept in its words — unless bars of this size
-   already stand: a later read that failed does not take the source's bars away */
+   already stand: a later read that failed does not take the source's bars away. A read that never reached the account (a stopped
+   service, a dropped connection: book.js bkUnanswered) is said in the page's own words, never the browser's error as it was thrown; and
+   either says how long the chart now waits before asking again (s.wait) */
 function chTake(s, b, asked = 0) {
   if (b && b.ok !== false && Array.isArray(b.candles)) {
     const k = s.ev ? 100 : 1;
@@ -632,11 +646,17 @@ function chTake(s, b, asked = 0) {
     const q = s.quote;
     if (q && (q.readAt >= asked || Date.now() - q.readAt <= CH_FRESH_MS)) chApplyQuote(s.bars, q, CH_MS[s.interval]);
     s.dec = chDecimals(s.bars, s.ev, s.step);
+    s.wait = 0;
     return;
   }
   if (s.bars) return;
-  const words = String(refusalOf(b) || "").trim().replace(/[.\s]+$/, "");
-  s.said = words ? `${words}.` : "No price history: the account did not answer.";
+  s.wait = Math.min(CH_BACKOFF_MAX_MS, Math.max(CH_BACKOFF_MS, s.wait * 2));
+  const unanswered = typeof bkUnanswered === "function" ? bkUnanswered(b) : !b;
+  const words = unanswered ? "" : String(refusalOf(b) || "").trim().replace(/[.\s]+$/, "");
+  // a source's own fact (it keeps no history: E_VENUE_RAIL_CLOSED) is said alone; anything else with how long until it is asked again
+  const quiet = !!(b && b.refusal && b.refusal.code === "E_VENUE_RAIL_CLOSED");
+  const again = quiet ? "" : ` Asking again every ${Math.round(s.wait / 1000)} s.`;
+  s.said = `${words ? `${words}.` : "No price history: the account is not answering."}${again}`;
 }
 
 /* every five seconds while mounted, in the document, its pane showing and the page showing (the page shown again asks at once; the pane
@@ -659,7 +679,9 @@ function chPoll(s) {
   const last = s.bars && s.bars.length ? s.bars[s.bars.length - 1] : null;
   const end = last ? last.t + CH_MS[s.interval] : 0;
   const ended = !!last && now >= end + CH_ENDED_MS && s.readAt < end + CH_ENDED_MS && now - s.readAt >= CH_ENDED_MS;
-  if (!s.reading && s.readAt && (now - s.readAt >= CH_READ_MS || ended)) chRead(s, false);
+  // bars in hand: once a minute; a refusal and no bars: after the refusal's own wait (two seconds, doubling, at most a minute)
+  const every = !s.bars && s.wait ? s.wait : CH_READ_MS;
+  if (!s.reading && s.readAt && (now - s.readAt >= every || ended)) chRead(s, false);
   if (last && now >= s.quoteWait && now < end + CH_LATE_MS) chQuote(s);
 }
 /* THE LIVE PRICE (GET /api/account/quotes, kept three seconds by the page, so the market bar and the book asking the same share it): its

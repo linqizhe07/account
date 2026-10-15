@@ -1,72 +1,77 @@
 /* The chart (ui/chart.js): a market's candles, its volume, its two axes, the last price and a crosshair, in the left panel of the Trade
-   terminal. A trading screen's density — small labels, tabular figures, hairline grid — in the account's own tokens (ui/tokens.css), so
-   Cream and Black alike: candles and their volume in --up and --down, the grid and the axes' edges in --border, the axes' words in --dim,
-   the last price's tag filled in its direction with the card's colour on it (5.4:1 and better in both), the crosshair's tags filled in the
-   text colour with the card's colour on them. Its height is its container's (at least 280 pixels); it reads at 320 pixels wide.
+   terminal — framed as Hyperliquid frames its TradingView chart (scratchpad hl-reference.md §5.4): a 38-pixel toolbar over the plot with
+   the bar sizes in the system face at 14 px, the one showing in the soft accent; the pane in the panel's colour; the grid in HL's own
+   grid colour; candles, their volume (at half strength), the OHLC readout's figures and the last price's tag in TradingView's own candle
+   colours, which HL keeps (--hl-candle-up, --hl-candle-down: the book beside it says up and down in HL's own); the tag's figure in the
+   title colour. It mounts only in the trading area (the terminal, the superagent's analysis), so its --hl-* tokens are always there. Its
+   height is its container's (at least 280 pixels); it reads at 320 pixels wide.
 
    NOTHING MOVES WITH THE POINTER. The head and the foot are boxes of fixed height, and the OHLC readout is laid over the plot's top-left
    corner, out of the flow (as a trading screen lays it): however long the words of the bar under the pointer are, and whether the readout
    is empty while the bars are read, no box changes its size, so the plot keeps its height and the candles are never drawn again for it. */
 
-.ch { display: flex; flex-direction: column; flex: 1 1 auto; gap: 6px; height: 100%; min-height: 280px; min-width: 0; container-type: inline-size; }
+.ch { display: flex; flex-direction: column; flex: 1 1 auto; gap: 4px; height: 100%; min-height: 280px; min-width: 0; padding: 0 0 6px; background: var(--hl-panel); container-type: inline-size; }
 
 /* ---- the head: the bar sizes, one row of fixed height ------------------------------------------------------------------------ */
-.ch-head { display: flex; align-items: center; flex: none; flex-wrap: nowrap; gap: 12px; height: 32px; min-width: 0; overflow: hidden; }
+.ch-head { display: flex; align-items: center; flex: none; flex-wrap: nowrap; gap: 0; height: 38px; padding: 0 8px; border-bottom: 1px solid var(--hl-grid); min-width: 0; overflow: hidden; }
 .ch-ivs { display: inline-flex; align-items: center; gap: 2px; flex: none; }
-.ch-iv { min-width: 38px; min-height: 32px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dim); font: 600 13px var(--font-sans); font-variant-numeric: tabular-nums; cursor: pointer; }
-.ch-iv:hover { background: var(--hover); color: var(--text); }
-.ch-iv[aria-pressed="true"] { background: var(--hover); color: var(--text); }
-.ch-iv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ch-iv { min-width: 0; min-height: 30px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--hl-tv-text); font: 400 14px system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: normal; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; transition: background-color var(--hl-ease), color var(--hl-ease); }
+.ch-iv[aria-pressed="true"] { background: transparent; color: var(--hl-accent-soft); }
+.ch-iv:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: 0; }
+@media (hover: hover) {
+  .ch-iv:hover { background: var(--hl-inset); }
+  .ch-iv[aria-pressed="true"]:hover { color: var(--hl-accent); }
+}
 
 /* ---- the readout, laid over the plot's top-left corner (its width set by the drawing: the price pane's) ----------------------------- */
-.ch-ohlc { position: absolute; left: 6px; top: 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; pointer-events: none; font: 500 12px/15px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--dim); }
+.ch-ohlc { position: absolute; left: 6px; top: 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; pointer-events: none; font: 400 12px/15px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--hl-tv-text); }
 .ch-ohlc:empty { visibility: hidden; }
 .ch-ohlc .ch-kv, .ch-ohlc .ch-d { white-space: nowrap; }
-.ch-ohlc .ch-k { color: var(--dim); }
-.ch-ohlc .ch-v { color: var(--text); }
-.ch-ohlc .ch-v.up, .ch-ohlc .ch-d.up { color: var(--up); }
-.ch-ohlc .ch-v.down, .ch-ohlc .ch-d.down { color: var(--down); }
-.ch-ohlc .ch-d { font-weight: 600; color: var(--dim); }
+.ch-ohlc .ch-k { color: var(--hl-tv-text); }
+.ch-ohlc .ch-v { color: var(--hl-text); }
+.ch-ohlc .ch-v.up, .ch-ohlc .ch-d.up { color: var(--hl-candle-up); font-weight: 400; }
+.ch-ohlc .ch-v.down, .ch-ohlc .ch-d.down { color: var(--hl-candle-down); font-weight: 400; }
+.ch-ohlc .ch-d { font-weight: 400; color: var(--hl-dim); }
 
 /* ---- the plot: the picture, and the crosshair over it ------------------------------------------------------------------------ */
-.ch-plot { position: relative; flex: 1 1 auto; min-height: 220px; min-width: 0; overflow: hidden; touch-action: pan-y; cursor: crosshair; border-radius: 4px; outline: none; }
-.ch-plot:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.ch-plot { position: relative; flex: 1 1 auto; min-height: 220px; min-width: 0; margin: 0 8px; overflow: hidden; touch-action: pan-y; cursor: crosshair; border-radius: 0; outline: none; }
+.ch-plot:focus-visible { box-shadow: inset 0 0 0 1px var(--hl-muted); }
 .ch-draw, .ch-cross { position: absolute; inset: 0; }
 .ch-cross { pointer-events: none; opacity: 0; }
 .ch-cross.on { opacity: 1; }
 .ch-svg, .ch-xs { display: block; position: absolute; left: 0; top: 0; }
-.ch-svg text, .ch-xs text { font: 500 11px var(--font-sans); font-variant-numeric: tabular-nums; }
+.ch-svg text, .ch-xs text { font: 400 11px var(--font-sans); font-variant-numeric: tabular-nums; }
 
 /* the picture */
-.ch-grid { fill: none; stroke: var(--border); stroke-width: 1; opacity: 0.7; }
-.ch-edge, .ch-sep { fill: none; stroke: var(--border); stroke-width: 1; }
-.ch-ax { fill: var(--dim); }
+.ch-grid { fill: none; stroke: var(--hl-grid); stroke-width: 1; opacity: 1; }
+.ch-edge, .ch-sep { fill: none; stroke: var(--hl-grid); stroke-width: 1; }
+.ch-ax { fill: var(--hl-tv-text); }
 .ch-cs { shape-rendering: crispEdges; }
-.ch-cu { fill: var(--up); }
-.ch-cd { fill: var(--down); }
-.ch-vu, .ch-vd { shape-rendering: crispEdges; opacity: 0.35; }
-.ch-vu { fill: var(--up); }
-.ch-vd { fill: var(--down); }
-.ch-last { fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
-.ch-last.up { stroke: var(--up); }
-.ch-last.down { stroke: var(--down); }
-.ch-tagr.up { fill: var(--up); }
-.ch-tagr.down { fill: var(--down); }
-.ch-svg .ch-tagt { fill: var(--surface); font-weight: 700; }
+.ch-cu { fill: var(--hl-candle-up); }
+.ch-cd { fill: var(--hl-candle-down); }
+.ch-vu, .ch-vd { shape-rendering: crispEdges; opacity: 0.5; }
+.ch-vu { fill: var(--hl-candle-up); }
+.ch-vd { fill: var(--hl-candle-down); }
+.ch-last { fill: none; stroke-width: 1; stroke-dasharray: 1 2; }
+.ch-last.up { stroke: var(--hl-candle-up); }
+.ch-last.down { stroke: var(--hl-candle-down); }
+.ch-tagr.up { fill: var(--hl-candle-up); }
+.ch-tagr.down { fill: var(--hl-candle-down); }
+.ch-svg .ch-tagt { fill: var(--hl-title); font-weight: 400; }
 
 /* the crosshair */
-.ch-xl { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.8; }
-.ch-xb { fill: var(--text); }
-.ch-xs .ch-xw { fill: var(--surface); font-weight: 600; }
+.ch-xl { stroke: var(--hl-dim); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.8; }
+.ch-xb { fill: var(--hl-inset); }
+.ch-xs .ch-xw { fill: var(--hl-title); font-weight: 400; }
 
 /* ---- the words in place of the picture: reading, a refusal in the source's words, no bars yet ---------------------------------- */
-.ch-msg { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; color: var(--dim); font-size: 13px; line-height: 1.45; }
-.ch-msg.ch-no { color: var(--text); }
+.ch-msg { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; color: var(--hl-dim); font-size: 12px; line-height: 1.45; }
+.ch-msg.ch-no { color: var(--hl-text); }
 .ch-msg.ch-wait { animation: ch-breathe 1.6s ease-in-out infinite; }
 @keyframes ch-breathe { 50% { opacity: 0.55; } }
 
 /* ---- the foot: whose bars, what size, whose clock — one line of fixed height (two in a narrow chart), kept while empty ------------- */
-.ch-foot { flex: none; margin: 0; height: 15px; font-size: 11px; line-height: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-foot { flex: none; margin: 0; padding: 0 8px; height: 15px; font-size: 11px; line-height: 15px; color: var(--hl-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* a narrow chart (its own width: a phone, or a window where the book and the order panel take the rest): the readout a size smaller (the
    same 480 pixels as chart.js's CH_SMALL_W, which reckons the room kept for it at this size), the foot on two lines of fixed height rather
@@ -76,9 +81,10 @@
   .ch-foot { height: 30px; white-space: normal; text-overflow: clip; }
 }
 @media (pointer: coarse) {
-  .ch-head { height: 40px; }
-  .ch-iv { min-width: 44px; min-height: 40px; }
+  .ch-head { height: 48px; }
+  .ch-iv { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ch-msg.ch-wait { animation: none; }
+  .ch-iv { transition: none; }
 }

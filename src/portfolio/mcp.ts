@@ -30,7 +30,8 @@
  * With the account layer mounted (the service's default) this seat HOLDS AN AGENT KEY and signs
  * every write with it: the service takes no unsigned write, and what the key may do is what the
  * owner authorised on the Account page — nothing until then. The key is the seat's own: made the
- * first time this seat runs, kept in <home>/seats/<name>.json (the user's alone), the same ever
+ * first time this seat runs, kept in <home>/seats/<name>.json (the user's alone; a name in the desk's own "desk-…" namespace is kept as
+ * mcp-<name>.json, so no client opens the desk's house keys by naming itself after one), the same ever
  * after (account/keystore.ts). PORTFOLIO_SEAT_KEYS=sim derives it from the name instead, as the
  * simulation's keys are — public by construction, for tests and demos only.
  *
@@ -53,6 +54,7 @@ import { byAsset, type HoldingsVenue } from "./account/holdings.ts";
 import { ASK_KINDS, MAX_REPORTS, REPORT_STATUSES } from "./account/state.ts";
 import { HOW_TEXT, MAX_NOTES, NOTE_TEXT, TOPIC_WORDS, TOPICS } from "./account/memory.ts";
 import { mustKey, seatKey as storedSeatKey } from "./account/keystore.ts";
+import { outsideSeatFile } from "./account/desk.ts";
 import { defaultHome } from "./home.ts";
 import { BRIDGE_CHAINS } from "./live/bridge.ts";
 import { CHAINS, STABLECOINS, type ChainName } from "./live/chain.ts";
@@ -78,12 +80,17 @@ const text = (payload: unknown, isError = false): CallToolResult => ({ isError, 
 // ---- the seat's key ---------------------------------------------------------------------------
 
 /** this seat's agent key, two curves — secp256k1 signs the account's instructions, P-256 signs AP2 mandates. Its own, kept in the home;
- * derived from the seat's name only under PORTFOLIO_SEAT_KEYS=sim */
+ * derived from the seat's name only under PORTFOLIO_SEAT_KEYS=sim.
+ *
+ * The file is named after the seat's name, and the desk's house seats keep their keys in the same <home>/seats folder as "desk-<role>".
+ * The name is the client's to choose, so the desk's names are not this seat's to open: outsideSeatFile gives a name that would land on
+ * one ("Desk Sniper", "desk-exit") a file of its own ("mcp-desk-sniper"). Without that, a client calling itself "Desk Sniper" would sign
+ * with the desk's own Sniper key, and the desk's autonomy on paper would place its orders at once instead of on the owner's cards */
 const seats = new Map<string, SimKey>();
 const seatKey = (): SimKey => {
   const id = agentOf().id;
   let k = seats.get(id);
-  if (!k) seats.set(id, (k = process.env.PORTFOLIO_SEAT_KEYS === "sim" ? simKey(`agent:${id}`) : mustKey(storedSeatKey(defaultHome(), id))));
+  if (!k) seats.set(id, (k = process.env.PORTFOLIO_SEAT_KEYS === "sim" ? simKey(`agent:${id}`) : mustKey(storedSeatKey(defaultHome(), outsideSeatFile(id)))));
   return k;
 };
 
@@ -891,7 +898,7 @@ server.registerTool(
 server.registerTool(
   "portfolio_book",
   {
-    description: "One market's ORDER BOOK and its LATEST TRADES, as the Trade page shows them. `book`: {bids, asks: [[price, size]], best first — the highest bid, the lowest ask —, at, from, depth}; prices in the market's quote (an event contract's in dollars: 0.62 = 62¢), sizes in the units an order is sized in there (coins, shares, contracts). `depth: \"full\"` is the venue's own levels, and `more: {bids, asks}` says which side may go on past its last level (the source sent as many as asked or as it ever sends) — a sum of the far end of such a side is only part of that range. `depth: \"top\"` is only the best bid and best ask, with no size (null), stamped `at` the quote's own time (where it carries no time of its own, `at` is when it was read; one from a list kept a while — a public listing's, a paper account's — carries `upToMs`, how old it may be at most: about two minutes): `topOnly: \"none\"` where the source publishes no depth at all (a US stock's public quote), `\"unread\"` where it has a book the account does not read. `trades`: the latest, newest first, {price, size, side?, at} — `side` (buy: a buyer took an offer; sell: a seller took a bid) only where the source says which side took. `venue` and `symbol` as for portfolio_candles: a venue the owner connected answers from its own client (a paper account from its market's public source); a venue NOT connected answers from its public data, without a key. A source that publishes no trades says so in `tradesRefused`. Kept a second or three. A read.",
+    description: "One market's ORDER BOOK and its LATEST TRADES, as the Trade page shows them. `book`: {bids, asks: [[price, size]], best first — the highest bid, the lowest ask —, at, from, depth}; prices in the market's quote (an event contract's in dollars: 0.62 = 62¢), sizes in the units an order is sized in there (coins, shares, contracts). `depth: \"full\"` is the venue's own levels, and `more: {bids, asks}` says which side may go on past its last level (the source sent as many as asked or as it ever sends) — a sum of the far end of such a side is only part of that range. `depth: \"top\"` is only the best bid and best ask, with no size (null), stamped `at` the quote's own time (where it carries no time of its own, `at` is when it was read; one from a list kept a while — a public listing's, a paper account's — carries `upToMs`, how old it may be at most: about two minutes): `topOnly: \"none\"` where the source publishes no depth at all (a US stock's public quote), `\"unread\"` where it has a book the account does not read. `trades`: the latest, newest first, {price, size, side?, at} — `side` (buy: a buyer took an offer; sell: a seller took a bid) only where the source says which side took. `venue` and `symbol` as for portfolio_candles: a venue the owner connected answers from its own client (a paper account from its market's public source); a venue NOT connected answers from its public data, without a key. A source that publishes no trades at all (a US stock's public quote, a paper account's market priced from one) says so in `tradesNone`, a sentence, with `trades` empty; any other trades refusal is in `tradesRefused`. Kept a second or three. A read.",
     inputSchema: { venue: z.string().max(60).describe("the venue's id, as an `at` entry of portfolio_explore names it; `paper` names the owner's one paper account"), symbol: z.string().max(160).describe("the market there: BTC/USDT, BTC-PERP, KXFED-25DEC-T4.00:YES, <slug>:<outcome>, AAPL"), depth: z.number().int().min(1).max(50).optional().describe("levels a side (default 20)") },
     annotations: { readOnlyHint: true },
   },
@@ -901,14 +908,16 @@ server.registerTool(
     const q = new URLSearchParams({ venue, symbol });
     const [b, t] = await Promise.all([call("GET", `/api/account/book?${q}&depth=${depth ?? 20}`), call("GET", `/api/account/trades?${q}&limit=30`)]);
     if (b.status === 404) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
-    type Answer = { ok?: boolean; venue?: string; venueName?: string; symbol?: string; book?: unknown; trades?: unknown; public?: boolean; refusal?: { code: string; message: string; detail?: unknown }; error?: string };
+    type Answer = { ok?: boolean; venue?: string; venueName?: string; symbol?: string; book?: unknown; trades?: unknown; none?: string; public?: boolean; refusal?: { code: string; message: string; detail?: unknown }; error?: string };
     const bb = b.body as Answer;
     const tb = t.body as Answer;
     const refused = (x: Answer, status: number) => (x.refusal ? { code: x.refusal.code, message: x.refusal.message } : status >= 400 ? { error: x.error ?? `HTTP ${status}` } : undefined);
     const bookNo = refused(bb, b.status);
     const tradesNo = refused(tb, t.status);
-    if (bookNo) return text({ ok: false, ...bookNo, ...(tradesNo ? {} : { trades: tb.trades }) }, true);
-    return text({ ok: true, venue: bb.venue, venueName: bb.venueName, symbol: bb.symbol, ...(bb.public ? { public: true } : {}), book: bb.book, ...(tradesNo ? { tradesRefused: tradesNo } : { trades: tb.trades }) });
+    // a source with no trades at all answers an empty list and the sentence why (service.ts marketTrades `none`): passed on as tradesNone
+    const tradesNone = !tradesNo && typeof tb.none === "string" ? { tradesNone: tb.none } : {};
+    if (bookNo) return text({ ok: false, ...bookNo, ...(tradesNo ? {} : { trades: tb.trades, ...tradesNone }) }, true);
+    return text({ ok: true, venue: bb.venue, venueName: bb.venueName, symbol: bb.symbol, ...(bb.public ? { public: true } : {}), book: bb.book, ...(tradesNo ? { tradesRefused: tradesNo } : { trades: tb.trades, ...tradesNone }) });
   },
 );
 
@@ -1050,7 +1059,7 @@ server.registerTool(
   "portfolio_desk",
   {
     description:
-      "THE DESK — the account's own team of agents (Agents on the account page), on which the owner may give this seat a role: Flow and Sentiment are filled only by an outside agent like this one; any other role too, in place of the house. Read it when a session starts: `yourSeat` (your role and its charter — what you own, what good output is, what you never do without asking; the account enforces the last with your key and your limits, so a seat that must not trade holds no trading limit), the desk's `objective` (its one venue, the universe, the week's target, the risk per lead, the day's loss line), the `funnel` and `today`'s numbers, the `open` leads with their plans, and the `room`'s last lines — every message carries its lead id (L-0047), and a card id where one waits for the owner. Then say your part with portfolio_desk_say, in the room's format; a seat that trades places its orders with portfolio_live_order as any agent does. `yourSeat` is null when this key holds no seat. A read.",
+      "THE DESK — the account's own team of agents (Agents on the account page), on which the owner may give this seat a role: Flow and Sentiment are filled only by an outside agent like this one; any other role too, in place of the house. Read it when a session starts: `yourSeat` (your role and its charter — what you own, what good output is, what you never do without asking; the account enforces the last with your key and your limits, so a seat that must not trade holds no trading limit), the desk's `objective` (its one venue, the universe, the week's target, the risk per lead, the day's loss line), the `funnel` (scanned → cleared → confirmed → placed → executed → closed: `placed` counts the entries the venue took, filled or not, `executed` only those filled; what waits for the owner on a card is confirmed − placed) and `today`'s numbers, the `open` leads with their plans, `autonomy` (`paper: true` when the owner signed that the desk's OWN house seats place their orders at its paper account without cards — the superagent; it never covers this seat: your orders go to the door as any agent's), `lastScan` (what Search scanned last: the cycle, when, the venue, how many markets its brain was shown and how many it picked, or the reason none were shown), and the `room`'s last lines — every message carries its lead id (L-0047), and a card id where one waits for the owner. Then say your part with portfolio_desk_say, in the room's format; a seat that trades places its orders with portfolio_live_order as any agent does. `yourSeat` is null when this key holds no seat. A read.",
     inputSchema: {},
     annotations: { readOnlyHint: true },
   },

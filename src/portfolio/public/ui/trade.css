@@ -1,10 +1,10 @@
-/* The Trade pane (ui/trade.js) and the Hand-to-agent composer (ui/intent.js), in the Clean cards look (M2): the head with its line of
-   state, the kind seg (a pill track with icons), the picker (You hold · Recent · Most traded) and Under way as cards in the main column; the
-   order ticket as a lifted card, sticky on the right — the kind's tag and the market, where (rows with a hairline, the one picked edged in
-   the text colour), Buy | Sell (Long | Short), the fields, the leverage of a perpetual, Advanced folded, the face's own block, the quote edged
-   in orange, what is signed, a filled pill to sign and a pill to hand it to an agent instead. Colours, radii and shadows only from
-   ui/tokens.css, so Cream and Black alike (Black drops the shadows and keeps the hairlines). Motion: transform and opacity only, 120–180 ms,
-   none under prefers-reduced-motion. */
+/* The Trade pane (ui/trade.js) and the Hand-to-agent composer (ui/intent.js): the kind seg, the picker (You hold · Recent · Most traded),
+   Under way, and the order ticket — where (real money or paper, the venues), the leverage of a perpetual, Market · Limit · Pro, Buy | Sell
+   (Long | Short), the fields, Advanced folded, the face's own block, the button and the quote under it, what is signed. The first part
+   below is the ticket's own shape in any surface; the second gives it Hyperliquid's grammar (scratchpad hl-reference.md §5.8–§5.15, §5.20)
+   where the terminal holds it — in its order panel (.tt-order) and its picker's popover (.tt-pop) — the only places the trading area's
+   --hl-* tokens are defined, so every such rule is scoped to one of the two. Colours only from tokens. Motion: colour, fill and edge over
+   .2 s ease-in-out, the side's thumb over .1 s, the lists' rise 180 ms; none under prefers-reduced-motion. */
 
 /* the line of state in the terminal's bar (what trades from here, or read-only) */
 .tp-state:empty { display: none; }
@@ -16,11 +16,14 @@
 
 /* Under way (the terminal's Open orders tab): the first column (what it is) keeps room to be read; where it is and who placed it on one
    line under the order; an order's buttons (Change · Cancel · Send from wallet…) wrap under each other before the table gets too wide */
-.tt-low .t td:first-child { min-width: 190px; }
 .tt-low .t .why { max-width: 360px; }
 .tt-low .t .acts { flex-wrap: wrap; }
+/* Open orders (tkDrawOpen): the market's name kept to a line, its whole name on hover; what else is under way under its own small head */
+.tt-low .tk-open-t .tt-c-mkt b { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.tt-low .tk-open-also { margin: 12px 0 0; font-size: 12px; font-weight: 400; color: var(--dim); }
 /* a status in Under way: a word in bold, coloured by what it waits on */
 .tp-st { font-weight: 700; white-space: nowrap; }
+.tt-low .tp-st { font-weight: 400; }
 .tp-st.dim { color: var(--dim); }
 .tp-st.warn-t { color: var(--warn-text); }
 /* the fields of a card waiting for the owner: exactly what is signed, so in mono */
@@ -70,7 +73,12 @@
 .tk-list { list-style: none; margin: 0 -8px; padding: 0; }
 .tk-list li + li { border-top: 1px solid var(--border); }
 .tk-list button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 8px; border: 0; border-radius: var(--radius-s); text-align: left; background: transparent; color: var(--text); }
-.tk-list button:hover, .tk-list button:focus-visible { background: var(--hover); }
+.tk-list button:focus-visible { background: var(--hover); }
+/* a pointer's hover only where there is a pointer that hovers: a touch screen never keeps one stuck */
+@media (hover: hover) {
+  .tk-list button:hover { background: var(--hover); }
+  button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
+}
 .tk-rn { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .tk-rn b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .tk-rn .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -95,7 +103,6 @@
 /* the name, its word beside it (Best · Closed · Public), the venue's note under them */
 .tk-at > span:first-child { display: block; min-width: 0; }
 .tk-at b { font-weight: 600; }
-button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 .tk-at[aria-pressed="true"] { border: 1.5px solid var(--rule); padding: 9.5px 11.5px; }
 .tk-at-r { display: flex; flex-direction: column; align-items: flex-end; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tk-at-r .why { font-weight: 400; }
@@ -114,6 +121,32 @@ button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 .tk-out { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .tk-out button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px currentColor; }
 .tk-out .tk-oth { background: var(--surface-2); color: var(--text); }
+
+/* Market · Limit · Pro: tabs with a line under them, the Pro types in a select of their own (the select the account reads stays the one
+   source of the type) */
+.tk-otabs { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+.tk-otabs:empty { display: none; }
+.tk-otabs button { flex: 1; min-height: 40px; border: 0; border-radius: 0; background: transparent; color: var(--dim); cursor: pointer; }
+.tk-otabs button[aria-selected="true"] { color: var(--text); box-shadow: inset 0 -1px 0 var(--accent); }
+.tk-pro { flex: 1; display: flex; align-items: center; justify-content: center; }
+.tk-pro select { appearance: none; -webkit-appearance: none; border: 0; background-color: transparent; color: var(--dim); text-align: center; text-align-last: center; padding: 0 16px 0 4px; min-height: 40px; cursor: pointer; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 9px) 52%, calc(100% - 5px) 52%; background-size: 4px 4px; background-repeat: no-repeat; }
+/* available to trade · current position */
+.tk-avail { display: flex; flex-direction: column; gap: 4px; }
+.tk-avail:empty { display: none; }
+.tk-avail > div { display: flex; justify-content: space-between; gap: 10px; }
+.tk-avail .tk-avail-no { margin: 0; color: var(--warn-text); overflow-wrap: anywhere; }
+/* the percent slider under the size */
+.tk-pct { display: flex; align-items: center; gap: 12px; }
+.tk-pct[hidden] { display: none; }
+.tk-pct input[type="range"] { flex: 1; }
+.tk-pct span { text-align: right; }
+/* reduce only · take profit / stop loss: the row stands aside when neither is offered */
+.tk-flags { display: flex; flex-direction: column; gap: 6px; }
+.tk-flags:not(:has(label:not([hidden]))) { display: none; }
+/* the other venues that list it, folded under one line */
+.tk-pubs summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; gap: 4px; list-style: none; }
+.tk-pubs summary::-webkit-details-marker { display: none; }
+.tk-pubs[open] { display: flex; flex-direction: column; gap: 6px; }
 
 /* the leverage of a perpetual: in view, the primary control of a perp */
 .tk-lev { display: flex; flex-direction: column; gap: 8px; }
@@ -170,3 +203,245 @@ button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 .tk-qnote summary::-webkit-details-marker { display: none; }
 .tk-qnote summary::after { content: " ▸"; }
 .tk-qnote[open] summary::after { content: " ▾"; }
+
+/* ==== HYPERLIQUID'S GRAMMAR, where the terminal holds the ticket and the picker ============================================== */
+
+/* ---- the order panel: a column 8 apart (REF §3) ---------------------------------------------------------------------------- */
+.tt-order .tk-form, .tt-order .tk-stack { gap: 8px; }
+.tt-order { font-size: 12px; line-height: 15px; color: var(--hl-text); }
+.tt-order .label { font: 400 12px/15px var(--font-sans); color: var(--hl-dim); }
+.tt-order .tk-where-w > .label { display: none; }
+.tt-order .dim, .tt-order .why, .tt-order .path { color: var(--hl-dim); }
+.tt-order .small, .tt-order .why, .tt-order .path, .tt-order .msg { font-size: 12px; line-height: 15px; }
+.tt-order .msg.no::before, .tt-order .msg.ok::before { width: 14px; line-height: 14px; }
+.tt-order .msg.no { color: var(--hl-text); }
+.tt-order .msg.no::before { background: var(--hl-down); color: var(--hl-on-accent); }
+.tt-order .msg.ok::before { background: var(--hl-up); color: var(--hl-on-accent); }
+.tt-order .link { color: var(--hl-accent-soft); text-decoration: none; font-size: 12px; font-weight: 400; }
+
+/* ---- where the order goes: the money it is, then the venues ------------------------------------------------------------------ */
+.tt-order .tk-where { gap: 6px; }
+.tt-order .tk-money-row { gap: 8px; }
+/* the band that says which money: a chip, never a bright pill — real money on the inset in the title colour, paper on the badge green */
+.tt-order .tk-money { padding: 0 6px; border: 0; border-radius: var(--hl-r-panel); font: 400 12px/1.7 var(--font-sans); letter-spacing: normal; }
+.tt-order .tk-money.real { background: var(--hl-inset); color: var(--hl-title); }
+.tt-order .tk-money.paper { background: var(--hl-badge); color: var(--hl-accent-soft); }
+/* a venue: a row edged like a field, 33 high; the one the order goes to edged in the focus grey */
+.tt-order .tk-at { min-height: 33px; padding: 5px 10px; gap: 8px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); font-size: 12px; line-height: 15px; color: var(--hl-text); background: transparent; }
+.tt-order .tk-at[aria-pressed="true"] { padding: 5px 10px; border: 1px solid var(--hl-muted); }
+.tt-order .tk-at b, .tt-order .tk-at-r { font-weight: 400; }
+.tt-order .tk-at.pub { color: var(--hl-dim); flex-wrap: wrap; }
+.tt-order .tk-at.pub > span:first-child { flex: 1 1 180px; }
+.tt-order .tk-at.off { border-style: dashed; color: var(--hl-dim); }
+.tt-order .tk-at .tag { font-size: 12px; font-weight: 400; color: var(--hl-dim); margin-left: 4px; }
+.tt-order .tk-at .tag.up { color: var(--hl-up); }
+:is(.tt-order, .tt-pop) .tag.paper { display: inline-block; padding: 0 4px; border: 0; border-radius: var(--hl-r-panel); background: var(--hl-badge); color: var(--hl-accent-soft); font: 400 12px/1.7 var(--font-sans); }
+/* a venue's terms, folded under its word: the sentence only when asked for */
+.tt-order .tk-terms summary { cursor: pointer; color: var(--hl-dim); list-style: none; text-decoration: underline dashed; text-underline-offset: 2.4px; width: max-content; }
+.tt-order .tk-terms summary::-webkit-details-marker { display: none; }
+.tt-order .tk-terms p { margin: 4px 0 0; color: var(--hl-dim); line-height: 1.4; }
+.tt-order .tk-pubs summary { display: block; min-height: 24px; padding: 4px 0; font-size: 12px; line-height: 16px; color: var(--hl-text); }
+
+/* ---- the leverage: HL's buttons at the panel's head (Cross · 20x), the editor under them ---------------------------------------- */
+.tt-order .tk-lev { gap: 8px; }
+.tt-order .tk-lev-pills { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
+.tt-order .tk-lev-ed { display: flex; flex-direction: column; gap: 8px; }
+.tt-order .tk-lev-ed[hidden] { display: none; }
+.tt-order .tk-lev-go { gap: 8px; }
+
+/* ---- the secondary buttons: the inset, the title colour, 33 high (the leverage, Hand to agent, Change, Connect…) ----------------- */
+.tt-order .btn:not(.btn-primary), .tt-order .tk-lev-go .btn, .tt-order [data-hand] { min-height: 33px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--hl-r); background: var(--hl-inset); color: var(--hl-title); font: 400 12px/31px var(--font-sans); box-shadow: none; }
+.tt-order .btn:not(.btn-primary):disabled, .tt-order [data-hand]:disabled { background: var(--hl-disabled); opacity: 1; color: var(--hl-dim); }
+.tt-order [data-hand] .ico { width: 14px; height: 14px; }
+/* the primary: the soft accent, the near-black on it; the bright accent under the pointer; a dark green while it waits, never faded */
+.tt-order .btn.btn-primary, .tt-order [data-go] { min-height: 33px; padding: 0 16px; border: 0; border-radius: var(--hl-r); background: var(--hl-accent-soft); color: var(--hl-on-accent); font: 400 12px/31px var(--font-sans); box-shadow: none; }
+.tt-order .btn.btn-primary:disabled, .tt-order [data-go]:disabled { background: var(--hl-accent-disabled); color: var(--hl-on-accent); opacity: 1; }
+@media (hover: hover) {
+  .tt-order .btn:not(.btn-primary):hover:not(:disabled), .tt-order [data-hand]:hover:not(:disabled) { background: var(--hl-inset-hover); }
+  .tt-order .btn.btn-primary:hover:not(:disabled), .tt-order [data-go]:hover:not(:disabled) { background: var(--hl-accent); opacity: 1; }
+  .tt-order .link:hover { color: var(--hl-accent); }
+  .tt-order button.tk-at:hover:not(:disabled) { border-color: var(--hl-muted); }
+}
+
+/* ---- Market · Limit · Pro: three equal tabs, 34 high (REF §5.5, §5.9) ------------------------------------------------------- */
+.tt-order .tk-otabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--hl-tabline); }
+.tt-order .tk-otabs button { min-height: 0; padding: 0 8px; border: 0; border-radius: 0; margin: 0 0 -1px; border-bottom: 1px solid var(--hl-tabline); background: transparent; color: var(--hl-dim); font: 400 12px/34px var(--font-sans); letter-spacing: normal; box-shadow: none; cursor: pointer; }
+.tt-order .tk-otabs button[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-order .tk-pro { margin: 0 0 -1px; border-bottom: 1px solid var(--hl-tabline); }
+.tt-order .tk-pro.on { box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+/* the line under the type showing slides to the type pressed (book.js bkSlideUnder, HL's .3 s); until it is measured the type keeps its own */
+.tt-order .tk-otabs { position: relative; }
+.tt-order .tk-otabs.slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
+.tt-order .tk-otabs.slide-under :is(button[aria-selected="true"], .tk-pro.on) { box-shadow: none; }
+.tt-order .tk-pro select { min-height: 34px; color: var(--hl-dim); font: 400 12px/34px var(--font-sans); }
+.tt-order .tk-pro.on select { color: var(--hl-text); }
+.tt-order .tk-otabs button:focus-visible, .tt-order .tk-pro select:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -2px; }
+@media (hover: hover) {
+  .tt-order .tk-otabs button:hover:not([aria-selected="true"]), .tt-order .tk-pro:not(.on) select:hover { color: var(--hl-title); }
+}
+
+/* ---- Buy | Sell: HL's toggle (REF §5.10) — a 33 track on the inset, the side pressed filled; the near-black on the pink (7:1, §8) ---- */
+.tt-order .tk-side .seg { position: relative; display: flex; width: 100%; height: 33px; padding: 2px; gap: 0; border-radius: var(--hl-r); background: var(--hl-inset); flex-wrap: nowrap; }
+.tt-order .tk-side .seg button { position: relative; z-index: 1; flex: 1; min-height: 29px; padding: 0 8px; border: 0; border-radius: var(--hl-r-panel); background: transparent; color: var(--hl-text); font: 400 12px/29px var(--font-sans); box-shadow: none; transition: background-color .1s ease-in-out, color .1s ease-in-out; }
+.tt-order .tk-side .seg button[data-v="buy"][aria-pressed="true"] { background: var(--hl-accent-soft); color: var(--hl-on-buy); font-weight: 400; }
+.tt-order .tk-side .seg button[data-v="sell"][aria-pressed="true"] { background: var(--hl-down); color: var(--hl-on-accent); font-weight: 400; }
+.tt-order .tk-side .seg button:focus-visible { outline: 1px solid var(--hl-title); outline-offset: -3px; }
+/* where :has() is known, a thumb slides under the two words instead (HL's own .1 s), the pressed word's fill handed to it */
+@supports selector(:has(*)) {
+  .tt-order .tk-side .seg::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: 29px; border-radius: var(--hl-r-panel); background: var(--hl-accent-soft); transition: transform .1s ease-in-out, background-color .1s ease-in-out; }
+  .tt-order .tk-side .seg:has(button[data-v="sell"][aria-pressed="true"])::before { transform: translateX(100%); background: var(--hl-down); }
+  .tt-order .tk-side .seg:not(:has(button[aria-pressed="true"]))::before { display: none; }
+  .tt-order .tk-side .seg button[aria-pressed="true"] { background: transparent; }
+}
+
+/* ---- Available to trade · Current position (REF §5.11) ------------------------------------------------------------------------ */
+.tt-order .tk-avail { gap: 7px; font: 400 12px/15px var(--font-sans); }
+.tt-order .tk-avail > div > span:first-child { color: var(--hl-dim); }
+.tt-order .tk-avail .tab-nums { font-weight: 400; color: var(--hl-title); }
+.tt-order .tk-avail .tk-avail-no { color: var(--hl-warn); }
+
+/* ---- the fields: the label inside, the figure at the right, one line 33 high (REF §5.12) -------------------------------------- */
+/* two fields to a row however narrow the window (the shell lays them one under the other below 900): HL's size and its unit side by side */
+.tt-order .row2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+/* a row of one field (the limit price, the stop, the leverage with no margin mode, Pay with and no word beside it) takes the whole width,
+   so its label and its figure both have room */
+.tt-order .row2 > .fld:only-child, .tt-order .row2 > .fld:has(+ :empty:last-child) { grid-column: 1 / -1; }
+.tt-order .fld { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 6px; height: 33px; padding: 0 12px 0 10px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; color: var(--hl-dim); font: 400 12px/15px var(--font-sans); letter-spacing: normal; white-space: nowrap; transition: border-color var(--hl-ease); }
+.tt-order .fld[hidden] { display: none; }
+.tt-order .fld > span { overflow: hidden; text-overflow: ellipsis; }
+.tt-order .fld input:not([type="checkbox"]):not([type="radio"]), .tt-order .fld select { min-height: 31px; height: 31px; width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; text-align: right; font: 400 12px/31px var(--font-sans); color: var(--hl-text); caret-color: var(--hl-text); letter-spacing: normal; }
+.tt-order .fld select { appearance: none; -webkit-appearance: none; text-align-last: right; padding-right: 14px; background-image: linear-gradient(45deg, transparent 50%, var(--hl-dim) 50%), linear-gradient(135deg, var(--hl-dim) 50%, transparent 50%); background-position: calc(100% - 5px) 52%, calc(100% - 1px) 52%; background-size: 4px 4px; background-repeat: no-repeat; cursor: pointer; }
+.tt-order .fld select option { background: var(--hl-ground); color: var(--hl-text); }
+.tt-order .fld input:focus, .tt-order .fld select:focus { outline: none; box-shadow: none; border: 0; }
+.tt-order .fld input::placeholder { color: var(--hl-placeholder); font-weight: 400; opacity: 1; }
+.tt-order .fld input[type="search"]::-webkit-search-cancel-button { display: none; }
+.tt-order .fld:focus-within { border-color: var(--hl-muted); box-shadow: 0 0 0 1px var(--hl-muted); }
+@media (hover: hover) {
+  .tt-order .fld:hover { border-color: var(--hl-muted); }
+}
+/* the take-profit and stop-loss, the trail and its unit: one field a row, so a label and its figure both have room in a panel 270 wide */
+.tt-order :is([data-exits], [data-trail]) { grid-template-columns: minmax(0, 1fr); }
+/* the Hand-to-agent composer in the panel: its labels are longer than an order's ("About how much ($)", an account's whole name in
+   Where), so each says itself over its value — HL's field, two lines high — rather than cutting either */
+.tt-order .hta-form .row2 { grid-template-columns: minmax(0, 1fr); }
+.tt-order .tk-title { font: 400 16px/22px var(--font-sans); letter-spacing: normal; color: var(--hl-title); }
+.tt-order .hta-form .fld { display: flex; flex-direction: column; align-items: stretch; gap: 2px; height: auto; padding: 6px 10px; white-space: normal; }
+.tt-order .hta-form .fld input:not([type="checkbox"]):not([type="radio"]), .tt-order .hta-form .fld select { height: 20px; min-height: 20px; line-height: 20px; text-align: left; text-align-last: left; }
+/* a field of words (the Hand-to-agent composer's): its label over a box that grows, never squeezed into one line */
+.tt-order .fld:has(textarea) { display: flex; flex-direction: column; align-items: stretch; gap: 6px; height: auto; padding: 8px 10px; white-space: normal; }
+.tt-order .fld textarea { min-height: 72px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--hl-text); caret-color: var(--hl-text); font: 400 12px/16px var(--font-sans); resize: vertical; }
+.tt-order .fld textarea:focus { outline: none; box-shadow: none; }
+.tt-order .fld textarea::placeholder { color: var(--hl-placeholder); opacity: 1; }
+/* a figure's spin buttons, hidden as HL hides them */
+.tt-order .fld input::-webkit-outer-spin-button, .tt-order .fld input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ---- the size's share of what is available: HL's slider (REF §5.13) — the track on the inset, filled to the share, its knob ringed ---- */
+.tt-order .tk-pct { gap: 12px; min-height: 33px; }
+.tt-order .tk-pct input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1; min-height: 33px; margin: 0; background: transparent; cursor: pointer; }
+.tt-order .tk-pct input[type="range"]::-webkit-slider-runnable-track { height: 8px; border-radius: var(--hl-r-track); background: linear-gradient(to right, var(--hl-accent-deep) var(--tk-pct, 0%), var(--hl-inset) var(--tk-pct, 0%)); }
+.tt-order .tk-pct input[type="range"]::-moz-range-track { height: 8px; border-radius: var(--hl-r-track); background: var(--hl-inset); }
+.tt-order .tk-pct input[type="range"]::-moz-range-progress { height: 8px; border-radius: var(--hl-r-track); background: var(--hl-accent-deep); }
+.tt-order .tk-pct input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -3px; border: 2px solid var(--hl-accent-soft); border-radius: 50%; background: var(--hl-accent-deep); transition: box-shadow var(--hl-ease); }
+.tt-order .tk-pct input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 2px solid var(--hl-accent-soft); border-radius: 50%; background: var(--hl-accent-deep); box-sizing: border-box; }
+.tt-order .tk-pct input[type="range"]:focus-visible { outline: none; }
+.tt-order .tk-pct input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--hl-muted); }
+.tt-order .tk-pct input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--hl-muted); }
+.tt-order .tk-pct span { min-width: 60px; height: 33px; padding: 0 10px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); font: 400 12px/31px var(--font-sans); color: var(--hl-text); text-align: right; }
+
+/* ---- the boxes to tick (REF §5.14): 16, an edge at half strength, filled in the accent with a dark ring once ticked ---------------- */
+.tt-order .tk-flags { gap: 5px; }
+.tt-order label.chk1 { gap: 8px; min-height: 21px; font: 400 12px/15px var(--font-sans); color: var(--hl-text); }
+.tt-order label.chk1 input[type="checkbox"] { -webkit-appearance: none; appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border: 1px solid var(--hl-inset-hover); border-radius: var(--hl-r-check); background: transparent; opacity: .5; cursor: pointer; transition: background-color .3s ease-in-out, border-color var(--hl-ease), opacity var(--hl-ease); }
+.tt-order label.chk1 input[type="checkbox"]:checked { opacity: 1; border-color: var(--hl-accent-soft); background: var(--hl-accent-soft); box-shadow: inset 0 0 0 2px var(--hl-on-accent); }
+.tt-order label.chk1 input[type="checkbox"]:focus-visible { opacity: 1; outline: 1px solid var(--hl-muted); outline-offset: 2px; }
+@media (hover: hover) {
+  .tt-order label.chk1:hover input[type="checkbox"]:not(:checked) { border-color: var(--hl-title); opacity: 1; }
+  .tt-order label.chk1:hover input[type="checkbox"]:checked { background: var(--hl-accent); }
+}
+
+/* ---- Advanced: one quiet line, HL's "TIF GTC" at its right (the whole rule on hover) ------------------------------------------ */
+.tt-order .tk-adv { border-top: 0; padding-top: 0; }
+.tt-order .tk-adv summary { min-height: 24px; gap: 8px; color: var(--hl-dim); }
+.tt-order .tk-adv-t { font-weight: 400; font-size: 12px; color: var(--hl-dim); }
+.tt-order .tk-adv-s { flex: 1; text-align: right; color: var(--hl-text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-order .tk-tif { color: var(--hl-dim); text-decoration: underline dashed; text-underline-offset: 2.4px; text-decoration-thickness: 1px; }
+.tt-order .tk-adv summary .ico { width: 14px; height: 14px; color: var(--hl-dim); }
+.tt-order .tk-adv-b { gap: 8px; padding: 4px 0 2px; }
+.tt-order .tk-more { gap: 8px; }
+.tt-order .tk-more > span { flex: 1 1 100%; }
+
+/* ---- the summary under the button (REF §5.15): a rule, then label · value rows 10 apart ---------------------------------------- */
+.tt-order .quote.real { min-height: 0; padding: 10px 0 0; gap: 10px; border: 0; border-top: 1px solid var(--hl-divider); border-radius: 0; background: transparent; font-size: 12px; line-height: 15px; }
+.tt-order .quote .big { font: 400 12px/15px var(--font-sans); color: var(--hl-title); }
+.tt-order .tk-qrows { display: flex; flex-direction: column; gap: 10px; margin: 0; }
+.tt-order .tk-qrows > div { display: flex; justify-content: space-between; gap: 12px; }
+.tt-order .tk-qrows dt { color: var(--hl-dim); }
+.tt-order .tk-qrows dd { margin: 0; color: var(--hl-title); text-align: right; font-variant-numeric: tabular-nums lining-nums; }
+.tt-order .quote .path b { font-weight: 400; color: var(--hl-text); }
+.tt-order .left-t { color: var(--hl-dim); font-size: 12px; }
+.tt-order .signs summary { color: var(--hl-dim); font-size: 12px; cursor: pointer; }
+.tt-order .signs pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--hl-r); background: var(--hl-ground); color: var(--hl-text-2); font: 400 11px/1.5 var(--font-mono); white-space: pre-wrap; word-break: break-all; }
+/* the face's block, at the panel's foot: what to know of this kind of market, quiet */
+.tt-order .tk-kb { gap: 6px; font-size: 12px; line-height: 16px; color: var(--hl-dim); }
+.tt-order .tk-kb b { color: var(--hl-text); font-weight: 400; }
+.tt-order .tk-kb .tk-iss { padding: 8px 10px; border-radius: var(--hl-r); background: var(--hl-inset); color: var(--hl-text); }
+.tt-order .tk-kb .link { font-size: 12px; }
+.tt-order .tk-credit, .tt-pop .tk-credit { font-size: 11px; color: var(--hl-dim); }
+.tt-order .tk-credit a, .tt-pop .tk-credit a { color: var(--hl-dim); }
+
+/* ---- the picker's popover (REF §5.20): the kinds as tabs kept in view, the search, rows 25 high ------------------------------- */
+.tt-pop .tk-seg { position: sticky; top: -10px; z-index: 1; display: flex; gap: 0; padding: 0; margin: -10px -10px 0; border-radius: var(--hl-r-pop) var(--hl-r-pop) 0 0; border-bottom: 1px solid var(--hl-tabline); background: var(--hl-ground); max-width: none; }
+.tt-pop .tk-seg button { flex: none; min-height: 0; gap: 6px; padding: 0 12px; border: 0; border-radius: 0; margin: 0 0 -1px; background: transparent; color: var(--hl-dim); font: 400 12px/40px var(--font-sans); letter-spacing: normal; box-shadow: none; }
+.tt-pop .tk-seg button[aria-pressed="true"] { color: var(--hl-text); font-weight: 400; background: transparent; box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-pop .tk-seg button .ico { width: 14px; height: 14px; }
+.tt-pop .tk-seg button:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -2px; }
+.tt-pop .tk-pick { gap: 4px; }
+.tt-pop .tk-pick .sec-head { gap: 8px; margin: 0 0 4px; }
+/* the kind is the tab pressed: its heading stays for a screen reader only */
+.tt-pop .tk-pick .sec-head .h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tt-pop .tk-pfind { flex: 1 1 100%; max-width: none; min-height: 33px; padding: 0 10px; gap: 6px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; box-shadow: none; color: var(--hl-dim); }
+.tt-pop .tk-pfind input { min-height: 31px; font: 400 12px/31px var(--font-sans); color: var(--hl-text); }
+.tt-pop .tk-pfind input::placeholder { color: var(--hl-placeholder); }
+.tt-pop .tk-pfind:focus-within { border-color: var(--hl-muted); box-shadow: 0 0 0 1px var(--hl-muted); }
+.tt-pop .tk-pg { padding: 4px 0 0; }
+.tt-pop .tk-pg-h { margin: 0 0 2px; padding: 0 4px; font: 400 12px/24px var(--font-sans); color: var(--hl-dim); }
+.tt-pop .tk-list { margin: 0; }
+.tt-pop .tk-list li + li { border-top: 0; }
+.tt-pop .tk-list button { gap: 8px; min-height: 25px; padding: 0 4px; border-radius: 0; font-size: 12px; line-height: 15px; color: var(--hl-text); }
+.tt-pop .tk-list button:focus-visible { background: var(--hl-inset); outline: 1px solid var(--hl-muted); outline-offset: -1px; }
+.tt-pop .tk-list .av.sm { width: 16px; height: 16px; font-size: 6px; }
+.tt-pop .tk-rn { flex-direction: row; align-items: baseline; gap: 8px; }
+.tt-pop .tk-rn b { flex: none; max-width: 60%; font-weight: 400; white-space: nowrap; }
+.tt-pop .tk-rn .dim { flex: 1; min-width: 0; font-size: 12px; color: var(--hl-dim); }
+.tt-pop .tk-rp { flex-direction: row; align-items: baseline; gap: 12px; font-size: 12px; }
+.tt-pop .tk-rp .tab-nums { font-weight: 400; }
+.tt-pop .tk-rp .tag { padding: 0 4px; border-radius: var(--hl-r-panel); background: var(--hl-badge); color: var(--hl-accent-soft); font-weight: 400; }
+.tt-pop :is(.up, .down) { font-weight: 400; }
+.tt-pop .empty { padding: 4px; font-size: 12px; line-height: 24px; color: var(--hl-title); }
+.tt-pop .callout { padding: 10px 12px; border-radius: var(--hl-r); }
+@media (hover: hover) {
+  .tt-pop .tk-seg button:hover:not([aria-pressed="true"]) { color: var(--hl-title); }
+  .tt-pop .tk-list button:hover { background: var(--hl-inset); }
+  .tt-pop .tk-pfind:hover { border-color: var(--hl-muted); }
+}
+@container tt (max-width: 479px) {
+  .tt-pop .tk-pick .sec-head { flex-wrap: wrap; }
+  .tt-pop .tk-rn .dim { display: none; }
+}
+
+/* ---- a finger: every control in the panel and the picker at least 44 high --------------------------------------------------- */
+@media (pointer: coarse) {
+  .tt-order :is(.tk-otabs button, .tk-pro select, .tk-side .seg button, .tk-at, .tk-pubs summary, .tk-terms summary, .tk-adv summary, .btn, [data-go], [data-hand]) { min-height: 44px; }
+  .tt-order .tk-otabs button, .tt-order .tk-pro select { line-height: 44px; }
+  .tt-order .tk-side .seg { height: 48px; }
+  .tt-order .tk-side .seg::before { height: 44px; }
+  .tt-order .tk-side .seg button { line-height: 44px; }
+  .tt-order .fld { height: 44px; }
+  .tt-order .tk-pct input[type="range"] { min-height: 44px; }
+  .tt-order label.chk1 { min-height: 44px; }
+  .tt-pop .tk-seg button { line-height: 44px; }
+  .tt-pop .tk-list button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-order .tk-side .seg::before, .tt-order .tk-side .seg button, .tt-order label.chk1 input[type="checkbox"], .tt-order .fld, .tt-order .tk-pct input[type="range"]::-webkit-slider-thumb, .tt-order .tk-otabs.slide-under::after { transition: none; }
+}

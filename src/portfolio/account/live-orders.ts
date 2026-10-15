@@ -33,7 +33,7 @@ import { holdBackMs } from "../live/public-markets.ts";
 import { ceilTo, DONE, floorTo, inDollars, notionalOf, onStep, ORDER_TYPES, plain, TIFS, type LiveTrader, type Market, type MarketKind, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type Side, type TimeInForce } from "../live/trade.ts";
 import type { CardLike, Outcome } from "./exchange.ts";
 import type { LiveEngine, LiveMoney, LiveVenue } from "./live-moves.ts";
-import { orderLine } from "./statement.ts";
+import { figure, orderLine } from "./statement.ts";
 import { CARD_TTL_MS } from "./mode-rules.ts";
 import { micro, type AgentAction, type Envelope, type OwnerAction } from "./sign.ts";
 import { covers, spendFor, type AgentKey, type SpendApproval } from "./state.ts";
@@ -134,10 +134,21 @@ export interface LiveOrder {
   paper?: true | undefined;
 }
 
+/** THE DESK'S AUTONOMY ON PAPER (account/desk.ts, the superagent): the one question this door asks beyond the dial. In Guard every order an
+ * agent asks for waits for the owner on a card; the owner may sign one narrower thing for the account's own desk — that its own seats'
+ * orders at its paper account go at once. The host answers (service.ts: the desk's autonomyFor, only for a venue that is a paper account)
+ * with the words the ledger's row starts with, or nothing. This door asks only for an agent's order or close at a venue that is paper by
+ * its own connection (LiveVenue.paper), only when the dial is Guard; everything else about the order is judged as for any agent — its
+ * trading limit and its signature, the dial's session and reach, the venue's place rule, the per-order line, the budget, the window */
+export interface AutonomyHook {
+  autonomy?(signer: string, venue: string): string | undefined;
+}
+
 /** what this door uses of the engine, besides what the money door uses */
 export interface OrderEngine extends LiveEngine {
   orders: LiveOrder[];
   nextOrderId(): string;
+  host: LiveEngine["host"] & AutonomyHook;
 }
 
 interface Fields {
@@ -372,7 +383,7 @@ export class LiveOrders {
     const stopLoss = f.stopLoss.trim() !== "" ? Number(f.stopLoss) : undefined;
     const trailPercent = tp !== "" ? Number(tp) : undefined;
     const trailPrice = tq !== "" ? Number(tq) : undefined;
-    for (const x of [limitPrice, stopPrice, takeProfit, stopLoss, trailPrice]) if (x !== undefined && !onStep(x, mk.priceStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a price in ${mk.name} moves in steps of ${plain(mk.priceStep!)}`, detail: { priceStep: mk.priceStep } });
+    for (const x of [limitPrice, stopPrice, takeProfit, stopLoss, trailPrice]) if (x !== undefined && !onStep(x, mk.priceStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a price in ${mk.name} moves in steps of ${figure(mk.priceStep!)}`, detail: { priceStep: mk.priceStep } });
     // the side of the book the order takes; a limit that crosses it fills at the book, so a sell is never valued under the bid. A stop is
     // valued where it triggers: what the book does before then is not the order's price. A buy stop-limit at its limit (the most it pays); a
     // sell stop-limit at its stop, or its limit if that is higher — a limit under the stop takes the book where the stop fires, so a sell
@@ -381,7 +392,7 @@ export class LiveOrders {
     // a trailing stop is valued where it would trigger now: its trail past the book (a buy's stop only falls from there, a sell's only rises)
     const trailFrom = trailing && book !== undefined ? (trailPercent !== undefined ? (book * trailPercent) / 100 : trailPrice!) : undefined;
     const trailStop = trailFrom !== undefined ? (side === "buy" ? book! + trailFrom : book! - trailFrom) : undefined;
-    if (trailing && !(trailStop !== undefined && trailStop > 0)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a trail of ${trailPercent !== undefined ? `${plain(trailPercent)}%` : plain(trailPrice!)} from ${book !== undefined ? plain(book) : "no price"} leaves no stop for ${mk.name}` });
+    if (trailing && !(trailStop !== undefined && trailStop > 0)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a trail of ${trailPercent !== undefined ? `${figure(trailPercent)}%` : figure(trailPrice!)} from ${book !== undefined ? figure(book) : "no price"} leaves no stop for ${mk.name}` });
     const price = type === "stop" ? stopPrice : trailing ? (side === "buy" ? trailStop : book) : limitPrice === undefined ? book : side === "buy" ? limitPrice : type === "stop_limit" ? Math.max(limitPrice, stopPrice ?? 0) : Math.max(limitPrice, book ?? 0);
     if (!(price !== undefined && price > 0)) return no("E_ACCOUNT_UNPRICED", { venue: v.id, message: `${v.name} shows no price for ${mk.name} right now, so no limit can be judged: try a limit order` });
     // a bracket's exits stand on the right sides of its entry: a buy's take-profit above it and its stop-loss below; a sell's the other way.
@@ -392,8 +403,8 @@ export class LiveOrders {
     const fill = limitPrice === undefined || book === undefined ? entry : side === "buy" ? Math.min(limitPrice, book) : Math.max(limitPrice, book);
     if (entry !== undefined && fill !== undefined) {
       const up = side === "buy";
-      if (takeProfit !== undefined && (up ? takeProfit <= entry : takeProfit >= entry)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the take-profit (${plain(takeProfit)}) must be ${up ? "above" : "below"} the entry (${plain(entry)}) for a ${side}` });
-      if (stopLoss !== undefined && (up ? stopLoss >= fill : stopLoss <= fill)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the stop-loss (${plain(stopLoss)}) must be ${up ? "below" : "above"} the entry (${plain(fill)}) for a ${side}${fill !== entry ? `: a ${side} limited at ${plain(entry)} crosses the book and fills there, at ${plain(fill)}` : ""}` });
+      if (takeProfit !== undefined && (up ? takeProfit <= entry : takeProfit >= entry)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the take-profit (${figure(takeProfit)}) must be ${up ? "above" : "below"} the entry (${figure(entry)}) for a ${side}` });
+      if (stopLoss !== undefined && (up ? stopLoss >= fill : stopLoss <= fill)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the stop-loss (${figure(stopLoss)}) must be ${up ? "below" : "above"} the entry (${figure(fill)}) for a ${side}${fill !== entry ? `: a ${side} limited at ${figure(entry)} crosses the book and fills there, at ${figure(fill)}` : ""}` });
     }
     // a market order — and a stop or a trailing stop, once it triggers — carries a worst price: 2% past where it is valued
     const worstPrice = type === "market" || type === "stop" || trailing ? (side === "buy" ? floorTo(price * (1 + SLIPPAGE), mk.priceStep) : ceilTo((trailing ? trailStop! : price) * (1 - SLIPPAGE), mk.priceStep)) : undefined;
@@ -401,9 +412,9 @@ export class LiveOrders {
     let qty: number;
     if (byQty) {
       qty = Number(size);
-      if (!onStep(qty, mk.qtyStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a size in ${mk.name} moves in steps of ${plain(mk.qtyStep!)} ${mk.base}`, detail: { qtyStep: mk.qtyStep } });
+      if (!onStep(qty, mk.qtyStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a size in ${mk.name} moves in steps of ${figure(mk.qtyStep!)} ${mk.base}`, detail: { qtyStep: mk.qtyStep } });
     } else qty = floorTo(Number(size) / each, mk.qtyStep);
-    if (!(qty > 0) || (mk.minQty !== undefined && qty < mk.minQty - 1e-12)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is ${plain(mk.minQty ?? mk.qtyStep ?? 0)} ${mk.base}${byUsd ? ` (${usd((mk.minQty ?? mk.qtyStep ?? 0) * each)} at ${plain(price)})` : ""}`, detail: { minQty: mk.minQty, qtyStep: mk.qtyStep } });
+    if (!(qty > 0) || (mk.minQty !== undefined && qty < mk.minQty - 1e-12)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is ${figure(mk.minQty ?? mk.qtyStep ?? 0)} ${mk.base}${byUsd ? ` (${usd((mk.minQty ?? mk.qtyStep ?? 0) * each)} at ${figure(price)})` : ""}`, detail: { minQty: mk.minQty, qtyStep: mk.qtyStep } });
     const notional = notionalOf(mk, qty, price);
     if (mk.minNotional !== undefined && notional < mk.minNotional - 1e-9) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is worth ${usd(mk.minNotional)}`, detail: { minNotional: mk.minNotional } });
     const maxUsd = side === "buy" && worstPrice !== undefined ? notionalOf(mk, qty, worstPrice) : notional;
@@ -419,14 +430,14 @@ export class LiveOrders {
     if (p.m.symbol !== symbol) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `${p.v.name} now calls this market ${p.m.symbol}, not ${symbol}: prepare it again` });
     const per = notionalOf(p.m, p.qty, 1);
     if (p.side === "buy") {
-      if (p.notional > worth + 1e-9) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the price moved: at ${plain(p.price)} the order is worth ${usd(p.notional)} now, more than the ${usd(worth)} ${what}. Nothing was placed`, detail: { price: p.price, notionalUsd: p.notional, maxUsd: worth } });
+      if (p.notional > worth + 1e-9) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the price moved: at ${figure(p.price)} the order is worth ${usd(p.notional)} now, more than the ${usd(worth)} ${what}. Nothing was placed`, detail: { price: p.price, notionalUsd: p.notional, maxUsd: worth } });
       if (p.worstPrice === undefined) return { ...p, maxUsd: p.notional };
       const worstPrice = Math.max(p.price, floorTo(Math.min(p.worstPrice, worth / per), p.m.priceStep));
       return { ...p, worstPrice, maxUsd: notionalOf(p.m, p.qty, worstPrice) };
     }
     if (p.worstPrice === undefined) return p;
     const least = worth * (1 - SLIPPAGE);
-    if (p.notional < least - 1e-9) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the price fell: at ${plain(p.price)} the order fetches ${usd(p.notional)} now, more than 2% under the ${usd(worth)} ${what}. Nothing was placed`, detail: { price: p.price, notionalUsd: p.notional, worthUsd: worth } });
+    if (p.notional < least - 1e-9) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the price fell: at ${figure(p.price)} the order fetches ${usd(p.notional)} now, more than 2% under the ${usd(worth)} ${what}. Nothing was placed`, detail: { price: p.price, notionalUsd: p.notional, worthUsd: worth } });
     // a trailing sell is valued at the book but sells where its stop triggers, under the book by its trail: its worst price stays the plan's,
     // 2% under that stop. Pushed up toward the book, it would sit above the stop, and a stop that triggered could never fill
     if (p.type === "trailing_stop") return p;
@@ -536,7 +547,17 @@ export class LiveOrders {
     return this.place(p, { signer: who.signer, authority: "owner", action: who.hash, envelope: who.envelope });
   }
 
-  /** An agent's order. Its trading limit and the dial first; then Guard: a card the owner signs; Beast: placed at once */
+  /** the superagent's words for this order (AutonomyHook), or undefined: asked only in Guard, only at a venue that is paper by its own
+   * connection, and only an answer that is words counts */
+  private superagent(signer: string, v: LiveVenue): string | undefined {
+    if (v.paper !== true || this.e.host.policy().mode === "open") return undefined;
+    const words = this.e.host.autonomy?.(signer, v.id);
+    return typeof words === "string" && words.trim() !== "" ? words : undefined;
+  }
+
+  /** An agent's order. Its trading limit and the dial first; then Guard: a card the owner signs; Beast: placed at once — and, in Guard, the
+   * desk's own seat at its paper account under the autonomy the owner signed (AutonomyHook): placed at once as Beast places it, inside the
+   * same limit, the ledger's row saying so */
   async agent(a: AgentLiveOrderAction, who: { signer: string; envelope: Envelope; hash: Hex; agent: AgentKey }): Promise<Outcome> {
     const now = Date.parse(this.e.host.now());
     const spend = await this.limit(who.signer, text(a.venue));
@@ -547,13 +568,14 @@ export class LiveOrders {
     const line = await this.placeRule(p.v, p.side, p.reduceOnly, p.m.symbol);
     if (line) return line;
     const flight = this.e.host.openFlight({ id: slug(who.agent.name), name: who.agent.name, code: who.agent.code }, `${this.words(p)} · ${p.v.paper ? "paper" : "real money"}`);
-    if (this.e.host.policy().mode === "open") {
+    const superagent = this.superagent(who.signer, p.v);
+    if (this.e.host.policy().mode === "open" || superagent !== undefined) {
       const c = covers(spend, p.v.id, micro(p.maxUsd.toFixed(6)), now);
       if (c) return c;
       const out = await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent.address, action: who.hash, approval: spend.id });
       if (isRefusal(out)) return out;
-      this.e.host.log({ kind: "action", venue: p.v.id, tool: a.type, signer: who.signer, envelope: who.envelope, outcome: "accepted", notionalUsd: p.maxUsd, reason: `Beast: ${this.words(p)}, inside the trading limit`, flight: flight.no });
-      this.e.host.say(flight.no, `${who.agent.name} ${this.words(p)}: inside its limit, so it went without a card (Beast)`, "ok");
+      this.e.host.log({ kind: "action", venue: p.v.id, tool: a.type, signer: who.signer, envelope: who.envelope, outcome: "accepted", notionalUsd: p.maxUsd, reason: `${superagent ?? "Beast"}: ${this.words(p)}, inside the trading limit`, flight: flight.no });
+      this.e.host.say(flight.no, superagent ? `${who.agent.name} ${this.words(p)}: the desk's own seat at its paper account, with the autonomy the owner signed, inside its limit, so it went without a card` : `${who.agent.name} ${this.words(p)}: inside its limit, so it went without a card (Beast)`, "ok");
       return { ...out, flight: flight.no } as Outcome;
     }
     // the card holds what it shows, to the cent: answering it frees exactly that
@@ -742,10 +764,14 @@ export class LiveOrders {
     this.line(back);
   }
 
-  private words(p: Plan): string {
-    const trail = p.trailPercent !== undefined ? `${plain(p.trailPercent)}%` : p.trailPrice !== undefined ? plain(p.trailPrice) : "";
-    const exits = [p.takeProfit !== undefined ? `take-profit ${plain(p.takeProfit)}` : "", p.stopLoss !== undefined ? `stop-loss ${plain(p.stopLoss)}` : ""].filter(Boolean).join(", ");
-    const how = `${p.type === "limit" ? `limit ${plain(p.limitPrice!)}` : p.type === "stop" ? `stop at ${plain(p.stopPrice!)}` : p.type === "stop_limit" ? `stop at ${plain(p.stopPrice!)}, limit ${plain(p.limitPrice!)}` : p.type === "trailing_stop" ? `trailing stop ${trail} behind` : "market"}${exits ? ` · then ${exits}` : ""}`;
+  /** An order in words: "buy 0.0009 BTC at Momentum · paper · limit 62,410.5 · then take-profit 63,000 (GTC) · about $56.17" — for the
+   * card's reason, the quote the owner reads before signing, the flight, the ledger's reason and a note. Its prices are grouped the en-US
+   * way (figure); `fig` is plain() only where the words are part of what the owner signs (the offer of an amend's card, hashed into the card
+   * when it is raised), so that those words stay exactly as they were signed before grouping */
+  private words(p: Plan, fig: (x: number) => string = figure): string {
+    const trail = p.trailPercent !== undefined ? `${fig(p.trailPercent)}%` : p.trailPrice !== undefined ? fig(p.trailPrice) : "";
+    const exits = [p.takeProfit !== undefined ? `take-profit ${fig(p.takeProfit)}` : "", p.stopLoss !== undefined ? `stop-loss ${fig(p.stopLoss)}` : ""].filter(Boolean).join(", ");
+    const how = `${p.type === "limit" ? `limit ${fig(p.limitPrice!)}` : p.type === "stop" ? `stop at ${fig(p.stopPrice!)}` : p.type === "stop_limit" ? `stop at ${fig(p.stopPrice!)}, limit ${fig(p.limitPrice!)}` : p.type === "trailing_stop" ? `trailing stop ${trail} behind` : "market"}${exits ? ` · then ${exits}` : ""}`;
     const flags = [p.tif ? p.tif.toUpperCase() : "", p.postOnly ? "post-only" : "", p.reduceOnly ? "reduce-only" : "", p.extendedHours ? `extended hours${p.m.session?.phase && p.m.session.phase !== "regular" && p.m.session.phase !== "closed" ? ` · ${p.m.session.phase === "pre" ? "pre-market" : p.m.session.phase === "after" ? "after-hours" : "overnight"}` : ""}` : ""].filter(Boolean).join(", ");
     return `${p.v.paper ? "PAPER · " : ""}${p.side} ${qtyText(p.qty)} ${p.m.base} at ${p.v.name} · ${how}${flags ? ` (${flags})` : ""} · about ${usd(p.notional)}`;
   }
@@ -828,16 +854,18 @@ export class LiveOrders {
     return { ok: true, kind: "order", order };
   }
 
+  /** the order's note: how it stands, in the words the page's toast, its orders table and the statement show ("filled at 62,548.3 · fee
+   * $0.06", "on Kraken's book at 63,226.6"). Its prices are grouped (figure); the order's own fields keep the numbers */
   private noteOf(o: LiveOrder): string {
     if (o.unconfirmed && !o.ref) return `${o.venueName} did not confirm it: it may or may not have been placed. Looked for under the account's id until ${o.venueName} shows it or shows none — look at its orders before placing it again`;
     if (o.walletTxs && !o.ref) return `waiting for your wallet to send it${o.walletTxs.length > 1 ? ` (${o.walletTxs.length} transactions: an approval first)` : ""}`;
     switch (o.status) {
       case "filled":
-        return `filled${o.avgPrice ? ` at ${plain(o.avgPrice)}` : ""}${o.feeUsd ? ` · fee ${usd(o.feeUsd)}` : ""}`;
+        return `filled${o.avgPrice ? ` at ${figure(o.avgPrice)}` : ""}${o.feeUsd ? ` · fee ${usd(o.feeUsd)}` : ""}`;
       case "partial":
-        return `${qtyText(o.filledQty)} of ${qtyText(o.qty)} filled${o.avgPrice ? ` at ${plain(o.avgPrice)}` : ""}`;
+        return `${qtyText(o.filledQty)} of ${qtyText(o.qty)} filled${o.avgPrice ? ` at ${figure(o.avgPrice)}` : ""}`;
       case "open":
-        return o.type === "limit" ? `on ${o.venueName}'s book at ${plain(o.limitPrice!)}` : o.type === "trailing_stop" ? `following the price at ${o.venueName}, ${o.trailPercent !== undefined ? `${plain(o.trailPercent)}%` : plain(o.trailPrice ?? 0)} behind its best` : o.type === "stop" || o.type === "stop_limit" ? `waiting at ${o.venueName} for the price to reach ${plain(o.stopPrice ?? 0)}${o.type === "stop_limit" ? `, then a limit at ${plain(o.limitPrice ?? 0)}` : ""}` : o.worstPrice !== undefined ? `on ${o.venueName}'s book at its worst price, ${plain(o.worstPrice)}: it fills there or better, or waits` : `taken by ${o.venueName}`;
+        return o.type === "limit" ? `on ${o.venueName}'s book at ${figure(o.limitPrice!)}` : o.type === "trailing_stop" ? `following the price at ${o.venueName}, ${o.trailPercent !== undefined ? `${figure(o.trailPercent)}%` : figure(o.trailPrice ?? 0)} behind its best` : o.type === "stop" || o.type === "stop_limit" ? `waiting at ${o.venueName} for the price to reach ${figure(o.stopPrice ?? 0)}${o.type === "stop_limit" ? `, then a limit at ${figure(o.limitPrice ?? 0)}` : ""}` : o.worstPrice !== undefined ? `on ${o.venueName}'s book at its worst price, ${figure(o.worstPrice)}: it fills there or better, or waits` : `taken by ${o.venueName}`;
       case "pending":
         return `${o.venueName} took it`;
       case "canceled":
@@ -999,7 +1027,7 @@ export class LiveOrders {
       return { ...planned, worstPrice, maxUsd: planned.side === "buy" ? notionalOf(planned.m, planned.qty, worstPrice) : planned.maxUsd };
     })();
     const capUsd = this.money()!.writes().capUsd;
-    if (!p.v.paper && p.maxUsd > capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: o.venue, message: `${usd(p.maxUsd)} is more than the most one order may be on this server (${usd(capUsd)}): the stop keeps the worst price it was placed with, ${plain(old!)}`, detail: { capUsd, orderUsd: p.maxUsd } });
+    if (!p.v.paper && p.maxUsd > capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: o.venue, message: `${usd(p.maxUsd)} is more than the most one order may be on this server (${usd(capUsd)}): the stop keeps the worst price it was placed with, ${figure(old!)}`, detail: { capUsd, orderUsd: p.maxUsd } });
     return { p, change: { ...(given(a.qty) ? { qty: p.qty } : {}), ...(given(a.limitPrice) ? { limitPrice: p.limitPrice } : {}), ...(given(a.stopPrice) ? { stopPrice: p.stopPrice } : {}) } };
   }
 
@@ -1074,7 +1102,7 @@ export class LiveOrders {
     const c = covers(spend, o.venue, micro(extra.toFixed(2)), now, { window: false });
     if (c) return c;
     const flight = this.e.host.openFlight({ id: slug(who.agent!.name), name: who.agent!.name, code: who.agent!.code }, `change ${o.id}: ${this.words(p)} · ${o.paper ? "paper" : "real money"}`);
-    const offer = { payee: o.venueName, payTo: o.symbol, amount: `${o.id} → ${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `change an order · ${this.words(p)}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${usd(extra)} more than now` };
+    const offer = { payee: o.venueName, payTo: o.symbol, amount: `${o.id} → ${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `change an order · ${this.words(p, plain)}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${usd(extra)} more than now` };
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, qty: plain(p.qty), limit: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stop: p.stopPrice !== undefined ? plain(p.stopPrice) : "", worth: worth.toFixed(2) })));
     const card = this.e.host.raiseCard(flight.no, { account: o.venue, intent: { kind: "trade", symbol: p.m.symbol, side: p.side, qty: p.qty }, usd: extra, reason: `${who.agent!.name} asks to change ${o.id}: ${this.words(p)}`, why: "live", action: a as AgentLiveAmendAction, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, approval: spend.id });
     this.shownAmend.set(card.id, { order: o.id, qty: p.qty, ...(p.limitPrice !== undefined ? { limitPrice: p.limitPrice } : {}), ...(p.stopPrice !== undefined ? { stopPrice: p.stopPrice } : {}), maxUsd: worth });
@@ -1181,7 +1209,9 @@ export class LiveOrders {
       const line = await this.placeRule(p.v, p.side, true, p.m.symbol);
       if (line) return line;
     }
-    const open = this.e.host.policy().mode === "open";
+    // the desk's own seat at its paper account, under the autonomy the owner signed, closes as Beast closes (AutonomyHook)
+    const superagent = spend && who.card === undefined ? this.superagent(who.signer, v) : undefined;
+    const open = this.e.host.policy().mode === "open" || superagent !== undefined;
     const asking = spend !== undefined && who.card === undefined && !open;
     if (spend && plainSell) {
       // a card holds what it shows, to the cent; a release or a Beast close is counted at what it is worth
@@ -1189,10 +1219,20 @@ export class LiveOrders {
       const limit = covers(spend, v.id, amount, Date.parse(this.e.host.now()));
       if (limit) return { ...limit, message: `${limit.message}. A close that sells a holding is a sell order, and counts against the trading limit like one` };
       if (asking) return this.closeCard(a, p, qty, who, spend, pos);
-      return this.closed(await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent!.address, action: who.hash, approval: spend.id, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }), v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
+      const out = await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent!.address, action: who.hash, approval: spend.id, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) });
+      this.autonomousClose(superagent, out, p, qty, who);
+      return this.closed(out, v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
     }
     if (spend && who.card === undefined && !(open && micro(p.maxUsd.toFixed(6)) <= spend.perPaymentMicro)) return this.closeCard(a, p, qty, who, undefined, pos);
-    return this.closed(await this.place(p, { signer: who.signer, authority: who.authority, ...(who.agent ? { agent: who.agent.address } : {}), action: who.hash, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }, native ? (clientId) => native.call(v.trader, pos.symbol, qty, clientId) : undefined), v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
+    const out = await this.place(p, { signer: who.signer, authority: who.authority, ...(who.agent ? { agent: who.agent.address } : {}), action: who.hash, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }, native ? (clientId) => native.call(v.trader, pos.symbol, qty, clientId) : undefined);
+    this.autonomousClose(superagent, out, p, qty, who);
+    return this.closed(out, v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
+  }
+
+  /** a close the superagent's autonomy let through without a card: the ledger's row says so, as an order's does (agent()) */
+  private autonomousClose(superagent: string | undefined, out: Outcome, p: Plan, qty: number, who: { signer: string; envelope?: Envelope | undefined }): void {
+    if (superagent === undefined || isRefusal(out)) return;
+    this.e.host.log({ kind: "action", venue: p.v.id, tool: "agentLiveClose", signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}), outcome: "accepted", notionalUsd: p.maxUsd, reason: `${superagent}: close ${qtyText(qty)} ${p.m.base} of ${p.m.name}, inside the trading limit` });
   }
 
   /** the exits the venue placed for a position's entries (a bracket's take-profit and stop-loss, followed as the account's own orders: exitOf)

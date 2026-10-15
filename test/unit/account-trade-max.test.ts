@@ -124,7 +124,7 @@ describe("the whole order space, through one door", () => {
     // a buy stop at 3100 is counted at its worst: 2% past the trigger
     const stop = placed(await x.order({ orderType: "stop", limitPrice: "", stopPrice: "3100", qty: "0.1", tif: "gtc" }));
     expect(x.venue.v.placed.at(-1)).toEqual({ symbol: PERP.symbol, side: "buy", type: "stop", qty: 0.1, stopPrice: 3100, worstPrice: 3162, tif: "gtc", clientId: stop.clientId });
-    expect([stop.status, stop.note, x.spent().spentMicro]).toEqual(["open", "waiting at Exchange for the price to reach 3100", 316_200_000]);
+    expect([stop.status, stop.note, x.spent().spentMicro]).toEqual(["open", "waiting at Exchange for the price to reach 3,100", 316_200_000]);
     // a sell stop-limit with reduce-only: valued at its limit, nothing more ridden along
     const sl = placed(await x.order({ side: "sell", orderType: "stop_limit", limitPrice: "2790", stopPrice: "2800", qty: "0.2", reduceOnly: "true", tif: "ioc" }));
     expect(x.venue.v.placed.at(-1)).toEqual({ symbol: PERP.symbol, side: "sell", type: "stop_limit", qty: 0.2, limitPrice: 2790, stopPrice: 2800, tif: "ioc", reduceOnly: true, clientId: sl.clientId });
@@ -160,6 +160,9 @@ describe("the whole order space, through one door", () => {
     const bigger = await x.ag({ type: "agentLiveAmend", venue: "ex", order: o.id, qty: "", limitPrice: "2950", stopPrice: "" });
     if (isRefusal(bigger) || bigger.kind !== "card") throw new Error("expected a card");
     expect(bigger.card.offer).toMatchObject({ payee: "Exchange", amount: `${o.id} → buy 0.2 ETH`, network: "costs at most $590.00 · $10.00 more than now" });
+    // the card's reason writes the price grouped; the offer hashed into the card, which the owner signs, keeps it as it was always written
+    expect(bigger.card.reason).toContain("· limit 2,950 ·");
+    expect(bigger.card.offer?.protocol).toContain("· limit 2950 ·");
     const card = x.engine.host.card(bigger.card.id)!;
     const done = await x.own({ type: "approveCard", card: card.id, action: cardHash(card), decision: "approve" });
     expect(isRefusal(done)).toBe(false);
