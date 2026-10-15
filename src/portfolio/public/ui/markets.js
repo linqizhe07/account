@@ -16,6 +16,10 @@ const MKT_TTL = 20_000;
 /* how often the cards in view, and the market in the drawer, ask for a fresh price; how long one is shown as fresh */
 const MKT_POLL_MS = 5_000;
 const MKT_FRESH_MS = 30_000;
+/* a price whose own time (quoteAt) is further behind the clock than this says when it is from, beside its source (mkQuoteWords): a
+   real-time source's last trade can be yesterday's in pre-market, Cboe's is fifteen minutes behind at the least. Nasdaq stamps a trade to
+   its minute, so a trade a minute old may read as two */
+const MKT_QUOTE_OLD_MS = 120_000;
 /* the explore tabs, in the order the page shows them (the account returns only those with something in them; its legacy `now` is All). They
    are the Trade pane's kind ids too: a row's kind id (mkKindOf) is what the ticket is opened with */
 const MKT_TAB_IDS = ["all", "crypto", "stocks", "rwas", "perps", "preipo", "predictions"];
@@ -332,12 +336,13 @@ function mkShort(item) {
 /* the short name as a line draws it: the market's own words quieter than the event's */
 const mkShortHtml = (item) => { const s = mkShort(item); return `${esc(s.name)}${s.opt ? `<span class="mk-opt"> · ${esc(s.opt)}</span>` : ""}`; };
 /* what the hover card says, as words for a screen reader (the card is a pointer's): the whole question where the line says it short, what
-   kind of thing it is, when it closes — a time, not a countdown — and who issues it */
+   kind of thing it is, when it closes — a time, not a countdown — who issues it, and where its price is from */
 function mkAbout(item) {
   const s = mkShort(item);
   const ev = item.kind === "event";
   const close = ev && item.closeTime && Number.isFinite(Date.parse(item.closeTime)) ? `closes ${nyDay(item.closeTime)}, ${nyTime(item.closeTime)} New York` : "";
-  return [s.name !== item.name ? item.name : "", ev ? item.category || "Prediction" : mkSub(item), close, mkIssuerWords(item)].filter(Boolean).join(" · ");
+  const from = mkPriceFrom(item);
+  return [s.name !== item.name ? item.name : "", ev ? item.category || "Prediction" : mkSub(item), close, mkIssuerWords(item), from ? `Price from ${from}` : ""].filter(Boolean).join(" · ");
 }
 /** a market as a row names it: its tile and its short name, on one line, as one button that opens the drawer. What is said of it beyond
  * that — the whole question, what kind of thing it is, its countdown, who issues it, where it is listed — is in the card a pointer resting
@@ -347,8 +352,9 @@ function mkNameBtn(item, i) {
   return `<button type="button" class="mk-name" data-act="open" data-i="${i}" data-fk="open:${esc(item.key)}" data-peek="${i}">${mkAv(item)}<span class="mk-nm"><b>${mkShortHtml(item)}</b>${item.paper ? ' <span class="tag paper" title="Only a paper account lists it: its price is that test environment\'s, not a market\'s">Paper</span>' : ""}${about ? `<span class="sr">. ${esc(about)}</span>` : ""}</span></button>`;
 }
 /** what a market's hover card says: its whole name (an event's question, with the market's own words), what kind of thing it is — an
- * event's category and its countdown, which ticks with the others — who issues it and whom it is for in the issuer's words, and where it is
- * listed: the venues connected, then the ones whose public prices list it, quieter */
+ * event's category and its countdown, which ticks with the others — who issues it and whom it is for in the issuer's words, where it is
+ * listed: the venues connected, then the ones whose public prices list it, quieter — and where its price is from, where its line says (a US
+ * stock's: a real-time quote, or Cboe's 15 minutes delayed), with when once it is not the last minute or two's (mkQuoteWords) */
 function mkPeekHtml(item) {
   const ev = item.kind === "event";
   const close = ev && item.closeTime ? mkCloseHtml(item, mkEnded(item)) : "";
@@ -357,7 +363,8 @@ function mkPeekHtml(item) {
   const seen = new Set();
   const at = [...item.at.filter((a) => a.connected), ...item.at.filter((a) => !a.connected)].filter((a) => !seen.has(a.venueName) && seen.add(a.venueName));
   const where = at.map((a) => (a.connected ? `${esc(a.venueName)}${a.paper ? " (paper)" : ""}` : `<span class="dim">${esc(a.venueName)}</span>`)).join(" · ");
-  return `<b class="mk-peek-n">${esc(item.name)}</b>${kind ? `<span class="mk-peek-k">${kind}</span>` : ""}${iss ? `<span class="mk-peek-i">${esc(iss)}</span>` : ""}${where ? `<span class="mk-peek-w">${where}</span>` : ""}`;
+  const from = mkPriceFrom(item);
+  return `<b class="mk-peek-n">${esc(item.name)}</b>${kind ? `<span class="mk-peek-k">${kind}</span>` : ""}${iss ? `<span class="mk-peek-i">${esc(iss)}</span>` : ""}${where ? `<span class="mk-peek-w">${where}</span>` : ""}${from ? `<span class="mk-peek-f">Price from ${esc(from)}</span>` : ""}`;
 }
 /* a row, by its place in what was drawn (data-i) */
 const mkReg = (item) => MKT.reg.push(item) - 1;
@@ -377,7 +384,11 @@ function mkWhere(item) {
   const seen = new Set();
   const at = [...item.at.filter((a) => a.connected), ...item.at.filter((a) => !a.connected)].filter((a) => !seen.has(a.venueName) && seen.add(a.venueName));
   // two venues by name (yours first), the rest as "+N" with their names in its title (and all of them in the row's hover card)
-  const name = (a) => (a.connected ? (a.paper ? `<span class="mk-v paper" title="A paper account: no real money">${esc(a.venueName)} · paper</span>` : `<span class="mk-v">${esc(a.venueName)}</span>`) : `<span class="mk-v pub" title="Public prices, read without a key">${esc(a.venueName)}</span>`);
+  // a line that reads more than one source (US stocks) says on hover which priced it, how far behind the market that is, and when the
+  // price is from once it is not the last minute or two's
+  const from = (a) => { const w = mkQuoteWords(a.quoteFrom, a.quoteAt); return w ? `Price from ${w}` : ""; };
+  const title = (...words) => { const t = words.filter(Boolean).join(". "); return t ? ` title="${esc(t)}"` : ""; };
+  const name = (a) => (a.connected ? (a.paper ? `<span class="mk-v paper"${title("A paper account: no real money", from(a))}>${esc(a.venueName)} · paper</span>` : `<span class="mk-v"${title(from(a))}>${esc(a.venueName)}</span>`) : `<span class="mk-v pub"${title("Public prices, read without a key", from(a))}>${esc(a.venueName)}</span>`);
   const more = at.length > 2 ? ` <span class="dim mk-more" title="${esc(at.slice(2).map((a) => a.venueName).join(", "))}">+${at.length - 2}</span>` : "";
   return `<span class="mk-where">${at.slice(0, 2).map(name).join(" · ")}${more}</span>`;
 }
@@ -391,11 +402,27 @@ function mkActs(item, i) {
   // a state in a word (Not served here, Close only here) is said as that; anything else opens the drawer, which says why
   return `<div class="acts"><button type="button" class="link dim mk-why" data-act="open" data-i="${i}" data-fk="why:${k}" title="${esc(r.text)}">${esc(r.word || "Can't trade here · why")}</button></div>`;
 }
+/* the fresh market at a row's lead venue while it is fresh and says a price: the row's price now is its */
+const mkLeadFresh = (item) => { const lead = mkLeadLeg(item); const m = lead && mkFresh(`${lead.venue}|${lead.symbol}`); return m && (m.price ?? m.ask) !== undefined ? m : null; };
 /* a row's price now: the fresh one from its venue when there is one, else what the explore read said */
 function mkPriceOf(item) {
-  const lead = mkLeadLeg(item);
-  const m = lead && mkFresh(`${lead.venue}|${lead.symbol}`);
-  return m && (m.price ?? m.ask) !== undefined ? (m.price ?? m.ask) : item.price;
+  const m = mkLeadFresh(item);
+  return m ? m.price ?? m.ask : item.price;
+}
+/* a price's source as the page says it: the source's words — which source, and how far behind the market ("Cboe · 15 min delayed") —
+   and, once the price's own time (quoteAt) is more than MKT_QUOTE_OLD_MS old, when it is from ("Nasdaq · real time · last at 10:29 New
+   York, Tue 13 Oct"): "real time" names the source, not the price's age — a share not yet traded in pre-market carries yesterday's last
+   trade, and nothing on its way here ages it. "" where no source is said; a time alone is not said */
+function mkQuoteWords(from, at) {
+  const words = typeof from === "string" ? from.trim() : "";
+  const t = words && typeof at === "string" ? Date.parse(at) : NaN;
+  return Number.isFinite(t) && Date.now() - t > MKT_QUOTE_OLD_MS ? `${words} · last at ${nyTime(t)} New York, ${nyDay(t)}` : words;
+}
+/* where that price is from (mkQuoteWords), where its line says (a US stock's: the US stocks line's name says none) — the fresh market's
+   own source and time when the price is the fresh one; "" where none says */
+function mkPriceFrom(item) {
+  const m = mkLeadFresh(item);
+  return m ? mkQuoteWords(m.quoteFrom, m.quoteAt) : mkQuoteWords(item.quoteFrom, item.quoteAt);
 }
 /* an event's 24 hours, in cents: its lead outcome's, else the row's */
 const mkEventChg = (item) => { const o0 = item.outcomes && item.outcomes[0]; return chg(o0 && o0.change24h !== undefined ? o0.change24h * 100 : item.change24h !== undefined ? item.change24h * 100 : undefined, "¢"); };
@@ -1305,7 +1332,7 @@ function mkAcrossHtml(o) {
   const c = pre ? null : cmp;
   const rows = [];
   for (const r of c ? c.rows : []) rows.push({ venue: r.venue, venueName: r.venueName, symbol: r.symbol, price: r.price, spread: r.spreadPct, note: r.note, best: r.best, ready: r.ready, connected: true });
-  for (const a of it.at) if (a.symbol && !rows.some((r) => r.venue === a.venue) && mkServes(a)) rows.push({ venue: a.venue, venueName: a.venueName, symbol: a.symbol, price: a.price, note: a.note, connected: a.connected, public: a.public, connector: a.connector, connectTo: a.connectTo, implied: a.implied });
+  for (const a of it.at) if (a.symbol && !rows.some((r) => r.venue === a.venue) && mkServes(a)) rows.push({ venue: a.venue, venueName: a.venueName, symbol: a.symbol, price: a.price, quoteFrom: a.quoteFrom, quoteAt: a.quoteAt, note: a.note, connected: a.connected, public: a.public, connector: a.connector, connectTo: a.connectTo, implied: a.implied });
   // an order goes here (its note is the venue's: fees, slippage); or only public prices list it (connect it); or the venue says why not
   const takes = (r) => { const v = mkVenue(r.venue); return !!v && canTrade(v) && mkAtOf(it, r.venue).canTrade !== false && !mkCloseOnly(it, r.venue); };
   // a public line is a price; it offers its connection only where none of the owner's venues trades the thing (and its venue is not on)
@@ -1323,7 +1350,9 @@ function mkAcrossHtml(o) {
     return v ? `<span class="why">${esc(mkWhyNot(v, mkAtOf(it, r.venue)))}</span>` : r.note ? `<span class="why">${esc(r.note)}</span>` : "";
   };
   const t = table([
-    { label: "Venue", cell: (r) => `${esc(r.venueName)}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.public ? ' <span class="tag">Public</span>' : ""}${r.note && takes(r) ? `<span class="why">${esc(r.note)}</span>` : ""}${pre ? mkImpliedLine(r) : ""}` },
+    // a line that reads more than one source (US stocks) says which priced it, how far behind the market that is, and when the price is
+    // from once it is not the last minute or two's
+    { label: "Venue", cell: (r) => `${esc(r.venueName)}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.public ? ' <span class="tag">Public</span>' : ""}${mkQuoteWords(r.quoteFrom, r.quoteAt) ? `<span class="why">Price from ${esc(mkQuoteWords(r.quoteFrom, r.quoteAt))}</span>` : ""}${r.note && takes(r) ? `<span class="why">${esc(r.note)}</span>` : ""}${pre ? mkImpliedLine(r) : ""}` },
     { label: c ? "Buy at" : pre ? "Contract" : "Price", r: true, cell: (r) => (ev ? mkCents(r.price) : mkUsd(r.price)) },
     ...(c ? [{ label: "Spread", r: true, cell: (r) => (r.spread !== undefined ? `${Number(r.spread.toFixed(2))}%` : "—") }] : []),
     { label: "", sr: "Actions", r: true, cell },
@@ -1432,6 +1461,9 @@ function mkDrawerParts(o) {
   // a stock's session, from its venue's own stamps: open until when, or closed until when
   const session = mkSessionOf(it);
   const sessionWhen = session ? mkSessionWhen(session) : "";
+  // where the price above is from, how far behind the market, and when once it is not the last minute or two's, where its line says (a US
+  // stock's: a real-time quote, or Cboe's delayed) — the fresh market's own when the price is the fresh one
+  const priceFrom = fresh ? mkQuoteWords(fresh.quoteFrom, fresh.quoteAt) : mkQuoteWords(it.quoteFrom, it.quoteAt);
   // a market's facts; a holding no listing carries shows only the facts its venue gave (no box of dashes)
   const facts = [
     ["Bid", `<span${q} data-fmt="${ev ? "bid-c" : "bid"}">${ev ? mkCents(bid) : mkUsd(bid)}</span>`, !it.held || bid !== undefined],
@@ -1441,6 +1473,7 @@ function mkDrawerParts(o) {
     ...(fresh && fresh.maxLeverage ? [["Leverage", `up to ${esc(String(fresh.maxLeverage))}x`]] : []),
     ...(it.closeTime ? [[state.ended ? (state.trading ? "End date" : "Closed") : "Closes", `${esc(nyDay(it.closeTime))} ${esc(nyTime(it.closeTime))} New York${state.ended && state.trading ? " · still trading" : ""}`]] : []),
     ...(session ? [["Session", `${session.open ? "Open" : mkPhase(session) ? "Extended" : "Closed"}${sessionWhen ? ` · ${esc(sessionWhen)}` : ""}`]] : []),
+    ...(priceFrom ? [["Price from", esc(priceFrom)]] : []),
   ].filter((f) => f[2] !== false);
   const outcomes = ev && it.outcomes ? `<div class="mk-outs">${it.outcomes.map((x, oi) => {
     const rr = mkRoute(it, oi);

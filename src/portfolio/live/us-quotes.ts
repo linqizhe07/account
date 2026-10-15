@@ -19,7 +19,11 @@
  *                       16:52:32 UTC that day; 17:49:28 and 17:49:43 later) and serves the same one in between, whether or not a quote in
  *                       it moved — it says the writer is running, not how old a quote is. So a share's quote is stamped with the
  *                       generatedAt of the FIRST answer in which its bid and ask stood as they stand now ("unchanged since"), never the
- *                       latest answer's: a book that stops moving ages, and is passed over after FRESH_MS. A share Robinhood has halted
+ *                       latest answer's: a book that stops moving ages, and is passed over after FRESH_MS. Since when a book has stood is
+ *                       known only from an answer that saw it move: a book FIRST SEEN — after a restart, when nothing was read before — is
+ *                       not taken until it moves while watched (it may have stood since the last session: Friday's book, read on Sunday
+ *                       night), and one that moved across answers that were not read is stamped with the last answer read before them,
+ *                       the earliest it may have moved (ROBINHOOD_NEXT_MS). A share Robinhood has halted
  *                       (`isTradingHalt` true) is left out. Only these 194 are quoted (no JPM, BRK.B, V, WMT or HOOD); a symbol asked one at
  *                       a time (/rhj/prices/{SYM}) is not asked here — the one answer serves them all. Robinhood's assets list (/rhj/assets)
  *                       marks 191 of them TRADABLE overnight (tradingCapabilities.overnight). Whether this answer's quotes keep moving in the
@@ -88,7 +92,8 @@ export const NASDAQ_FROM = "Nasdaq · real time";
  * below the lowest the earlier pass found anywhere else (340.30, the 13 October after-hours low) — a margin any one print could explain, so
  * it suggests an overnight session and does not show one. Nobody watched its bid and ask move after 20:00. Set false if they do not:
  * overnight a share then has no real-time price, and nothing is filled or offered in that session. A book that does not move ages out on its
- * own either way (a quote is stamped "unchanged since", FRESH_MS) */
+ * own either way (a quote is stamped "unchanged since", FRESH_MS), and one first seen is not taken until it moves: a book frozen since the
+ * last session is not taken for a live one, after a restart either */
 export const ROBINHOOD_OVERNIGHT = true;
 /** a quote older than this (by its own stamp) is not taken as real time */
 export const FRESH_MS = 120_000;
@@ -98,6 +103,10 @@ export const FRESH_MS = 120_000;
 export const RT_WAIT_MS = 1_500;
 /** Robinhood's one answer for every symbol is kept this long (it writes a new one about every fifteen seconds) */
 const ROBINHOOD_MS = 10_000;
+/** an answer read within this long of the one read before it follows it (Robinhood writes one about every fifteen seconds; read every ten
+ * seconds at most, every other one may be missed): a book that moved between the two moved in that time. Across a longer gap — answers that
+ * were not read, nobody asking — it may have moved at any time since the last one read */
+export const ROBINHOOD_NEXT_MS = 30_000;
 /** one Nasdaq quote is kept this long; a symbol Nasdaq does not know, ten minutes (LIST_MS) */
 const NASDAQ_MS = 10_000;
 const CHART_MS = 60_000;
@@ -121,7 +130,8 @@ export interface UsQuote {
   bid?: number | undefined;
   ask?: number | undefined;
   /** the source's own stamp for it, in ms: for Robinhood, the generatedAt of the first answer in which this bid and ask stood ("unchanged
-   * since"); for Nasdaq, its lastTradeTimestamp (to the minute) */
+   * since") — of the last answer read before it, where it moved across answers that were not read; for Nasdaq, its lastTradeTimestamp (to
+   * the minute) */
   at: number;
   /** how far behind the market the source is: 0 for both */
   delayMs: number;
@@ -161,17 +171,19 @@ export function nasdaqNumber(v: unknown): number | undefined {
 }
 
 /** ROBINHOOD's one answer for every Stock Token's share (see the top of this file): its quotes by the token's symbol, kept ROBINHOOD_MS, each
- * stamped with the generatedAt of the first answer in which its bid and ask stood as they stand ("unchanged since"). A halted share, one
- * with no bid or no ask (or a crossed book), and one not in dollars are left out. Robinhood refusing this network, or an answer with no
- * quotes in it, is a refusal, never an empty map */
+ * stamped with the generatedAt of the first answer in which its bid and ask stood as they stand ("unchanged since"). A book first seen is
+ * left out until it moves while watched: since when it has stood is not known. A halted share, one with no bid or no ask (or a crossed
+ * book), and one not in dollars are left out. Robinhood refusing this network, or an answer with no quotes in it, is a refusal, never an
+ * empty map */
 export function robinhoodQuotes(deps: PublicDeps = {}): (() => Promise<Map<string, UsQuote> | Refusal>) & { clear(): void } {
   const id = "robinhood";
   const name = "Robinhood";
   const clock = deps.clock ?? Date.now;
   const http = fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, Math.min(deps.timeoutMs ?? ROBINHOOD_TIMEOUT_MS, ROBINHOOD_TIMEOUT_MS));
   const kept = keeper<Map<string, UsQuote>>(clock, ROBINHOOD_MS);
-  // each symbol's bid and ask as last seen, and since which answer they have stood so (at most the ~200 Robinhood quotes)
-  const since = new Map<string, { bid: number; ask: number; at: number }>();
+  // each symbol's bid and ask as last seen, since which answer they have stood so (`at`: not known for a book not yet seen to move), and
+  // the last answer they were seen in (`saw`) — at most the ~200 Robinhood quotes
+  const since = new Map<string, { bid: number; ask: number; at: number | undefined; saw: number }>();
   const all = () =>
     kept("all", async () => {
       let r: HttpReply;
@@ -193,9 +205,14 @@ export function robinhoodQuotes(deps: PublicDeps = {}): (() => Promise<Map<strin
         const written = isoMs(x.generatedAt);
         if (price === undefined || bid === undefined || ask === undefined || written === undefined) continue;
         const seen = since.get(symbol);
-        const at = seen && seen.bid === bid && seen.ask === ask && seen.at <= written ? seen.at : written;
-        since.set(symbol, { bid, ask, at });
-        out.set(symbol, { symbol, price, bid, ask, at, delayMs: 0, from: ROBINHOOD_FROM });
+        // an answer older than one already read says nothing new of this book
+        if (seen && written < seen.saw) continue;
+        // since when this book has stood: unchanged, since when it stood before; moved since the answer read just before, this answer;
+        // moved across answers not read, the last one read (the earliest it may have moved: a book that moved once in the gap and froze is
+        // not fresh); first seen, not known — it may have stood since the last session — and not taken until it moves while watched
+        const at = !seen ? undefined : seen.bid === bid && seen.ask === ask ? seen.at : written - seen.saw <= ROBINHOOD_NEXT_MS ? written : seen.saw;
+        since.set(symbol, { bid, ask, at, saw: written });
+        if (at !== undefined) out.set(symbol, { symbol, price, bid, ask, at, delayMs: 0, from: ROBINHOOD_FROM });
       }
       return out;
     });

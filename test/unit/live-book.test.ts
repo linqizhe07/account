@@ -619,8 +619,11 @@ describe("the service picks a connected venue's trader before a public source, a
     const pub = ok(await svc.marketBook("us-stocks", "AAPL", 20));
     expect(pub).toEqual({ venue: "us-stocks", venueName: "US stocks", symbol: "AAPL", public: true, book: { bids: [[189.98, null]], asks: [[190.02, null]], at: new Date(NOW - 5_000).toISOString(), from: "Nasdaq · real time", depth: "top", topOnly: "none" } });
     expect(refused(await svc.marketTrades("us-stocks", "AAPL", 30)).message).toBe("US stocks publishes no trades");
-    // a source with a book the account does not read is never said to have none; a quote with no time of its own says how old it may be
-    expect(ok(await svc.marketBook("preipo-pub", "OPENAI-PERP", 20)).book).toMatchObject({ bids: [[899.5, null]], asks: [[900.5, null]], from: "Pre-IPO Ex", depth: "top", topOnly: "unread", upToMs: 90_000 });
+    // a source with a book the account does not read is never said to have none; a quote with no time of its own says how old it may be:
+    // its source keeps it ninety seconds, and the service keeps the listing twenty more
+    expect(ok(await svc.marketBook("preipo-pub", "OPENAI-PERP", 20)).book).toMatchObject({ bids: [[899.5, null]], asks: [[900.5, null]], from: "Pre-IPO Ex", depth: "top", topOnly: "unread", upToMs: 110_000 });
+    // a paper account's market of it is kept three seconds more
+    expect(ok(await svc.marketBook("paper-1", "OPENAI-PERP", 20)).book).toMatchObject({ bids: [[899.5, null]], asks: [[900.5, null]], depth: "top", upToMs: 113_000 });
     expect(ok(await svc.marketBook("us-stocks", "AAPL", 20)).book.upToMs).toBeUndefined();
     // a broker connected live with no book: the market it reads
     expect(ok(await svc.marketBook("broker", "AAPL", 20)).book).toEqual({ bids: [[189.9, null]], asks: [[190.1, null]], at: new Date(NOW - 1_000).toISOString(), from: "Broker", depth: "top", topOnly: "unread" });

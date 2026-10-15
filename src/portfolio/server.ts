@@ -46,9 +46,11 @@
  *                                                        order would take there (a read)
  *   GET  /api/account/positions?venue=okx                what is held there: perpetuals, shares, event contracts (a read); no venue: at
  *                                                        every venue that lists positions, and the ones that could not be read
- *   GET  /api/account/explore?tab=&q=&sort=&limit=       Markets: what the connected venues list and what the venues not connected
+ *   GET  /api/account/explore?tab=&q=&key=&sort=&limit=  Markets: what the connected venues list and what the venues not connected
  *                                                        publish without a key ("Connect to trade"), as one list with tabs, movers,
- *                                                        what closes soon and what trades most
+ *                                                        what closes soon and what trades most; `key`, a row's own exactly as `items`
+ *                                                        names it (coin:BTC, kalshi:<market ticker>), keeps only that row, before the
+ *                                                        cut to `limit` (at most 200 characters; `q` still narrows what is read)
  *   GET  /api/account/holdings?cost=1                    Portfolio: what is held by asset across every venue, the dollars that are ready,
  *                                                        the last 24 hours; `cost=1` adds what was paid; `paper=1` the paper accounts'
  *                                                        instead (the Paper lens), summed as paper money
@@ -522,13 +524,14 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
   const answerOf = <T extends object>(res: express.Response, r: T | Refusal, key?: string) => void res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : key ? { ok: true, [key]: r } : { ok: true, ...r });
 
   // MARKETS: what there is to trade, at the connected venues and (keyless, "Connect to trade") at the venues not connected. A limit is a
-  // plain count of markets (digits), nothing a number parser would also take
+  // plain count of markets (digits), nothing a number parser would also take. A key is one row's own, given once: read past the 200
+  // characters the service takes, so that a longer one is refused there rather than cut into another
   app.get("/api/account/explore", wrap(async (req, res) => {
     if (!mounted(res)) return;
-    const q = strings(req, res, { tab: 20, q: 80, sort: 20, limit: 6 });
+    const q = strings(req, res, { tab: 20, q: 80, key: 240, sort: 20, limit: 6 });
     if (!q) return;
     if (q.limit && !/^\d{1,3}$/.test(q.limit)) return void bad(res, "limit is a count of markets, 1 to 200, in digits");
-    answerOf(res, await svc.explore({ tab: q.tab, q: q.q, sort: q.sort, ...(q.limit ? { limit: Number(q.limit) } : {}) }));
+    answerOf(res, await svc.explore({ tab: q.tab, q: q.q, key: q.key, sort: q.sort, ...(q.limit ? { limit: Number(q.limit) } : {}) }));
   }));
 
   // PORTFOLIO: what is held, by asset across every venue, the dollars that are ready, the last 24 hours; `cost=1` adds what was paid

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
-import type { Outcome } from "../../src/portfolio/account/exchange.ts";
+import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
 import { byAsset } from "../../src/portfolio/account/holdings.ts";
 import { networthPath, paperNetworthPath } from "../../src/portfolio/account/networth.ts";
 import { fromEt } from "../../src/portfolio/account/calendar.ts";
@@ -339,6 +339,191 @@ describe("a paper account beside a real one", () => {
     if (isRefusal(trail) || trail.kind !== "order") throw new Error(`expected an order, got ${code(trail)}`);
     expect(trail.order).toMatchObject({ status: "open", type: "trailing_stop", trailPercent: 3 });
     expect(code((await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.02" })) as Refusal)).toBe("E_ACCOUNT_BAD_ACTION");
+  });
+
+  it("a trailing sell the owner signs, or a card releases, keeps its worst price under its stop: once the price falls through the stop, it sells", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, ag, order } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    expect(code(await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.03" }))).toBe("order");
+    // valued at the bid (59,990), its stop 5% under it (56,990.5): its worst price is 2% under the stop, not 2% under the bid — a worst
+    // price above the stop would keep a triggered stop from ever filling
+    const trail = await order("paper-1", { symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.02", trailPercent: "5" });
+    if (isRefusal(trail) || trail.kind !== "order") throw new Error(`expected an order, got ${code(trail)}`);
+    expect(trail.order.worstPrice).toBeCloseTo(56990.5 * 0.98, 1);
+    // an agent's, on a card the owner approves (Guard): held the same way
+    await own({ type: "approveAgent", agentAddress: cc.address, agentName: "Claude Code", validUntil: START + 30 * DAY });
+    await own({ type: "approveSpend", agent: cc.address, scope: "trade", allow: "paper-1", perPayment: "5000", budget: "5000", windowHours: 0, validUntil: START + 7 * DAY });
+    const asked = await ag({ type: "agentLiveOrder", venue: "paper-1", symbol: "BTC/USD", side: "sell", orderType: "trailing_stop", qty: "0.01", usd: "", limitPrice: "", trailPercent: "5" });
+    if (isRefusal(asked) || asked.kind !== "card") throw new Error(`expected a card, got ${code(asked)}`);
+    const released = await own({ type: "approveCard", card: asked.card.id, action: cardHash(asked.card), decision: "approve" });
+    if (isRefusal(released) || released.kind !== "order") throw new Error(`expected an order, got ${code(released)}`);
+    expect(released.order.worstPrice).toBeCloseTo(56990.5 * 0.98, 1);
+    btc.price = 56000;
+    btc.bid = 55990;
+    btc.ask = 56010;
+    expect(await svc.lookAtPaper()).toEqual(["paper-1"]);
+    const orders = (await svc.accountView())!.orders;
+    expect([trail.order.id, released.order.id].map((id) => orders.find((o) => o.id === id)).map((o) => [o?.status, o?.avgPrice])).toEqual([["filled", 55990], ["filled", 55990]]);
+  });
+
+  it("a bracket's exits are judged against where its entry may fill, and a refusal says what they must be", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const why = async (draft: Record<string, unknown>) => {
+      const p = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", qty: "0.01", ...draft });
+      return isRefusal(p) ? p.message : "prepared";
+    };
+    // a market buy fills at the ask (60,010): its take-profit must be above it
+    expect(await why({ side: "buy", orderType: "market", takeProfit: "50000" })).toBe("Paper account: the take-profit (50000) must be above the entry (60010) for a buy");
+    // a buy limited at 70,000 crosses the ask and fills at 60,010: a stop-loss at 65,000 would sell at once
+    expect(await why({ side: "buy", orderType: "limit", limitPrice: "70000", stopLoss: "65000" })).toBe("Paper account: the stop-loss (65000) must be below the entry (60010) for a buy: a buy limited at 70000 crosses the book and fills there, at 60010");
+    // a sell limited at 50,000 fills at the bid (59,990): a stop-loss at 55,000 is under that fill
+    expect(await why({ side: "sell", orderType: "limit", limitPrice: "50000", stopLoss: "55000" })).toBe("Paper account: the stop-loss (55000) must be above the entry (59990) for a sell: a sell limited at 50000 crosses the book and fills there, at 59990");
+    // a sell's take-profit is under its limit, the worst fill for it
+    expect(await why({ side: "sell", orderType: "limit", limitPrice: "60500", takeProfit: "61000" })).toBe("Paper account: the take-profit (61000) must be below the entry (60500) for a sell");
+    // a limit that rests is judged at its own price; a crossing one's take-profit at its limit
+    expect(await why({ side: "buy", orderType: "limit", limitPrice: "59000", takeProfit: "62000", stopLoss: "58000" })).toBe("prepared");
+    expect(await why({ side: "buy", orderType: "limit", limitPrice: "70000", takeProfit: "72000", stopLoss: "59000" })).toBe("prepared");
+  });
+
+  it("a bracketed entry changed in place keeps its exits: a new limit on the wrong side of them is refused, and the quote signed shows them", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const entry = await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "limit", limitPrice: "59000", qty: "0.01", takeProfit: "62000", stopLoss: "58000" });
+    if (isRefusal(entry) || entry.kind !== "order") throw new Error(`expected an order, got ${code(entry)}`);
+    expect(entry.order.status).toBe("open");
+    // under the stop-loss, the entry would fill and its stop-loss sell at once
+    const under = await svc.account!.prepare({ type: "liveAmend", venue: "paper-1", order: entry.order.id, limitPrice: "57000" });
+    expect(isRefusal(under) && under.message).toBe("Paper account: the stop-loss (58000) must be below the entry (57000) for a buy");
+    const p = await svc.account!.prepare({ type: "liveAmend", venue: "paper-1", order: entry.order.id, limitPrice: "59500" });
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.quote?.order?.words).toContain("limit 59500 · then take-profit 62000, stop-loss 58000");
+    const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveAmend" }>;
+    const changed = await own(rest as NoNonce<OwnerAction>);
+    if (isRefusal(changed) || changed.kind !== "order") throw new Error(`expected an order, got ${code(changed)}`);
+    expect(changed.order).toMatchObject({ limitPrice: 59500, takeProfit: 62000, stopLoss: 58000, status: "open" });
+  });
+
+  it("a close of the whole position takes its exits with it, through the venue: a stop-loss left armed would sell a holding bought later", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order, home } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const entry = await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.01", takeProfit: "66000", stopLoss: "57000" });
+    if (isRefusal(entry) || entry.kind !== "order") throw new Error(`expected an order, got ${code(entry)}`);
+    const exits = () => svc.account!.orders.filter((o) => o.exitOf?.order === entry.order.id);
+    expect(exits().map((o) => [o.id, o.exitOf!.kind, o.status])).toEqual([["ord-0003", "stop-loss", "open"], ["ord-0002", "take-profit", "open"]]);
+    // the owner is told before signing that the exits go with the position
+    const p = await svc.account!.prepare({ type: "liveClose", venue: "paper-1", symbol: "BTC/USD" });
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.quote?.close?.words).toMatch(/ · its stop-loss ord-0003 and its take-profit ord-0002 are canceled with it$/);
+    const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveClose" }>;
+    const closed = await own(rest as NoNonce<OwnerAction>);
+    if (isRefusal(closed) || closed.kind !== "order") throw new Error(`expected an order, got ${code(closed)}`);
+    // at once, not at the next look: both exits canceled at the venue, their lines saying why
+    expect(exits().map((o) => [o.status, o.note])).toEqual([["canceled", `stop-loss of ${entry.order.id} · canceled: the position was closed (${closed.order.id})`], ["canceled", `take-profit of ${entry.order.id} · canceled: the position was closed (${closed.order.id})`]]);
+    const book = () => JSON.parse(readFileSync(paperBookPath(home, "paper-1"), "utf8")) as PaperBook;
+    expect(Object.values(book().orders).filter((o) => o.parent === entry.order.ref).map((o) => o.status)).toEqual(["canceled", "canceled"]);
+    // bought again with no exits; the price falls through the old stop-loss, and nothing sells the new holding
+    expect(code(await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.01" }))).toBe("order");
+    btc.price = 56900;
+    btc.bid = 56890;
+    btc.ask = 56910;
+    await svc.lookAtPaper();
+    expect(book().holdings["BTC/USD"]).toMatchObject({ qty: 0.01 });
+  });
+
+  it("a close of what is held leaves a sell's buy-back exits alone: they close nothing of the holding, and the quote does not name them", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order, home } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    expect(code(await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.02" }))).toBe("order");
+    // half of it sold, to be bought back: a take-profit under the sale, a stop-loss over it — both buys
+    const sold = await order("paper-1", { symbol: "BTC/USD", side: "sell", orderType: "market", qty: "0.01", takeProfit: "58000", stopLoss: "62000" });
+    if (isRefusal(sold) || sold.kind !== "order") throw new Error(`expected an order, got ${code(sold)}`);
+    const exits = () => svc.account!.orders.filter((o) => o.exitOf?.order === sold.order.id);
+    expect(exits().map((o) => [o.exitOf!.kind, o.side, o.status])).toEqual([["stop-loss", "buy", "open"], ["take-profit", "buy", "open"]]);
+    // the owner closes what is held (the other 0.01): a sell, which the buy-backs are no part of
+    const p = await svc.account!.prepare({ type: "liveClose", venue: "paper-1", symbol: "BTC/USD" });
+    if (isRefusal(p)) throw new Error(p.message);
+    expect(p.quote?.close?.words).not.toContain("canceled with it");
+    for (const o of exits()) expect(p.quote?.close?.words).not.toContain(o.id);
+    const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveClose" }>;
+    const closed = await own(rest as NoNonce<OwnerAction>);
+    if (isRefusal(closed) || closed.kind !== "order") throw new Error(`expected an order, got ${code(closed)}`);
+    expect(closed.order).toMatchObject({ side: "sell", qty: 0.01, status: "filled" });
+    // still open, at the account and at the paper account
+    expect(exits().map((o) => o.status)).toEqual(["open", "open"]);
+    const book = JSON.parse(readFileSync(paperBookPath(home, "paper-1"), "utf8")) as PaperBook;
+    expect(Object.values(book.orders).filter((o) => o.parent === sold.order.ref).map((o) => [o.side, o.status])).toEqual([["buy", "open"], ["buy", "open"]]);
+  });
+
+  it("a close that waits leaves the exits guarding what is still held: a stock's market sell queued for the open cancels nothing, and the open that fills it takes them", async () => {
+    const aapl: Listing = { symbol: "AAPL", name: "Apple Inc", kind: "stock", base: "AAPL", quote: "USD", price: 340, bid: 339.95, ask: 340.06, open: true, types: [], venueName: "Cboe · 15 min delayed" };
+    const cboe: PublicSource = { id: "cboe", name: "Cboe", kind: "stocks", connectTo: "alpaca", connector: "live:alpaca", readOnly: "Cboe's own delayed quotes, 15 minutes behind the market: a US stock trades at a connected broker (Alpaca, Robinhood), or in a paper account", listings: async (q) => [aapl].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    // Wednesday 7 October 2026, 11:00 New York: inside the delayed window; the clock is read each time it is asked, so it can move
+    const setup = { sources: [cboe], connect: false, clock: fromEt(2026, 10, 7, 11, 0) };
+    const { svc, own, order, home } = await boot(setup);
+    expect(code(await own({ type: "connectVenue", venue: "paper-stocks", connector: "live:paper", label: "Stocks", credentialRef: "" }))).toBe("account");
+    const entry = await order("paper-stocks", { symbol: "AAPL", side: "buy", orderType: "market", qty: "3", takeProfit: "360", stopLoss: "320" });
+    if (isRefusal(entry) || entry.kind !== "order") throw new Error(`expected an order, got ${code(entry)}`);
+    expect(entry.order).toMatchObject({ status: "filled", qty: 3 });
+    const exits = () => svc.account!.orders.filter((o) => o.exitOf?.order === entry.order.id);
+    const book = () => JSON.parse(readFileSync(paperBookPath(home, "paper-stocks"), "utf8")) as PaperBook;
+    const legs = () => Object.values(book().orders).filter((o) => o.parent === entry.order.ref).map((o) => o.status);
+    const legNotes = () => Object.values(book().orders).filter((o) => o.parent === entry.order.ref).map((o) => o.note);
+    expect(exits().map((o) => [o.exitOf!.kind, o.status])).toEqual([["stop-loss", "open"], ["take-profit", "open"]]);
+    // 17:00 New York: the regular session is over, and the owner closes the holding — a market sell, queued for the open
+    setup.clock = fromEt(2026, 10, 7, 17, 0);
+    const p = await svc.account!.prepare({ type: "liveClose", venue: "paper-stocks", symbol: "AAPL" });
+    if (isRefusal(p)) throw new Error(p.message);
+    const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveClose" }>;
+    const closed = await own(rest as NoNonce<OwnerAction>);
+    if (isRefusal(closed) || closed.kind !== "order") throw new Error(`expected an order, got ${code(closed)}`);
+    expect(closed.order).toMatchObject({ side: "sell", qty: 3, status: "open" });
+    expect(book().orders[closed.order.ref!]?.note).toContain("queued for the open");
+    // the holding is still there until the close fills, and so are its exits: at the account and at the paper account
+    expect(book().holdings["AAPL"]).toMatchObject({ qty: 3 });
+    expect(exits().map((o) => o.status)).toEqual(["open", "open"]);
+    expect(legs()).toEqual(["open", "open"]);
+    // Thursday 10:00 New York: the open fills the close, the holding is sold whole, and the paper account cancels its exits; the account's
+    // look sees them canceled
+    setup.clock = fromEt(2026, 10, 8, 10, 0);
+    expect(await svc.lookAtPaper()).toEqual(["paper-stocks"]);
+    expect(svc.account!.orders.find((o) => o.id === closed.order.id)).toMatchObject({ status: "filled", filledQty: 3 });
+    expect(book().holdings["AAPL"]).toBeUndefined();
+    expect(legs()).toEqual(["canceled", "canceled"]);
+    expect(legNotes()).toEqual([`canceled: what it was to sell is sold (${closed.order.ref})`, `canceled: what it was to sell is sold (${closed.order.ref})`]);
+    expect(exits().map((o) => o.status)).toEqual(["canceled", "canceled"]);
+  });
+
+  it("an exit the venue trimmed to what was left of its holding fills at that size: its order, its worth and its statement line say what filled, not what was placed", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, own, order } = await boot({ sources: [kraken], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const entry = await order("paper-1", { symbol: "BTC/USD", side: "buy", orderType: "market", qty: "0.02", takeProfit: "66000", stopLoss: "57000" });
+    if (isRefusal(entry) || entry.kind !== "order") throw new Error(`expected an order, got ${code(entry)}`);
+    const tp = () => svc.account!.orders.find((o) => o.exitOf?.order === entry.order.id && o.exitOf.kind === "take-profit")!;
+    expect([tp().qty, tp().usd]).toEqual([0.02, 1320]);
+    // half the holding sold by hand: the take-profit, placed for 0.02, has 0.01 left to sell
+    expect(code(await order("paper-1", { symbol: "BTC/USD", side: "sell", orderType: "market", qty: "0.01" }))).toBe("order");
+    btc.price = 66100;
+    btc.bid = 66090;
+    btc.ask = 66110;
+    expect(await svc.lookAtPaper()).toEqual(["paper-1"]);
+    expect(tp()).toMatchObject({ status: "filled", qty: 0.01, filledQty: 0.01, usd: 660, note: expect.stringMatching(/^filled at /) });
+    const line = svc.statement().find((l) => l.id === tp().id)!;
+    expect(line).toMatchObject({ status: "filled", worthUsd: 660 });
+    expect(line.description).toMatch(/^Sell 0\.01 BTC · BTC market · limit 66000 · take-profit of /);
+    expect(line.description).not.toContain("of 0.02 filled");
   });
 
   it("a US stock in a paper account: priced at the public stocks line, filled inside its window through the same door; the Stocks tab's row carries the public line's session and the paper leg", async () => {

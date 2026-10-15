@@ -63,7 +63,119 @@ function page() {
   const run = <T = unknown>(code: string): T => runInContext(code, ctx) as T;
   /** a value out of the page, as plain data */
   const out = <T = any>(code: string): T => JSON.parse(run<string>(`JSON.stringify(${code})`)) as T;
-  return { run, out, set: (name: string, value: unknown) => run(`${name} = ${JSON.stringify(value)}`) };
+  return { run, out, set: (name: string, value: unknown) => run(`${name} = ${JSON.stringify(value)}`), sandbox };
+}
+const settle = async (n = 4) => {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+};
+
+/* ---- a stand-in DOM for one ticket (ui/trade.js tkTicket), so what the owner sees in its panel can be read back ---- */
+type Stub = Record<string, any>;
+const camel = (s: string) => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
+const unesc = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+/** an element as the ticket uses one: each part it looks for is an element of its own, kept by its selector; its HTML is kept as written —
+ * a select's options are read from it (and its value is only ever one of them, as a browser's is), and the buttons a list carries
+ * (data-at, data-money…) are found in it, the same ones until it is written again, so a test presses what the ticket listens to; its
+ * events bubble to its parent */
+function stub(name = "", parent: Stub | null = null): Stub {
+  const kids = new Map<string, Stub>();
+  const on: Record<string, Array<(e: unknown) => void>> = {};
+  const attrs: Record<string, string> = {};
+  let html = "";
+  let value = "";
+  let found = new Map<string, Stub[]>();
+  const el: Stub = {
+    name,
+    parent,
+    kids,
+    on,
+    hidden: false,
+    checked: false,
+    disabled: false,
+    textContent: "",
+    placeholder: "",
+    title: "",
+    className: "",
+    isConnected: true,
+    dataset: {},
+    style: {},
+    options: [] as Stub[],
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    addEventListener(t: string, f: (e: unknown) => void) {
+      (on[t] ??= []).push(f);
+    },
+    removeEventListener() {},
+    dispatchEvent(e: { type: string }) {
+      const ev = { type: e.type, target: el, stopPropagation() {}, preventDefault() {} };
+      for (let n: Stub | null = el; n; n = n.parent) for (const f of n.on[e.type] ?? []) f(ev);
+      return true;
+    },
+    click() {
+      el.dispatchEvent({ type: "click" });
+    },
+    setAttribute(k: string, v: unknown) {
+      attrs[k] = String(v);
+    },
+    getAttribute: (k: string) => attrs[k] ?? null,
+    removeAttribute(k: string) {
+      delete attrs[k];
+    },
+    hasAttribute: (k: string) => k in attrs,
+    querySelector(sel: string) {
+      if (!kids.has(sel)) kids.set(sel, stub(sel, el));
+      return kids.get(sel);
+    },
+    querySelectorAll(sel: string) {
+      const m = /\[data-([a-z-]+)\]/.exec(sel);
+      if (!m) return [];
+      if (!found.has(sel)) found.set(sel, [...html.matchAll(new RegExp(`data-${m[1]}="([^"]*)"`, "g"))].map((x) => Object.assign(stub(sel, el), { dataset: { [camel(m[1]!)]: unesc(x[1]!) } })));
+      return found.get(sel);
+    },
+    contains: () => false,
+    focus() {},
+    closest: () => null,
+  };
+  Object.defineProperty(el, "innerHTML", {
+    get: () => html,
+    set: (v: unknown) => {
+      html = String(v);
+      found = new Map();
+      const opts = [...html.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)];
+      if (!opts.length) return;
+      el.options = opts.map(([, v2, t]) => ({ value: unesc(v2!), textContent: unesc(t!), disabled: false }));
+      if (!el.options.some((o: Stub) => o.value === value)) value = el.options[0].value;
+    },
+  });
+  Object.defineProperty(el, "value", {
+    get: () => value,
+    set: (v: unknown) => {
+      const s = String(v);
+      value = el.options.length && !el.options.some((o: Stub) => o.value === s) ? "" : s;
+    },
+  });
+  return el;
+}
+const CHECKS = new Set(["reduceOnly", "tpsl", "postOnly", "extendedHours"]);
+/** the page with a panel for the ticket: its form's fields by name (a checkbox in FormData only when ticked, as a browser sends it), the
+ * account's reads answered from ANSWERS by path, nothing prepared at the account, no route moved, no terminal pane on the page */
+function ticketPage() {
+  const p = page();
+  const form = stub("form");
+  const named = new Map<string, Stub>();
+  form.elements = new Proxy({}, { get: (_t, k) => (typeof k !== "string" ? undefined : named.get(k) ?? (named.set(k, Object.assign(stub(k, form), { name: k })), named.get(k))) });
+  Object.defineProperty(form, "values", { get: () => Object.fromEntries([...named].filter(([k, e]) => !e.disabled && (!CHECKS.has(k) || e.checked)).map(([k, e]) => [k, CHECKS.has(k) ? "on" : e.value])) });
+  form.elements.unit.innerHTML = '<option value="usd">Dollars</option><option value="qty">Units</option>';
+  form.elements.orderType.innerHTML = '<option value="market">Market</option><option value="limit">Limit</option>';
+  form.elements.trailBy.innerHTML = '<option value="percent">Percent</option><option value="price">Price</option>';
+  form.elements.pct.value = "0";
+  const panel = stub("panel");
+  panel.kids.set("form", form);
+  p.sandbox.PANEL = panel;
+  p.sandbox.FORM = form;
+  p.run(`document.getElementById = () => null; go = () => {}; var ASKED = []; var ANSWERS = {};
+    api = async (path) => { ASKED.push(path); const k = Object.keys(ANSWERS).filter((x) => path.startsWith(x)).sort((a, b) => b.length - a.length)[0]; return k ? ANSWERS[k] : { ok: false, refusal: { message: "not answered in this test" } }; };
+    Owner.prepare = async () => ({ status: 409, body: { refusal: { message: "nothing is prepared in this test" } } });`);
+  return { ...p, panel, form, part: (sel: string): Stub => form.querySelector(sel), field: (name: string): Stub => form.elements[name] };
 }
 
 /* venues as /api/account gives them, cut to what the pane reads */
@@ -155,6 +267,293 @@ describe("the trade terminal (ui/terminal.js): the market bar's figures, its ses
     expect(p.out("TT_TABS.map((t) => t[1])")).toEqual(["Positions", "Open orders", "Trade history"]);
     p.set("A", { ...pageOf([EX]), orders: [{ id: "ord-1", venue: "ex", status: "open" }, { id: "ord-2", venue: "ex", status: "filled" }] });
     expect(p.out("ttOpenCount()")).toBe(1);
+  });
+
+  it("calls a US stock's change what it is — the change since the last regular close, the day's — and a perpetual's or a coin's its 24 hours", () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    q.run('var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) }; TK.got = {};');
+    // Monday 10:00 New York, the change since Friday's close: not a 24-hour figure
+    q.run('TT.at = null; TT.mk = null; TT.item = { key: "stock:AAPL", kind: "stock", base: "AAPL", name: "Apple", price: 250, change24h: 2.5, changePct24h: 1.01 }; ttStats(EL)');
+    const stock = q.out<string>("BOX.innerHTML");
+    expect(stock).toContain("Day change");
+    expect(stock).toContain("+2.5 / +1.01%");
+    expect(stock).not.toContain("24h change");
+    // the venue's market says it is a stock even where the row is another kind's
+    q.run('TT.item = { key: "coin:AAPLX", kind: "coin", base: "AAPL", name: "Apple" }; TT.at = { venue: "alpaca", symbol: "AAPL" }; TT.mk = { kind: "stock", base: "AAPL", quote: "USD", price: 250, changePct24h: 1.01 }; ttStats(EL)');
+    expect(q.out<string>("BOX.innerHTML")).toContain("Day change");
+    q.run('TT.at = null; TT.mk = null; TT.item = { key: "perp:BTC", kind: "perp", base: "BTC", name: "BTC", price: 81900, changePct24h: -1.73 }; ttStats(EL)');
+    expect(q.out<string>("BOX.innerHTML")).toContain("24h change");
+    q.run('TT.item = { key: "coin:ETH", kind: "coin", base: "ETH", name: "ETH", price: 2500, changePct24h: 0.5 }; ttStats(EL)');
+    expect(q.out<string>("BOX.innerHTML")).toContain("24h change");
+  });
+
+  it("keeps reading the bar's market while the owner is on another pane — so it is fresh on the way back — and says when a read failed instead of passing old figures off as live", async () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) };
+      var TIMERS = []; setTimeout = (f) => { TIMERS.push(f); return TIMERS.length; }; clearTimeout = () => {};
+      document.getElementById = (id) => (id === "pane-trade" ? EL : null);
+      var ANSWER = { ok: true, market: { kind: "perp", base: "BTC", quote: "USDT", price: 82000 } }; var ASKED = []; api = async (path) => { ASKED.push(path); return ANSWER; };
+      TK.got = {}; TT.item = { key: "perp:BTC", kind: "perp", base: "BTC", name: "BTC" }; TT.at = { venue: "ex", symbol: "BTC/USDT:USDT" }; TT.mk = { kind: "perp", base: "BTC", quote: "USDT", price: 81000 };
+      ROUTE.tab = "markets"; ttPoll();`);
+    // on Markets: the beat goes on, nothing is asked
+    await q.run("TIMERS.shift()()");
+    expect(q.out("ASKED")).toEqual([]);
+    expect(q.out("TIMERS.length")).toBe(1);
+    // back on Trade: the next beat reads it, and the bar says the venue's figure now
+    q.run('ROUTE.tab = "trade"');
+    await q.run("TIMERS.shift()()");
+    expect(q.out("ASKED")).toEqual(["/api/account/market?venue=ex&symbol=BTC%2FUSDT%3AUSDT"]);
+    expect(q.out<string>("BOX.innerHTML")).toContain("82,000");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // a read refused: the last figures stay, said with when they were read and the venue's own words
+    q.run('ANSWER = { ok: false, refusal: { message: "Exchange did not answer in time" } }');
+    await q.run("TIMERS.shift()()");
+    const said = q.out<string>("BOX.innerHTML");
+    expect(said).toContain("82,000");
+    expect(said).toMatch(/Not read again since \d\d:\d\d New York: Exchange did not answer in time/);
+    // read again: the words go
+    q.run('ANSWER = { ok: true, market: { kind: "perp", base: "BTC", quote: "USDT", price: 82100 } }');
+    await q.run("TIMERS.shift()()");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // no account chosen for it: the bar's figures are the freshest markets read's, not the row as it was when it was picked
+    q.run('TT.at = null; TT.mk = null; TT.item = { key: "coin:SOL", kind: "coin", base: "SOL", name: "SOL", price: 100, changePct24h: 1 }; TK.got = { crypto: { at: Date.now(), items: [{ key: "coin:SOL", kind: "coin", base: "SOL", name: "SOL", price: 120, changePct24h: 3 }] } }; ttStats(EL)');
+    const fresh = q.out<string>("BOX.innerHTML");
+    expect(fresh).toContain(">120<");
+    expect(fresh).toContain("+3.00%");
+    expect(fresh).not.toContain(">100<");
+  });
+
+  it("with no account chosen, reads the row of a market outside the busiest of its kind again on the bar's beat — a search, never the kind's own list — and says when that read failed", async () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    const busiest = [ROW("coin", "BTC")];
+    const zro = (price: number, pct: number) => ({ key: "coin:ZRO", kind: "coin", name: "LayerZero", base: "ZRO", price, changePct24h: pct, at: [] });
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) };
+      var TIMERS = []; setTimeout = (f) => { TIMERS.push(f); return TIMERS.length; }; clearTimeout = () => {};
+      document.getElementById = (id) => (id === "pane-trade" ? EL : null);
+      chMount = () => {}; bkMount = () => {}; chRelease = () => {}; bkRelease = () => {};
+      var ANSWER = { ok: true, items: [${JSON.stringify(zro(2.75, 4))}] }; var ASKED = []; api = async (path) => { ASKED.push(path); return ANSWER; };
+      TK.got = { crypto: { at: Date.now(), items: ${JSON.stringify(busiest)} } }; TT.at = null; TT.mk = null; ROUTE.tab = "trade";`);
+    // found by the picker's search: not one of the twelve busiest the page read for its kind
+    q.run(`ttSetItem(${JSON.stringify(zro(2.4, 1))}, "crypto")`);
+    expect(q.out<string>("BOX.innerHTML")).toContain(">2.4<");
+    expect(q.out("TIMERS.length")).toBe(1);
+    await q.run("TIMERS.shift()()");
+    expect(q.out("ASKED")).toEqual(["/api/account/explore?tab=crypto&q=ZRO&key=coin%3AZRO&limit=12"]);
+    const fresh = q.out<string>("BOX.innerHTML");
+    expect(fresh).toContain(">2.75<");
+    expect(fresh).toContain("+4.00%");
+    expect(fresh).not.toContain(">2.4<");
+    // a search: the kind's own list is left as it was
+    expect(q.out("TK.got.crypto.items.map((x) => x.key)")).toEqual(["coin:BTC"]);
+    // a read refused: the last figures stay, said with when they were read and the source's own words
+    q.run('ANSWER = { ok: false, refusal: { message: "the markets could not be read: Binance did not answer in time" } }');
+    await q.run("TIMERS.shift()()");
+    const said = q.out<string>("BOX.innerHTML");
+    expect(said).toContain(">2.75<");
+    expect(said).toMatch(/Not read again since \d\d:\d\d New York: the markets could not be read: Binance did not answer in time/);
+    // read again and listed: the words go
+    q.run(`ANSWER = { ok: true, items: [${JSON.stringify(zro(2.8, 5))}] }`);
+    await q.run("TIMERS.shift()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain(">2.8<");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // while another pane shows the beat goes on and asks nothing
+    q.run('ROUTE.tab = "markets"; ASKED.length = 0');
+    await q.run("TIMERS.shift()()");
+    expect([q.out("ASKED"), q.out("TIMERS.length")]).toEqual([[], 1]);
+    // another market, never read since it was picked, whose read does not list it: said so, never with the last market's time
+    q.run(`ROUTE.tab = "trade"; ANSWER = { ok: true, items: [] }; ttSetItem({ key: "coin:ABC", kind: "coin", name: "ABC", base: "ABC", price: 3, at: [] }, "crypto")`);
+    await q.run("TIMERS.pop()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain("Not read again since it was picked: the markets read did not list it");
+    // no market: no beat
+    q.run("TIMERS.length = 0; ttSetItem(null)");
+    expect(q.out("TIMERS.length")).toBe(0);
+  });
+
+  it("searches an event's row again by the first words of its question a search may hold, and says no read failed of a row its kind's own read lists, fresh", async () => {
+    const q = page();
+    q.set("A", pageOf([PRED]));
+    // 63 characters: longer than the account takes a search to be
+    const title = "Will the Democrats win the House in the 2026 midterm elections?";
+    expect(title.length).toBe(63);
+    const ev = (price: number) => ({ key: "event:dem-house-2026", kind: "event", name: title, category: "Politics", price, tabs: [], at: [{ venue: "polymarket", venueName: "Polymarket", symbol: "DEM-HOUSE-2026:YES", public: true, connected: false, price }] });
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) };
+      var TIMERS = []; setTimeout = (f) => { TIMERS.push(f); return TIMERS.length; }; clearTimeout = () => {};
+      document.getElementById = (id) => (id === "pane-trade" ? EL : null);
+      chMount = () => {}; bkMount = () => {}; chRelease = () => {}; bkRelease = () => {};
+      var ANSWER = { ok: true, items: [${JSON.stringify(ev(0.64))}] }; var ASKED = [];
+      api = async (path) => { ASKED.push(path); const s = new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("q") || ""; return s.length > 60 ? { ok: false, refusal: { message: "a search is at most 60 characters" } } : ANSWER; };
+      TK.got = { predictions: { at: Date.now(), items: [${JSON.stringify(ev(0.62))}] } }; TT.at = null; TT.mk = null; ROUTE.tab = "trade";`);
+    q.run(`ttSetItem(${JSON.stringify(ev(0.55))}, "predictions")`);
+    await q.run("TIMERS.shift()()");
+    // the beat asked the first whole words of the question, which still find its row (a row is found by a part of its name)
+    const asked = new URLSearchParams(q.out<string[]>("ASKED")[0]!.split("?")[1]).get("q") ?? "";
+    expect(asked.length).toBeLessThanOrEqual(60);
+    expect(asked).toBe("Will the Democrats win the House in the 2026 midterm");
+    expect(title.startsWith(asked)).toBe(true);
+    expect(q.out<string>("BOX.innerHTML")).toContain("64¢");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // its read refused while the kind's own read, read since the beat's last, lists the row: its figures are that read's, fresh, and nothing
+    // failed is said of them
+    q.run(`TK.got = { predictions: { at: TT.readAt + 1, items: [${JSON.stringify(ev(0.62))}] } }; ANSWER = { ok: false, refusal: { message: "Polymarket did not answer in time" } }`);
+    await q.run("TIMERS.shift()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain("62¢");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // no read of its kind lists it: the figures are the beat's last, said with when they were read and the source's words
+    q.run("TK.got = {}");
+    await q.run("TIMERS.shift()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain("64¢");
+    expect(q.out<string>("BOX.innerHTML")).toMatch(/Not read again since \d\d:\d\d New York: Polymarket did not answer in time/);
+  });
+
+  it("keeps the beat's last figures, said as not read again, when its read fails and the kind's read that lists the row is older — as it stands while the account does not answer and the pane is not drawn again", async () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    const coin = (base: string, price: number) => ({ key: `coin:${base}`, kind: "coin", name: base, base, price, at: [] });
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) };
+      var TIMERS = []; setTimeout = (f) => { TIMERS.push(f); return TIMERS.length; }; clearTimeout = () => {};
+      document.getElementById = (id) => (id === "pane-trade" ? EL : null);
+      chMount = () => {}; bkMount = () => {}; chRelease = () => {}; bkRelease = () => {};
+      var ANSWER = { ok: true, items: [${JSON.stringify(coin("ZRO", 2.75))}] }; api = async () => ANSWER;
+      TK.got = { crypto: { at: Date.now() - 10 * 60_000, items: [${JSON.stringify(coin("ZRO", 2.4))}] } }; TT.at = null; TT.mk = null; ROUTE.tab = "trade";`);
+    // the kind's read lists the row, read ten minutes ago; the beat reads it now
+    q.run(`ttSetItem(${JSON.stringify(coin("ZRO", 2.5))}, "crypto")`);
+    await q.run("TIMERS.shift()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain(">2.75<");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // the account stops answering: the beat's read fails, and the kind's read still lists the row, as it was ten minutes ago — the bar keeps
+    // the beat's last figures and says since when, never the older ones as if fresh
+    q.run('ANSWER = { ok: false, error: "Failed to fetch" }');
+    await q.run("TIMERS.shift()()");
+    const said = q.out<string>("BOX.innerHTML");
+    expect(said).toContain(">2.75<");
+    expect(said).not.toContain(">2.4<");
+    expect(said).toMatch(/Not read again since \d\d:\d\d New York: Failed to fetch/);
+    // another market, never read since it was picked, that only that old read lists: said so as well
+    q.run(`TK.got = { crypto: { at: Date.now() - 10 * 60_000, items: [${JSON.stringify(coin("ABC", 3.5))}] } }; ttSetItem(${JSON.stringify(coin("ABC", 3))}, "crypto")`);
+    await q.run("TIMERS.pop()()");
+    expect(q.out<string>("BOX.innerHTML")).toContain("Not read again since it was picked: Failed to fetch");
+    // and the figures under those words are the row as it was picked (3), never that older read's (3.5)
+    expect(q.out<string>("BOX.innerHTML")).toContain(">3<");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain(">3.5<");
+  });
+
+  it("asks for the row by its key with the words, so an event's row is found though twelve busier questions share the first words a search may hold", async () => {
+    const q = page();
+    q.set("A", pageOf([PRED]));
+    // the first words of the question a search may hold (the question is 63 characters), which twelve busier questions begin with too
+    const head = "Will the Democrats win the House in the 2026 midterm";
+    const ev = (key: string, name: string, price: number) => ({ key, kind: "event", name, category: "Politics", price, tabs: [], at: [{ venue: "polymarket", venueName: "Polymarket", symbol: `${key.slice(6).toUpperCase()}:YES`, public: true, connected: false, price }] });
+    const mine = ev("event:dem-house-2026", `${head} elections?`, 0.64);
+    const busier = Array.from({ length: 12 }, (_, i) => ev(`event:dem-house-2026-by-${i + 2}`, `${head} elections by ${i + 2} seats or more?`, 0.3));
+    // the account's explore, as service.ts answers it: a search over 60 characters refused; the rows the words find, busiest first, cut to
+    // the limit — with a key, only the row with that key, before the cut
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) };
+      var TIMERS = []; setTimeout = (f) => { TIMERS.push(f); return TIMERS.length; }; clearTimeout = () => {};
+      document.getElementById = (id) => (id === "pane-trade" ? EL : null);
+      chMount = () => {}; bkMount = () => {}; chRelease = () => {}; bkRelease = () => {};
+      var ROWS = [...${JSON.stringify(busier)}, ${JSON.stringify(mine)}]; var ASKED = [];
+      api = async (path) => { ASKED.push(path); const s = new URLSearchParams(path.slice(path.indexOf("?") + 1)); const words = s.get("q") || ""; if (words.length > 60) return { ok: false, refusal: { message: "a search is at most 60 characters" } }; const found = ROWS.filter((x) => x.name.includes(words)); return { ok: true, items: (s.get("key") ? found.filter((x) => x.key === s.get("key")) : found).slice(0, Number(s.get("limit"))) }; };
+      TK.got = {}; TT.at = null; TT.mk = null; ROUTE.tab = "trade";`);
+    q.run(`ttSetItem(${JSON.stringify(mine)}, "predictions")`);
+    await q.run("TIMERS.shift()()");
+    const asked = new URLSearchParams(q.out<string[]>("ASKED")[0]!.split("?")[1]);
+    expect([asked.get("q"), asked.get("key")]).toEqual([head, "event:dem-house-2026"]);
+    expect(q.out<string>("BOX.innerHTML")).toContain("64¢");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("Not read again");
+    // a row asked for is its own read: never taken for the kind's own list
+    expect(q.out("TK.got")).toEqual({});
+  });
+
+  it("says when the venue's price is from beside its source once it is not the last minute or two's: a real-time source's last trade can be yesterday's", () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    q.run('var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : null) }; TK.got = {};');
+    // pre-market: Nasdaq's real-time last trade is the day before's close
+    q.run('TT.item = { key: "stock:AAPL", kind: "stock", base: "AAPL", name: "Apple" }; TT.at = { venue: "alpaca", symbol: "AAPL" }; TT.mk = { kind: "stock", base: "AAPL", quote: "USD", price: 250, quoteFrom: "Nasdaq · real time", quoteAt: new Date(Date.now() - 16 * 3_600_000).toISOString() }; ttStats(EL)');
+    expect(q.out<string>("BOX.innerHTML")).toMatch(/Nasdaq · real time · last at \d\d:\d\d New York, \w{3} \d{1,2} \w{3}/);
+    // a trade of the last minute or two: its source alone
+    q.run("TT.mk.quoteAt = new Date(Date.now() - 30_000).toISOString(); ttStats(EL)");
+    const recent = q.out<string>("BOX.innerHTML");
+    expect(recent).toContain("Nasdaq · real time");
+    expect(recent).not.toContain("last at");
+    // no time given: its source alone
+    q.run("delete TT.mk.quoteAt; ttStats(EL)");
+    expect(q.out<string>("BOX.innerHTML")).not.toContain("last at");
+  });
+
+  it("names a contract market's book and trades in contracts where one contract is not one coin, as the venue counts them (and an event's in contracts)", () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    q.run(`var BASES = []; var PANE = { querySelector: () => ({ innerHTML: "" }) }; document.getElementById = (id) => (id === "pane-trade" ? PANE : null);
+      chMount = () => {}; chRelease = () => {}; bkRelease = () => {}; bkMount = (el, o) => BASES.push(o.base); ttPoll = () => {}; TT.item = null; TT.at = null; TT.mk = null; TT.mounted = "";`);
+    const okx = { key: "perp:BTC", kind: "perp", base: "BTC", name: "BTC", at: [] };
+    q.run(`ttSetItem(${JSON.stringify(okx)}, "perps"); ttSetMarket({ venue: "okx", symbol: "BTC/USDT:USDT" }, { kind: "perp", base: "BTC", quote: "USDT", contractSize: 0.01 })`);
+    q.run(`ttSetMarket({ venue: "hl", symbol: "BTC-PERP" }, { kind: "perp", base: "BTC", quote: "USDC", contractSize: 1 })`);
+    q.run(`ttSetMarket({ venue: "ex", symbol: "BTC/USDT" }, { kind: "spot", base: "BTC", quote: "USDT" })`);
+    q.run(`ttSetItem({ key: "ev:FED", kind: "event", name: "Fed", at: [] }, "predictions"); ttSetMarket({ venue: "predict", symbol: "FED:YES" }, { kind: "event", base: "FED", quote: "USD" })`);
+    expect(q.out("BASES")).toEqual(["contracts", "BTC", "BTC", "contracts"]);
+    expect(q.out('[tkSizeUnit({ kind: "perp", base: "BTC", contractSize: 0.01 }), tkSizeUnit({ kind: "future", base: "ETH", contractSize: 10 }), tkSizeUnit({ kind: "perp", base: "BTC" }), tkSizeUnit({ kind: "stock", base: "AAPL" }), tkSizeUnit({ kind: "event", base: "FED" })]')).toEqual(["contracts", "contracts", "BTC", "AAPL", "contracts"]);
+  });
+
+  it("says when a venue's positions could not be read — in its own words — and never that nothing is held while one is missing", async () => {
+    const q = page();
+    q.set("A", pageOf([EX, HL]));
+    q.run(`var POSBOX = { innerHTML: "", isConnected: true, addEventListener() {} }; TT.tab = "positions";
+      var ANSWER = { ok: true, positions: [], missing: [{ venue: "hl", venueName: "Hyperliquid", why: "Hyperliquid did not answer in time", code: "E_VENUE_UNREACHABLE", part: "positions" }] }; api = async () => ANSWER;`);
+    q.run("ttPositions(POSBOX, true)");
+    await settle();
+    const html = q.out<string>("POSBOX.innerHTML");
+    expect(html).toContain("<b>Hyperliquid</b> could not be read: Hyperliquid did not answer in time");
+    expect(html).not.toContain("Nothing held in positions.");
+    expect(html).toContain("Nothing held in positions at the venues that answered.");
+    // what the others hold is listed, the one missing named under it
+    q.run('ANSWER = { ...ANSWER, positions: [{ venue: "ex", venueName: "Exchange", symbol: "ETH/USDT:USDT", name: "ETH perpetual", kind: "perp", side: "long", qty: 1, usd: 2500 }] }; POSBOX.innerHTML = ""; ttPositions(POSBOX, true)');
+    await settle();
+    expect(q.out<string>("POSBOX.innerHTML")).toMatch(/ETH perpetual[\s\S]*could not be read: Hyperliquid did not answer in time/);
+    // every venue read, nothing held: said so
+    q.run('ANSWER = { ok: true, positions: [], missing: [] }; ttPositions(POSBOX, true)');
+    await settle();
+    expect(q.out<string>("POSBOX.innerHTML")).toContain("Nothing held in positions.");
+  });
+
+  it("keeps an agent's lens on Trade history and on the Open orders count, as Under way lists them; a paper line stays Paper after its account is gone", async () => {
+    const q = page();
+    q.set("A", { ...pageOf([EX, { ...HL, paper: true }]), keys: [{ address: "0xagent", name: "Bot" }], orders: [{ id: "o1", venue: "ex", status: "open" }, { id: "o2", venue: "ex", status: "open", agent: "0xAgent" }, { id: "o3", venue: "hl", status: "partial" }, { id: "o4", venue: "ex", status: "filled", agent: "0xagent" }] });
+    q.run('view.lens = "agent:0xagent"');
+    expect(q.out("ttOpenCount()")).toBe(1);
+    q.run('view.lens = ""');
+    expect(q.out("ttOpenCount()")).toBe(3);
+    q.run('view.lens = "paper"');
+    expect(q.out("ttOpenCount()")).toBe(1);
+    const line = (id: string, account: string, more: Record<string, unknown> = {}) => ({ key: id, id, type: "trade", kind: "buy", account, accountName: account, description: `Buy 1 ${id}`, amountUsd: -10, status: "filled", by: "You", at: "2026-10-06T12:00:00.000Z", ...more });
+    const lines = [line("MINE", "ex"), line("BOTS", "ex", { by: "Bot, inside its limit", agent: "0xagent", agentName: "Bot" }), line("GONE", "paper-gone", { paper: true })];
+    q.run(`var HBOX = { innerHTML: "", isConnected: true }; TT.tab = "history"; api = async () => ({ ok: true, lines: ${JSON.stringify(lines)} })`);
+    const shown = async (lens: string) => {
+      q.run(`view.lens = ${JSON.stringify(lens)}; HBOX.innerHTML = ""; ttHistory(HBOX)`);
+      await settle();
+      const html = q.out<string>("HBOX.innerHTML");
+      return ["MINE", "BOTS", "GONE"].filter((x) => html.includes(`1 ${x}`));
+    };
+    expect(await shown("agent:0xagent")).toEqual(["BOTS"]);
+    expect(await shown("real")).toEqual(["MINE", "BOTS"]);
+    expect(await shown("paper")).toEqual(["GONE"]);
+    expect(await shown("")).toEqual(["MINE", "BOTS", "GONE"]);
+  });
+
+  it("hears the market button, its panel and the tabs of a frame drawn again (after an error replaced the pane), and the page's Escape and outside click once", () => {
+    const q = page();
+    q.run(`var DOC = []; document.addEventListener = (t) => DOC.push(t);
+      var part = () => { const p = { ls: [], hidden: true, addEventListener(t) { p.ls.push(t); }, setAttribute() {}, querySelector: () => null, contains: () => false }; return p; };
+      var frame = () => { const f = { pop: part(), btn: part(), tabs: part() }; f.querySelector = (s) => (s === "[data-tt-pop]" ? f.pop : s === "[data-tt-pick]" ? f.btn : s === "[data-tt-tabs]" ? f.tabs : null); return f; };
+      var F1 = frame(); var F2 = frame();
+      var PANE = { cur: F1, querySelector(s) { return s === "[data-tp]" ? this.cur : this.cur.querySelector(s); } };
+      ttWire(PANE); ttWire(PANE); PANE.cur = F2; ttWire(PANE);`);
+    expect(q.out("[F1.btn.ls, F1.pop.ls, F1.tabs.ls]")).toEqual([["click"], ["click"], ["click"]]);
+    expect(q.out("[F2.btn.ls, F2.pop.ls, F2.tabs.ls]")).toEqual([["click"], ["click"], ["click"]]);
+    expect(q.out("DOC")).toEqual(["keydown", "click"]);
   });
 });
 
@@ -492,6 +891,315 @@ describe("the six kinds, as the page runs them", () => {
   });
 });
 
+describe("what the ticket says is available to trade, and the slider that sizes from it", () => {
+  const p = page();
+  p.set("A", pageOf([EX]));
+  const av = (v: unknown, m: unknown, o: unknown = {}) => p.out<any>(`tkAvail(${JSON.stringify(v)}, ${JSON.stringify(m)}, ${JSON.stringify(o)})`);
+
+  it("counts only the dollars free to spend: not a paper perpetual's margin and result, not Hyperliquid's margin in use", () => {
+    // $10,000 of paper, $5,000 of it the margin of an open BTC perpetual: $5,000 is there to trade with
+    const paper = venue("paper-1", "Paper", { paper: true, cashUsd: 10000, holdings: [{ asset: "USD", amount: 5000, usd: 5000, class: "cash", note: "paper money" }, { asset: "USD", amount: 5000, usd: 5000, class: "cash", note: "paper margin · long 0.1 BTC-PERP · 5x", freeUsd: 0 }] });
+    expect(av(paper, { kind: "coin", symbol: "ETH/USD", base: "ETH" }).cash).toBe(5000);
+    expect(av(paper, { kind: "perp", symbol: "ETH-PERP", base: "ETH" }, { positions: [] }).cash).toBe(5000);
+    // Hyperliquid's perps account: worth $1,000, $400 of it withdrawable; and $50 on its spot side, another ledger than a perpetual's
+    const hl = venue("hl", "Hyperliquid", { connector: "live:hyperliquid-trade", cashUsd: 1050, holdings: [{ asset: "USDC", amount: 1000, usd: 1000, class: "stable", note: "perps · 400.00 withdrawable", freeUsd: 400 }, { asset: "USDC", amount: 50, usd: 50, class: "stable", note: "spot" }] });
+    expect(av(hl, { kind: "perp", symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", base: "BTC" }, { positions: [] }).cash).toBe(400);
+    // money on its way is not there yet, nor is an exchange's funding account's (an order is paid from its trading account)
+    expect(av(venue("ex", "Exchange", { holdings: [{ asset: "USDT", amount: 300, usd: 300, class: "stable", note: "spot" }, { asset: "USDT", amount: 200, usd: 200, class: "stable", inTransit: true }, { asset: "USDT", amount: 700, usd: 700, class: "stable", note: "funding" }] }), { kind: "spot", symbol: "BTC/USDT", base: "BTC" }).cash).toBe(300);
+    // a wallet's market on one chain is paid from that chain's dollars
+    const wallet = venue("wallet", "Wallet", { holdings: [{ asset: "USDC", amount: 100, usd: 100, class: "stable", note: "Base" }, { asset: "USDC", amount: 500, usd: 500, class: "stable", note: "Arbitrum" }] });
+    expect(av(wallet, { kind: "token", symbol: "WETH/USDC@Base", base: "WETH" }).cash).toBe(100);
+  });
+
+  it("counts at Hyperliquid only the ledger the market is margined or paid from — an ordinary account's perps, each HIP-3 DEX's and spot are apart — and a unified account's for every market", () => {
+    // an ordinary account: the perps account worth $1,000, $400 of it withdrawable; $500 of USDC and 10 HYPE on spot; $300 in a HIP-3 DEX's
+    // own perps account, $120 of it withdrawable (live/hyperliquid-trade.ts balances, through the account's holdings)
+    const lines = [
+      { asset: "USDC", amount: 1000, usd: 1000, class: "stable", note: "perps · 400.00 withdrawable", freeUsd: 400 },
+      { asset: "USDC", amount: 500, usd: 500, class: "stable", note: "spot" },
+      { asset: "USDC", amount: 300, usd: 300, class: "stable", note: "perps · XYZ (HIP-3) · 120.00 withdrawable", freeUsd: 120 },
+      { asset: "HYPE", amount: 10, usd: 400, class: "crypto", note: "spot" },
+    ];
+    const hl = venue("hl", "Hyperliquid", { connector: "live:hyperliquid-trade", cashUsd: 1800, holdings: lines });
+    const btcPerp = { kind: "perp", symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", base: "BTC" };
+    const nvdaPerp = { kind: "perp", symbol: "XYZ-NVDA/USDC:USDC", name: "NVDA perpetual on XYZ (HIP-3, xyz:NVDA)", base: "NVDA" };
+    const hypeSpot = { kind: "spot", symbol: "HYPE/USDC", name: "HYPE/USDC spot", base: "HYPE" };
+    // a BTC perpetual is margined from the perps account alone: $400 withdrawable, not $900 with the spot dollars Hyperliquid would refuse
+    expect(av(hl, btcPerp, { positions: [] }).cash).toBe(400);
+    // a HIP-3 perpetual from its own DEX's account
+    expect(av(hl, nvdaPerp, { positions: [] }).cash).toBe(120);
+    // spot is paid from spot, and what a sell sells is held there
+    const spot = av(hl, hypeSpot);
+    expect([spot.cash, spot.qty]).toEqual([500, 10]);
+    // its testnet's paper account keeps the same ledgers
+    expect(av({ ...hl, connector: "live:hyperliquid-paper" }, btcPerp, { positions: [] }).cash).toBe(400);
+    // a unified account: the spot balances are the whole account, a perpetual's margin and spot's dollars alike ($600 of $800 free)
+    const uni = venue("hl", "Hyperliquid", { connector: "live:hyperliquid-trade", holdings: [{ asset: "USDC", amount: 800, usd: 800, class: "stable", note: "spot and perps · unified account", freeUsd: 600 }, { asset: "HYPE", amount: 10, usd: 400, class: "crypto", note: "spot and perps · unified account" }] });
+    expect(av(uni, btcPerp, { positions: [] }).cash).toBe(600);
+    expect(av(uni, nvdaPerp, { positions: [] }).cash).toBe(600);
+    expect([av(uni, hypeSpot).cash, av(uni, hypeSpot).qty]).toEqual([600, 10]);
+    // another venue's lines are counted as before, whatever their notes say
+    expect(av({ ...hl, connector: "live:exchange:okx" }, btcPerp, { positions: [] }).cash).toBe(1020);
+    // where Hyperliquid gave no withdrawable figure the note is the ledger's name alone, and the line (all of it free) is still that ledger
+    const bare = venue("hl", "Hyperliquid", { connector: "live:hyperliquid-trade", holdings: [{ asset: "USDC", amount: 1000, usd: 1000, class: "stable", note: "perps" }, { asset: "USDC", amount: 500, usd: 500, class: "stable", note: "spot" }, { asset: "USDC", amount: 300, usd: 300, class: "stable", note: "perps · XYZ (HIP-3)" }] });
+    expect(av(bare, btcPerp, { positions: [] }).cash).toBe(1000);
+    expect(av(bare, nvdaPerp, { positions: [] }).cash).toBe(300);
+    expect(av(bare, hypeSpot).cash).toBe(500);
+  });
+
+  it("counts no wallet line for a perpetual at MetaMask — Hyperliquid's, margined in the Hyperliquid account — says where its margin is, and gives nothing to slide; its token markets are still paid from their chain's dollars", () => {
+    // a MetaMask wallet with $1,000 of USDC on Base and nothing read of its Hyperliquid account (adapters/metamask.ts: chain balances only)
+    const mm = venue("mm", "MetaMask", { connector: "live:metamask", cashUsd: 1000, holdings: [{ asset: "USDC", amount: 1000, usd: 1000, class: "stable", note: "Base" }] });
+    const perp = { kind: "perp", symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", base: "BTC", quote: "USDC" };
+    const a = av(mm, perp, { positions: [] });
+    expect([a.cash, a.marginAt]).toEqual([null, "Hyperliquid"]);
+    for (const side of ["buy", "sell"]) {
+      const words = p.out<{ html: string; slider: boolean }>(`tkAvailWords(${JSON.stringify(a)}, ${JSON.stringify(perp)}, ${JSON.stringify(side)}, "MetaMask")`);
+      expect(words.slider).toBe(false);
+      expect(words.html).not.toContain("$1,000");
+      expect(words.html).toContain('<span class="dim">Available to trade</span><span class="tab-nums">—</span>');
+      expect(words.html).toContain("Margined in your Hyperliquid account, not this wallet&#39;s balances");
+      // the position is the venue's positions read, as anywhere
+      expect(words.html).toContain('<span class="dim">Current position</span><span class="tab-nums">0 BTC</span>');
+    }
+    expect(p.out(`tkPctFill(${JSON.stringify(a)}, 0.5)`)).toEqual({ unit: "usd", amount: "" });
+    // the same wallet's token market on Base is paid from Base's dollars
+    const token = av(mm, { kind: "token", symbol: "WETH/USDC@Base", base: "WETH" });
+    expect([token.cash, token.marginAt]).toEqual([1000, undefined]);
+    expect(p.out<{ html: string }>(`tkAvailWords(${JSON.stringify(token)}, { kind: "token", base: "WETH" }, "buy", "MetaMask")`).html).not.toContain("Margined in");
+    // an event there is Polymarket's, paid in pUSD from the Predict deposit wallet (live/metamask.ts): no wallet line pays for it either
+    const event = { kind: "event", symbol: "dem-house-2026:Yes", name: "Democrats win the House?", quote: "USD" };
+    const e = av(mm, event, { positions: [] });
+    expect([e.cash, e.marginAt]).toEqual([null, "Predict deposit"]);
+    const ew = p.out<{ html: string; slider: boolean }>(`tkAvailWords(${JSON.stringify(e)}, ${JSON.stringify(event)}, "buy", "MetaMask")`);
+    expect(ew.slider).toBe(false);
+    expect(ew.html).not.toContain("$1,000");
+    expect(ew.html).toContain("Paid in pUSD from your Predict deposit wallet, not this wallet&#39;s balances");
+  });
+
+  it("counts as held to sell only what can be sold there now: not what is lent out to earn, not a funding account's, not another chain's", () => {
+    const ex = venue("ex", "Exchange", { holdings: [{ asset: "BTC", amount: 0.5, usd: 41000, class: "crypto", note: "spot" }, { asset: "BTC", amount: 1, usd: 82000, class: "earn", note: "Simple Earn" }, { asset: "BTC", amount: 0.2, usd: 16400, class: "crypto", note: "funding" }, { asset: "BTC", amount: 0.1, usd: 8200, class: "crypto", note: "spot", inTransit: true }] });
+    expect(av(ex, { kind: "spot", symbol: "BTC/USDT", base: "BTC" }).qty).toBe(0.5);
+    const wallet = venue("wallet", "Wallet", { holdings: [{ asset: "ETH", amount: 1, usd: 2500, class: "crypto", note: "Base" }, { asset: "ETH", amount: 2, usd: 5000, class: "crypto", note: "Arbitrum" }, { asset: "ETH", amount: 3, usd: 7500, class: "crypto", note: "Ethereum · no price" }] });
+    expect(av(wallet, { kind: "token", symbol: "ETH/USDC@Base", base: "ETH" }).qty).toBe(1);
+    expect(av(wallet, { kind: "token", symbol: "ETH/USDC@Ethereum", base: "ETH" }).qty).toBe(3);
+    // a note that names no chain (a paper account's names its market) keeps its line: a paper token is sold where it is held
+    const paper = venue("paper-1", "Paper", { paper: true, holdings: [{ asset: "OUSG", amount: 4, usd: 440, class: "rwa", note: "paper · OUSG/USDC@Ethereum from Ondo" }] });
+    expect(av(paper, { kind: "token", symbol: "OUSG/USDC@Ethereum", base: "OUSG" }).qty).toBe(4);
+  });
+
+  it("sells only the units free now — a holding's part locked in an order resting at the venue is held, not available — and spends only the dollars free", () => {
+    // 1 BTC held, 0.4 of it in a sell limit resting there; $300 of USDT all held for a buy limit resting there; $100 that says nothing: all free
+    const ex = venue("ex", "Exchange", { holdings: [{ asset: "BTC", amount: 1, usd: 82000, class: "crypto", note: "spot", freeAmount: 0.6 }, { asset: "USDT", amount: 300, usd: 300, class: "stable", note: "spot", freeUsd: 0 }, { asset: "USDT", amount: 100, usd: 100, class: "stable", note: "spot" }, { asset: "ETH", amount: 2, usd: 5000, class: "crypto", note: "spot", freeAmount: 0.5 }] });
+    const btc = { kind: "spot", symbol: "BTC/USDT", base: "BTC" };
+    const a = av(ex, btc);
+    expect([a.qty, a.held, a.cash]).toEqual([0.6, 1, 100]);
+    const sell = p.out<{ html: string; slider: boolean }>(`tkAvailWords(${JSON.stringify(a)}, ${JSON.stringify(btc)}, "sell", "Exchange")`);
+    expect(sell.html).toContain('<span class="dim">Available to trade</span><span class="tab-nums">0.6 BTC</span>');
+    expect(sell.html).toContain('<span class="dim">Current position</span><span class="tab-nums">1 BTC</span>');
+    expect(p.out(`tkPctFill(${JSON.stringify(a)}, 1, { sell: true, qtyStep: 0.00001 })`)).toEqual({ unit: "qty", amount: "0.6" });
+    // a coin paid with is sold from its free units too
+    expect(av(ex, btc, { pay: { asset: "ETH", chain: "spot" } }).coin).toEqual({ asset: "ETH", qty: 0.5 });
+    // all of it locked: held, nothing to sell, nothing to slide
+    const locked = av(venue("ex", "Exchange", { holdings: [{ asset: "BTC", amount: 1, usd: 82000, class: "crypto", freeAmount: 0 }] }), btc);
+    expect([locked.qty, locked.held]).toEqual([0, 1]);
+    expect(p.out<{ slider: boolean }>(`tkAvailWords(${JSON.stringify(locked)}, ${JSON.stringify(btc)}, "sell", "Exchange")`).slider).toBe(false);
+  });
+
+  it("gives no position where the venue's positions were not read — a dash and the venue's words, never a zero — and nothing to slide for a sell", () => {
+    const ex = venue("ex", "Exchange", { holdings: [{ asset: "USDT", amount: 1000, usd: 1000, class: "stable" }] });
+    const unread = av(ex, { kind: "event", symbol: "FED:YES", base: "FED" }, { positions: null, unread: "Exchange did not answer in time" });
+    expect([unread.qty, unread.unread]).toEqual([null, "Exchange did not answer in time"]);
+    const words = p.out<{ html: string; slider: boolean }>(`tkAvailWords(${JSON.stringify(unread)}, { kind: "event", base: "FED" }, "sell", "Exchange")`);
+    expect(words.slider).toBe(false);
+    expect(words.html).toContain("<span class=\"tab-nums\">—</span>");
+    expect(words.html).not.toContain("0 contracts");
+    expect(words.html).toContain("Positions at Exchange could not be read: Exchange did not answer in time");
+    // read, and nothing held: a zero is what the venue said
+    const read = av(ex, { kind: "perp", symbol: "BTC/USDT:USDT", base: "BTC" }, { positions: [] });
+    expect(p.out<{ html: string }>(`tkAvailWords(${JSON.stringify(read)}, { kind: "perp", base: "BTC" }, "buy", "Exchange")`).html).toContain("0 BTC");
+    // a contract market counted in contracts where one is not one coin (OKX's BTC swap, 0.01 BTC a contract)
+    const okx = av(ex, { kind: "perp", symbol: "BTC/USDT:USDT", base: "BTC", contractSize: 0.01 }, { positions: [{ venue: "ex", symbol: "BTC/USDT:USDT", qty: 5, side: "long" }] });
+    expect(p.out<{ html: string }>(`tkAvailWords(${JSON.stringify(okx)}, { kind: "perp", base: "BTC", contractSize: 0.01 }, "buy", "OKX")`).html).toContain("Long 5 contracts");
+  });
+
+  it("sizes from what is there: dollars for a buy, the holding for a sell, and — paying with a coin held — that coin, in its own units", () => {
+    const ex = venue("ex", "Exchange", { holdings: [{ asset: "USDT", amount: 1000, usd: 1000, class: "stable" }, { asset: "ETH", amount: 2, usd: 5000, class: "crypto" }, { asset: "BTC", amount: 0.5, usd: 41000, class: "crypto" }] });
+    const coin = av(ex, { kind: "spot", symbol: "BTC/USDT", base: "BTC" }, { pay: { asset: "ETH", chain: "" } });
+    expect(coin.coin).toEqual({ asset: "ETH", qty: 2 });
+    expect(p.out<{ html: string; slider: boolean }>(`tkAvailWords(${JSON.stringify(coin)}, { kind: "spot", base: "BTC" }, "buy", "Exchange")`)).toMatchObject({ slider: true, html: expect.stringContaining("2 ETH") });
+    expect(p.out(`tkPctFill(${JSON.stringify(coin)}, 0.5, { coinStep: 0.0001 })`)).toEqual({ unit: "qty", amount: "1" });
+    expect(p.out(`tkPctFill(${JSON.stringify(coin)}, 0.333, { coinStep: 0.0001 })`)).toEqual({ unit: "qty", amount: "0.666" });
+    const plain = av(ex, { kind: "spot", symbol: "BTC/USDT", base: "BTC" });
+    expect(p.out(`tkPctFill(${JSON.stringify(plain)}, 0.5)`)).toEqual({ unit: "usd", amount: "500" });
+    expect(p.out(`tkPctFill(${JSON.stringify(plain)}, 0.5, { sell: true, qtyStep: 0.001 })`)).toEqual({ unit: "qty", amount: "0.25" });
+    expect(p.out(`tkPctFill(${JSON.stringify(plain)}, 0)`)).toEqual({ unit: "usd", amount: "" });
+  });
+});
+
+describe("the ticket in its panel, as the owner uses it", () => {
+  const BTCP = { key: "perp:BTC", kind: "perp", name: "BTC perpetual", base: "BTC", price: 82000, tabs: [], at: [{ venue: "ex", venueName: "Exchange", symbol: "BTC/USDT:USDT", connected: true, canTrade: true, public: false, price: 82000 }, { venue: "hl", venueName: "Hyperliquid", symbol: "BTC-PERP", connected: true, canTrade: true, public: false, price: 82010 }] };
+  const PERP_EX = { symbol: "BTC/USDT:USDT", name: "BTC perpetual", kind: "perp", base: "BTC", quote: "USDT", price: 82000, open: true, types: ["market", "limit"], reduceOnly: true, postOnly: true, tifs: ["gtc"], contractSize: 1 };
+  const PERP_HL = { symbol: "BTC-PERP", name: "BTC perpetual", kind: "perp", base: "BTC", quote: "USDC", price: 82010, open: true, types: ["market", "limit"], contractSize: 1 };
+  const open = async (t: ReturnType<typeof ticketPage>, kind: string, preset: Record<string, unknown>) => {
+    t.set("ITEM", preset.item);
+    t.run(`TK.kind = ${JSON.stringify(kind)}; tkTicket(PANEL, ${JSON.stringify(kind)}, { ...${JSON.stringify({ ...preset, item: undefined })}, item: ITEM })`);
+    await settle();
+  };
+  const avail = (t: ReturnType<typeof ticketPage>) => String(t.part("[data-avail]").innerHTML);
+
+  it("unticks Reduce only (and Post-only) when the order moves to a venue whose market takes none, so neither is sent from a hidden box", async () => {
+    const t = ticketPage();
+    t.set("A", pageOf([EX, HL]));
+    t.run(`ANSWERS["/api/account/market?venue=ex"] = { ok: true, market: ${JSON.stringify(PERP_EX)} }; ANSWERS["/api/account/market?venue=hl"] = { ok: true, market: ${JSON.stringify(PERP_HL)} }; ANSWERS["/api/account/positions"] = { ok: true, positions: [], missing: [] };`);
+    await open(t, "perps", { item: BTCP, venue: "ex", symbol: "BTC/USDT:USDT", side: "buy" });
+    expect(t.part("[data-reduce]").hidden).toBe(false);
+    t.field("reduceOnly").checked = true;
+    t.field("postOnly").checked = true;
+    t.field("orderType").value = "limit";
+    expect(t.out("tkOrderDraft(formFields(FORM), { venue: 'ex', symbol: 'BTC/USDT:USDT', side: 'buy', event: false })")).toMatchObject({ reduceOnly: "true", postOnly: "true" });
+    // Hyperliquid's line in Where: its market takes neither
+    const i = t.out<number>("tkWhereRows(ITEM, null, 'perps').findIndex((r) => r.venue === 'hl')");
+    t.part("[data-where]").querySelectorAll("button[data-at]").find((b: Stub) => b.dataset.at === String(i)).click();
+    await settle();
+    expect(t.part("[data-reduce]").hidden).toBe(true);
+    expect([t.field("reduceOnly").checked, t.field("postOnly").checked]).toEqual([false, false]);
+    expect(t.out("tkOrderDraft(formFields(FORM), { venue: 'hl', symbol: 'BTC-PERP', side: 'buy', event: false })")).toMatchObject({ orderType: "limit", reduceOnly: "", postOnly: "" });
+  });
+
+  it("draws what is available and the position held again when the account is read again (a fill), not only when the market is picked", async () => {
+    const t = ticketPage();
+    const ex = (usd: number) => ({ ...EX, cashUsd: usd, holdings: [{ asset: "USDT", amount: usd, usd, class: "stable" }] });
+    t.set("A", pageOf([ex(1000), HL]));
+    t.run(`ANSWERS["/api/account/market?venue=ex"] = { ok: true, market: ${JSON.stringify(PERP_EX)} }; ANSWERS["/api/account/positions"] = { ok: true, positions: [], missing: [] };`);
+    await open(t, "perps", { item: BTCP, venue: "ex", symbol: "BTC/USDT:USDT", side: "buy" });
+    expect(avail(t)).toContain("$1,000.00");
+    expect(avail(t)).toContain("0 BTC");
+    // the order filled: the account's next read has less cash, the venue's positions the new one
+    t.set("A", pageOf([ex(900), HL]));
+    t.run('ANSWERS["/api/account/positions"] = { ok: true, positions: [{ venue: "ex", symbol: "BTC/USDT:USDT", kind: "perp", qty: 0.5, side: "long" }], missing: [] }; TK.refreshAvail()');
+    await settle();
+    expect(avail(t)).toContain("$900.00");
+    expect(avail(t)).toContain("Long 0.5 BTC");
+    // every read of the account reaches it: the pane asks the ticket on each render
+    const q = page();
+    q.set("A", pageOf([EX]));
+    q.run("tkDrawPane = () => {}; ttDraw = () => {}; var N = 0; TK.refreshAvail = () => N++; renderTrade({ el: { querySelector: () => ({}) }, owner: true, lens: lensNow(), params: {} })");
+    expect(q.out("N")).toBe(1);
+    // a placed order drops the positions kept, so the read after it is the venue's new one
+    const submit = source("ui/trade.js").slice(source("ui/trade.js").indexOf('form.addEventListener("submit"'));
+    expect(submit.slice(0, submit.indexOf("await load()"))).toContain('forget("/api/account/positions")');
+  });
+
+  it("shows no position where the venue's positions could not be read — its words instead — and says nothing of what is held there", async () => {
+    const t = ticketPage();
+    t.set("A", pageOf([{ ...EX, cashUsd: 1000, holdings: [{ asset: "USDT", amount: 1000, usd: 1000, class: "stable" }] }, HL]));
+    t.run(`ANSWERS["/api/account/market?venue=ex"] = { ok: true, market: ${JSON.stringify(PERP_EX)} }; ANSWERS["/api/account/positions"] = { ok: true, positions: [], missing: [{ venue: "ex", venueName: "Exchange", why: "Exchange did not answer in time", code: "E_VENUE_UNREACHABLE", part: "positions" }] };`);
+    await open(t, "perps", { item: BTCP, venue: "ex", symbol: "BTC/USDT:USDT", side: "buy" });
+    expect(avail(t)).not.toContain("0 BTC");
+    expect(avail(t)).toContain("Positions at Exchange could not be read: Exchange did not answer in time");
+    expect(String(t.part("[data-kb]").innerHTML)).not.toContain("Nothing held here yet");
+  });
+
+  it("sizes a buy paid with a coin held in that coin: the slider writes how much of it is sold, never dollars into the coin's amount", async () => {
+    const t = ticketPage();
+    t.set("A", pageOf([{ ...EX, cashUsd: 1000, holdings: [{ asset: "USDT", amount: 1000, usd: 1000, class: "stable" }, { asset: "ETH", amount: 2, usd: 5000, class: "crypto" }] }]));
+    const markets = [{ symbol: "BTC/USDT", kind: "spot", base: "BTC", quote: "USDT", open: true, qtyStep: 0.00001 }, { symbol: "ETH/USDT", kind: "spot", base: "ETH", quote: "USDT", open: true, qtyStep: 0.0001 }];
+    t.run(`ANSWERS["/api/account/market?venue=ex"] = { ok: true, market: { symbol: "BTC/USDT", name: "BTC", kind: "spot", base: "BTC", quote: "USDT", price: 82000, open: true, types: ["market"], qtyStep: 0.00001 } }; ANSWERS["/api/account/markets"] = { ok: true, markets: ${JSON.stringify(markets)} };`);
+    await open(t, "crypto", { item: ROW("coin", "BTC"), venue: "ex", symbol: "BTC/USDT", side: "buy" });
+    expect(avail(t)).toContain("$1,000.00");
+    t.field("pay").value = "ETH|";
+    t.field("pay").dispatchEvent({ type: "change" });
+    await settle();
+    expect(t.field("unit").options.map((o: Stub) => o.value)).toEqual(["qty"]);
+    expect(avail(t)).toContain("2 ETH");
+    t.field("pct").value = "50";
+    t.field("pct").dispatchEvent({ type: "input" });
+    expect([t.field("unit").value, t.field("amount").value]).toEqual(["qty", "1"]);
+  });
+
+  it("looks the market up again once an account that trades it is there (after Connect to trade) by the words a search may hold and its key — an event's long question cut to them — and picks that account", async () => {
+    const t = ticketPage();
+    t.set("A", pageOf([PRED]));
+    // 63 characters: longer than the account takes a search to be
+    const title = "Will the Democrats win the House in the 2026 midterm elections?";
+    expect(title.length).toBe(63);
+    const before = { key: "event:dem-house-2026", kind: "event", name: title, category: "Politics", price: 0.62, tabs: [], at: [{ venue: "polymarket", venueName: "Polymarket", symbol: "DEM-HOUSE-2026:YES", public: true, connected: false, price: 0.62, connector: "live:polymarket" }] };
+    // read again: an account of yours lists it now
+    const again = { ...before, at: [{ venue: "predict", venueName: "Predictions", symbol: "DEM-HOUSE-2026:YES", connected: true, canTrade: true, public: false, price: 0.62 }] };
+    t.run(`var AGAIN = ${JSON.stringify(again)};
+      api = async (path) => { ASKED.push(path); if (!path.startsWith("/api/account/explore?")) return { ok: false, refusal: { message: "not answered in this test" } }; const words = new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("q") || ""; return words.length > 60 ? { ok: false, refusal: { message: "a search is at most 60 characters" } } : { ok: true, items: [AGAIN] }; };`);
+    await open(t, "predictions", { item: before, side: "buy" });
+    // only a public venue lists it: nowhere to place it yet
+    expect(t.part("[data-body]").hidden).toBe(true);
+    t.run("ASKED.length = 0; TK.refindIdle()");
+    await settle();
+    const asked = new URLSearchParams(t.out<string[]>("ASKED").find((x) => x.startsWith("/api/account/explore?"))!.split("?")[1]);
+    expect((asked.get("q") ?? "").length).toBeLessThanOrEqual(60);
+    expect(asked.get("q")).toBe("Will the Democrats win the House in the 2026 midterm");
+    expect(asked.get("key")).toBe("event:dem-house-2026");
+    // found again: the account that trades it now is picked, and its market read there
+    expect(t.part("[data-body]").hidden).toBe(false);
+    expect(t.out<string[]>("ASKED")).toContain("/api/account/market?venue=predict&symbol=DEM-HOUSE-2026%3AYES");
+  });
+
+  it("opened with no market (the 't' key, a venue's Trade) shows its search, and the bar, chart and book let go of the last market", () => {
+    const t = ticketPage();
+    t.set("A", pageOf([EX]));
+    t.run('var SET = []; ttSetItem = (x) => SET.push(x); TK.kind = "crypto"; tkTicket(PANEL, "crypto", {}); tkTicket(PANEL, "crypto", { venue: "ex" })');
+    expect(t.out("SET")).toEqual([null, null]);
+    expect(t.part("[data-find]").hidden).toBe(false);
+    // the terminal sets aside the ticket's own head and its picked row (the bar names the market) — never its search, nor the composer's close
+    const css = source("ui/terminal.css");
+    expect(css).not.toMatch(/\.tt-order \.tk-find[^{]*\{[^}]*display: none/);
+    expect(css).toContain(".tt-order .tk-h:has([data-tk-close])");
+  });
+
+  it("starts on the busiest market by itself only while none has shown on the frame and the owner opened nothing: a ticket opened on no market afterwards stays as it was opened", () => {
+    const t = ticketPage();
+    t.set("A", pageOf([EX]));
+    t.run(`var OPENED = []; tkOpen = (x) => OPENED.push(x); chRelease = () => {}; bkRelease = () => {};
+      var PANE = { querySelector: (s) => (s === "[data-tp]" ? null : { innerHTML: "" }), querySelectorAll: () => [] };
+      TK.kind = "crypto"; TK.pending = null;
+      var FRAME = () => { TT.started = false; TT.item = null; TT.at = null; OPENED.length = 0; TK.got = { crypto: { at: Date.now(), items: [${JSON.stringify(ROW("coin", "BTC"))}] } }; };`);
+    // a new frame, the panel at rest on no market: the pane starts on the busiest of the kind, at rest
+    t.run('FRAME(); tkTicket(PANEL, "crypto", { kind: "crypto", rest: true }); ttDraw(PANE, true)');
+    expect(t.out("OPENED.map((x) => [x.item.key, x.rest])")).toEqual([["coin:BTC", true]]);
+    // the frame's first market came from a Markets row; then the owner pressed "t": the ticket on no market is not replaced
+    t.run(`FRAME(); ttSetItem(${JSON.stringify(ROW("coin", "ETH"))}, "crypto"); tkTicket(PANEL, "crypto", {}); ttDraw(PANE, true)`);
+    expect(t.out("[OPENED, TT.item]")).toEqual([[], null]);
+    // a market has shown, then the ticket is closed back to rest: nothing is picked by itself either
+    t.run(`FRAME(); ttSetItem(${JSON.stringify(ROW("coin", "ETH"))}, "crypto"); tkTicket(PANEL, "crypto", { kind: "crypto", rest: true }); ttDraw(PANE, true)`);
+    expect(t.out("OPENED")).toEqual([]);
+    // nothing shown yet, the owner pressed "t" (or a venue's Trade) first: their ticket stays
+    t.run('FRAME(); tkTicket(PANEL, "crypto", {}); ttDraw(PANE, true)');
+    expect(t.out("OPENED")).toEqual([]);
+    t.run('FRAME(); tkTicket(PANEL, "crypto", { venue: "ex" }); ttDraw(PANE, true)');
+    expect(t.out("OPENED")).toEqual([]);
+  });
+
+  it("leaves a ticket the owner opened on a market still being looked up as it was opened: a kind's read landing meanwhile starts nothing over it", () => {
+    const t = ticketPage();
+    t.set("A", pageOf([EX]));
+    t.run(`var OPENED = []; tkOpen = (x) => OPENED.push(x); chRelease = () => {}; bkRelease = () => {};
+      var PANE = { querySelector: (s) => (s === "[data-tp]" ? null : { innerHTML: "" }), querySelectorAll: () => [] };
+      TK.kind = "crypto"; TK.pending = null;
+      // the venue's market is still being read: its answer does not come in this test
+      var ANSWERED = api; api = (path) => (path.startsWith("/api/account/market?") ? new Promise(() => {}) : ANSWERED(path));
+      var FRAME = () => { TT.started = false; TT.item = null; TT.at = null; OPENED.length = 0; TK.got = {}; };
+      var LANDS = () => { TK.got = { crypto: { at: Date.now(), items: [${JSON.stringify(ROW("coin", "BTC"))}] } }; };`);
+    // a new frame at rest, then Markets' Buy (a venue and its symbol, no row), looked up; the kind's read lands and the pane is drawn
+    t.run('FRAME(); tkTicket(PANEL, "crypto", { kind: "crypto", rest: true }); tkTicket(PANEL, "crypto", { kind: "crypto", venue: "ex", symbol: "ETH/USDT", side: "buy" }); LANDS(); ttDraw(PANE, true)');
+    expect(t.out("OPENED")).toEqual([]);
+    // a ticket kept in this browser, opened again at rest on its market: the same
+    t.run('FRAME(); tkTicket(PANEL, "crypto", { kind: "crypto", rest: true }); tkTicket(PANEL, "crypto", { kind: "crypto", venue: "ex", symbol: "ETH/USDT", side: "buy", amount: "25", rest: true }); LANDS(); ttDraw(PANE, true)');
+    expect(t.out("OPENED")).toEqual([]);
+    // the panel at rest on no market, on a new frame: the pane still starts on the busiest of the kind
+    t.run('FRAME(); tkTicket(PANEL, "crypto", { kind: "crypto", rest: true }); LANDS(); ttDraw(PANE, true)');
+    expect(t.out("OPENED.map((x) => [x.item.key, x.rest])")).toEqual([["coin:BTC", true]]);
+  });
+});
+
 describe("the ticket at rest leaves the page refreshing", () => {
   it("opens the resting ticket on the kind showing without taking the focus, and its search counts as the page's own (data-live), so a cursor in it does not stop the refresh", () => {
     const p = page();
@@ -628,6 +1336,29 @@ describe("a ticket kept in this browser", () => {
     expect(await dropped(`STORE['account.ticket'] = JSON.stringify({ ...${JSON.stringify({ ...DRAFT, kind: undefined })}, variant: "earn", at: Date.now() })`)).toEqual([0, false]);
     expect(await dropped(`STORE['account.ticket'] = JSON.stringify({ ...${JSON.stringify({ ...DRAFT, kind: "nothing" })}, at: Date.now() })`)).toEqual([0, false]);
     expect(await dropped("STORE['account.ticket'] = '{not json'")).toEqual([0, false]);
+  });
+
+  it("holds the pane's own start while its market is read — the pane drawn meanwhile with the kinds' reads already in starts nothing over it — and, dropped, gives the pane back to start on the busiest", async () => {
+    const p = kept();
+    // a new frame as renderTrade opens one: the panel at rest, the draft looked at, the pane drawn — the busiest crypto row read already
+    // (shell.js reads the kinds ahead); the venue's market answers a tick later
+    p.run(`tkOpen = (preset) => { TK.gen++; OPENED.push(preset); }; chRelease = () => {}; bkRelease = () => {}; tkDrawPane = () => {};
+      var PANE = { querySelector: (s) => (s === "[data-tp]" ? { ttWired: true } : { innerHTML: "" }), querySelectorAll: () => [] };
+      document.getElementById = (id) => (id === "pane-trade" ? PANE : { id });
+      ROUTE.tab = "trade"; TK.kind = "crypto"; TK.pending = null;
+      var LOOK = null;
+      var FRAME = () => { TT.started = false; TT.item = null; TT.at = null; OPENED = []; TK.draftLooked = false; TK.got = { crypto: { at: Date.now(), items: [${JSON.stringify(ROW("coin", "ETH"))}] } }; };
+      var NEW_FRAME = () => { FRAME(); tkDraftKeep(${JSON.stringify(DRAFT)}); tkRest(); LOOK = tkReopenDraft(); ttDraw(PANE, true); };`);
+    p.run("NEW_FRAME()");
+    expect(p.out("OPENED")).toEqual([{ kind: "crypto", rest: true }]);
+    await p.run("LOOK");
+    // only the draft opens, at rest
+    expect(p.out("OPENED")).toEqual([{ kind: "crypto", rest: true }, { ...DRAFT, rest: true }]);
+    // its market gone instead: the draft is dropped, and the pane starts on the busiest of its kind after all
+    p.run('MARKET = { ok: false, refusal: { code: "E_VENUE_NO_MARKET", message: "Exchange lists no BTC/USDT" } }; NEW_FRAME()');
+    await p.run("LOOK");
+    expect(p.out("OPENED.map((x) => [x.item ? x.item.key : '', !!x.rest])")).toEqual([["", true], ["coin:ETH", true]]);
+    expect(p.out("'account.ticket' in STORE")).toBe(false);
   });
 
   it("gives way to a ticket opened meanwhile, and is kept for later; storage that is off opens nothing and breaks nothing; the markets picked are remembered per kind", async () => {

@@ -200,7 +200,8 @@ export interface OrderBook {
    * — the source has a book the account does not read (an exchange's pre-IPO contract, xStocks at Gate, a venue connected whose trader
    * reads no book). Absent: taken as `unread` */
   topOnly?: "none" | "unread" | undefined;
-  /** a "top" book whose quote carries no time of its own and came from a list kept a while (a public listing: ninety seconds): how old the
+  /** a "top" book whose quote carries no time of its own and came from a list kept a while (a public listing: up to a hundred and ten
+   * seconds — its source keeps the quote ninety, the service the listing twenty more — and a paper account's market three more): how old the
    * quote may be at most, in ms — `at` is then when it was read here, not when it was quoted */
   upToMs?: number | undefined;
 }

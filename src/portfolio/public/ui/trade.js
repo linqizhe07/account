@@ -240,6 +240,8 @@ function renderTrade({ el, owner, lens, params }) {
     TK.pending = null;
     tkOpen(p);
   }
+  // every read of the account comes through here (a fill included): the ticket's Available to trade and Current position follow it
+  if (typeof TK.refreshAvail === "function") TK.refreshAvail();
   void params;
 }
 
@@ -302,15 +304,29 @@ function tkSetKind(id) {
 
 const TK_READ_MS = 15_000;
 /** one kind's rows — the connected venues' markets and the public venues' listings, busiest first (GET /api/account/explore?tab=<kind>);
- * with `q`, those matching it. A refusal (a kind this server does not know yet) is an empty list and no toast: the kind has no rows */
-async function tkReadKind(kind, q = "") {
-  const body = await api(`/api/account/explore?${new URLSearchParams({ tab: kind, ...(q ? { q } : {}), limit: "12" })}`, { ttl: TK_READ_MS });
+ * with `q`, those matching it; with `key`, the row with that key alone, asked for before the list is cut to its twelve (a row whose words
+ * twelve busier rows share is still found). Only the kind's own read (neither asked) is kept as the kind's (TK.got): a search or a row
+ * asked for is its own read, kept apart by its address. A refusal (a kind this server does not know yet) is an empty list and no toast:
+ * the kind has no rows */
+async function tkReadKind(kind, q = "", key = "") {
+  const body = await api(`/api/account/explore?${new URLSearchParams({ tab: kind, ...(q ? { q } : {}), ...(key ? { key } : {}), limit: "12" })}`, { ttl: TK_READ_MS });
   const ok = !!body && body.ok !== false;
   const spec = tkKindSpec(kind);
   const items = ok ? (body.items || []).filter((x) => spec.explore.includes(x.kind) && (kind === "preipo" ? tkPre(x) : kind === "perps" ? !tkPre(x) : true)) : [];
   const got = { at: Date.now(), items, missing: ok ? (body.missing || []).filter((m) => m.said || m.code === "E_VENUE_GEOBLOCKED") : [], refused: ok ? "" : refusalOf(body) };
-  if (!q) TK.got[kind] = got;
+  if (!q && !key) TK.got[kind] = got;
   return got;
+}
+/* what a market's row is searched again by (the terminal's beat, ui/terminal.js ttPoll; the ticket's refind after "Connect to trade"): its
+   base, else its name — an event's whole question, which may be longer than a search may be (the account refuses one over 60 characters:
+   GET /api/account/explore), cut at the last word that fits. A row is found by a part of its name, so the first words of its question still
+   find it; its key, asked with them, picks it out of the rows those words find */
+const TK_Q_MAX = 60;
+function tkQueryOf(item) {
+  const words = String((item && (item.base || item.name)) || "").trim();
+  if (words.length <= TK_Q_MAX) return words;
+  const cut = words.slice(0, TK_Q_MAX + 1).replace(/\s+\S*$/, "").trim();
+  return (cut || words).slice(0, TK_Q_MAX);
 }
 /* every kind read once in a while (each kept 15 s), the kind showing first: the seg shows a kind as soon as its rows are known */
 const TK_READING = new Set();
@@ -548,7 +564,10 @@ function tkDraftKeep(d) {
   }
 }
 /** a draft kept from an earlier visit: opened again, at rest (nothing takes the focus), only if its venue is still connected and still
- * lists its market; otherwise dropped without a word. A ticket opened meanwhile wins */
+ * lists its market; otherwise dropped without a word. A ticket opened meanwhile wins. While its market is read, the frame is the draft's:
+ * the terminal does not start on the busiest market of its own over it (ui/terminal.js ttDraw) — the pane is drawn as the draft's read is
+ * on its way, and the kinds' reads are often in already (shell.js reads them ahead). A draft dropped with nothing else opened meanwhile
+ * gives the frame back: the pane drawn again starts on the busiest market of its kind */
 async function tkReopenDraft() {
   if (TK.draftLooked) return;
   TK.draftLooked = true;
@@ -556,9 +575,17 @@ async function tkReopenDraft() {
   if (!d) return void tkDraftKeep(null);
   const v = A.venues.find((x) => x.id === d.venue && x.live);
   if (!v || !canTrade(v)) return void tkDraftKeep(null);
+  if (typeof TT === "object") TT.started = true;
   const gen = TK.gen;
   const body = await api(`/api/account/market?${new URLSearchParams({ venue: d.venue, symbol: d.symbol })}`, { ttl: 3_000 });
-  if (!body || body.ok === false || !body.market) return void tkDraftKeep(null);
+  if (!body || body.ok === false || !body.market) {
+    tkDraftKeep(null);
+    if (gen === TK.gen && typeof TT === "object" && !TT.item) {
+      TT.started = false;
+      paneLater("trade", tkRedraw);
+    }
+    return;
+  }
   if (gen !== TK.gen || !$("tk-panel")) return;
   TK.kind = d.kind;
   tkOpen({ ...d, rest: true });
@@ -641,6 +668,111 @@ function tkOrderDraft(f, { venue, symbol, side, event }) {
   return { type: "liveOrder", venue, symbol, side, orderType: t, ...(f.unit === "qty" ? { qty: amount } : { usd: amount }), limitPrice: TK_LIMITED.includes(t) ? tkPriceIn(f.limitPrice, event) : "", stopPrice: TK_STOPPED.includes(t) ? tkPriceIn(f.stopPrice, event) : "", tif: f.tif || "", postOnly: t === "limit" && f.postOnly ? "true" : "", reduceOnly: f.reduceOnly ? "true" : "", extendedHours: t === "limit" && f.extendedHours ? "true" : "", trailPercent: t === "trailing_stop" && f.trailBy !== "price" ? trail : "", trailPrice: t === "trailing_stop" && f.trailBy === "price" ? trail : "", takeProfit: exits ? String(f.takeProfit || "").trim() : "", stopLoss: exits ? String(f.stopLoss || "").trim() : "" };
 }
 
+/* what a market's sizes are counted in where it trades — its order book, its trades, a position held in it: an event's contracts; a
+   contract market's contracts where one contract is not one coin (OKX's BTC swap is 0.01 BTC a contract, and OKX counts its book, its trades
+   and a position in contracts); else the coin or the share itself */
+const tkSizeUnit = (m) => (!m ? "" : m.kind === "event" || (Number(m.contractSize) > 0 && Number(m.contractSize) !== 1) ? "contracts" : m.base || "");
+/* the chain a wallet's holding is on: the first words of its note ("Base", "Ethereum · no price") */
+const tkNoteChain = (note) => String(note || "").split(" · ")[0].trim().toLowerCase();
+/* Hyperliquid's connections — to trade, its testnet's paper account, by address — whose lines are its ledgers, each named by its note
+   (live/hyperliquid-trade.ts and live/address.ts balances): on an ordinary account the perps account ("perps · 400.00 withdrawable", or
+   "perps" where Hyperliquid gave no withdrawable figure), each HIP-3 DEX's own perps account ("perps · <the DEX's name> (HIP-3) · …
+   withdrawable", or without the figure) and spot ("spot", "spot · UBTC on …") are
+   apart, and nothing moves between them for an order; under a unified account or portfolio margin the spot balances are the whole
+   account ("spot and perps · unified account", "spot · one account with the perps (unified)") */
+const TK_HL_CONNECTORS = ["live:hyperliquid-trade", "live:hyperliquid-paper", "live:hyperliquid"];
+/* a Hyperliquid line is of the ledger market `m` is margined or paid from: a unified account's for every market; a HIP-3 perpetual's, its
+   DEX's (the market's name says which: "NVDA perpetual on <the DEX's name> (HIP-3, xyz:NVDA)"); another perpetual's, the perps account's;
+   a spot market's, the spot balances */
+function tkHlLedger(h, m) {
+  const note = String(h.note || "");
+  if (/\bunified\b/.test(note)) return true;
+  if (m.kind === "perp" || m.kind === "future") {
+    const dex = /\bperpetual on (.+) \(HIP-3, [^)]*\)$/.exec(String(m.name || ""));
+    // the withdrawable part is there only where Hyperliquid gave one: "perps" and "perps · <DEX> (HIP-3)" alone are the same ledgers
+    return dex ? note === `perps · ${dex[1]} (HIP-3)` || note.startsWith(`perps · ${dex[1]} (HIP-3) · `) : /^perps(?:$| · -?[\d.]+ withdrawable\b)/.test(note);
+  }
+  return tkNoteChain(note) === "spot";
+}
+
+/** WHAT IS AVAILABLE TO TRADE at venue `v` in market `m`, from the account's read of the venue. Only what is at hand for an order there
+ * counts: never money on its way, nothing lent out to earn, nothing waiting in an exchange's funding account (its note: "funding"), and
+ * for a market on one chain (TOKEN/USDC@Base) nothing whose note names another chain; at Hyperliquid, nothing in a ledger the market is
+ * not margined or paid from (tkHlLedger: an ordinary account's perps account, each HIP-3 DEX's and its spot balances are apart). Of that:
+ * the dollars free to spend — its cash and stablecoins, each line's free part where the venue says how much of it is free (`freeUsd`: a
+ * paper account's open perpetual is margin, none of it free; Hyperliquid's perps account is free only as far as it is withdrawable; a line
+ * that does not say is free whole) — and what is held of the market: `held`, all of it (the position), and `qty`, the part a sell can sell
+ * now — each line's free units where the venue says how many are (`freeAmount`: not locked in an order resting there), else all of it. A
+ * perpetual's or an event's holding is its position as the venue's positions read gave it (`positions`); not read (null) it is no figure
+ * at all, never a zero, with the venue's words for why (`unread`) when it said some. Paying with a coin held (`pay`: its asset and the
+ * note of its line, as Pay with names it), what is there to pay with is that coin's free units (`coin`). At MetaMask a perpetual's dollars
+ * are not known (null): it trades Hyperliquid's perpetuals through mm, margined in the Hyperliquid account, and the wallet's lines are its
+ * chains' balances, none of which margins one; likewise an event there is Polymarket's, paid in pUSD from the Predict deposit wallet
+ * (live/metamask.ts) — not from these lines (`marginAt` names where the money is) */
+function tkAvail(v, m, { positions = null, unread = "", pay = null } = {}) {
+  if (!v || !v.id || !m) return null;
+  const perp = m.kind === "perp" || m.kind === "future";
+  const marginAt = v.connector !== "live:metamask" ? "" : perp ? "Hyperliquid" : m.kind === "event" ? "Predict deposit" : "";
+  const lines = Array.isArray(v.holdings) ? v.holdings.filter((h) => h && !h.inTransit) : null;
+  const chain = m.kind === "token" && String(m.symbol || "").includes("@") ? String(m.symbol).split("@").pop().trim().toLowerCase() : "";
+  // a note that names a chain names one the account knows (a paper account's note names its market, an exchange's its ledger)
+  const chains = new Set([...networksOf(), ...bridgeChainsOf()].map((c) => String(c).toLowerCase()));
+  // at Hyperliquid, only the market's own ledger (tkHlLedger): an ordinary account's spot dollars do not margin a perpetual, nor its perps
+  // account pay for spot
+  const hl = TK_HL_CONNECTORS.includes(v.connector);
+  const atHand = (h) => { const where = tkNoteChain(h.note); return h.class !== "earn" && where !== "funding" && (!chain || where === chain || !chains.has(where)) && (!hl || tkHlLedger(h, m)); };
+  const hand = lines ? lines.filter(atHand) : null;
+  const free = (h) => (h.freeUsd !== undefined && h.freeUsd !== null ? Math.max(0, Math.min(num(h.usd), num(h.freeUsd))) : num(h.usd));
+  const cash = marginAt ? null : hand ? Number(hand.filter((h) => h.class === "cash" || h.class === "stable").reduce((s, h) => s + free(h), 0).toFixed(2)) : num(v.cashUsd);
+  // a line's units free to sell now: those the venue says are not locked in a resting order, else all of them
+  const freeQty = (h) => (h.freeAmount !== undefined && h.freeAmount !== null ? Math.max(0, Math.min(num(h.amount), num(h.freeAmount))) : num(h.amount));
+  const units = (L, part) => Number(L.reduce((s, h) => s + part(h), 0).toPrecision(12));
+  let qty = 0;
+  let held = 0;
+  let side = "";
+  if (perp || m.kind === "event") {
+    const h = Array.isArray(positions) ? positions.find((x) => x.venue === v.id && x.symbol === m.symbol && x.qty > 0) || null : null;
+    qty = Array.isArray(positions) ? (h ? h.qty : 0) : null;
+    held = qty;
+    side = h ? h.side : "";
+  } else {
+    const base = String(m.base || "").toUpperCase();
+    const mine = (hand || []).filter((h) => String(h.asset).toUpperCase() === base && h.amount > 0);
+    held = units(mine, (h) => num(h.amount));
+    qty = units(mine, freeQty);
+    side = held > 0 ? "long" : "";
+  }
+  // the coin paid with is the line Pay with named (payOptions: a coin held, by its asset and its note), sold on its own chain
+  const coin = pay && pay.asset ? { asset: pay.asset, qty: units((lines || []).filter((h) => h.class === "crypto" && h.amount > 0 && String(h.asset).toUpperCase() === String(pay.asset).toUpperCase() && (h.note || "") === (pay.chain || "")), freeQty) } : null;
+  return { cash, qty, held, side, perp, unread: qty === null ? String(unread || "") : "", coin, ...(marginAt ? { marginAt } : {}) };
+}
+/** the panel's two lines from what is available (tkAvail): Available to trade — the coin paid with, the holding for a sell, else the dollars,
+ * a dash where they are not known (a perpetual margined in another account: a short line says which) — and Current position, a dash where
+ * the venue's positions were not read (its words under them); and whether the percent slider has anything to size from */
+function tkAvailWords(a, m, side, venueName = "") {
+  if (!a || !m) return { html: "", slider: false };
+  const unit = tkSizeUnit(m);
+  const known = a.qty !== null && a.qty !== undefined;
+  const selling = side === "sell" && !a.perp;
+  // the position is all that is held; what a sell can take of it now (a.qty) may be less, the rest locked in orders resting at the venue
+  const all = a.held !== undefined && a.held !== null ? a.held : a.qty;
+  const pos = !known ? "—" : all > 0 ? `${a.perp ? `${a.side === "short" ? "Short" : "Long"} ` : ""}${qtyOf(all)} ${unit}` : `0 ${unit}`;
+  const avail = a.coin ? `${qtyOf(a.coin.qty)} ${a.coin.asset}` : selling ? (known ? `${qtyOf(a.qty)} ${unit}` : "—") : a.cash === null || a.cash === undefined ? "—" : money(a.cash);
+  const away = a.marginAt && !a.coin && !selling ? `<p class="dim small">${esc(a.marginAt === "Predict deposit" ? "Paid in pUSD from your Predict deposit wallet, not this wallet's balances: what is there is not read here." : `Margined in your ${a.marginAt} account, not this wallet's balances: what is free there is not read here.`)}</p>` : "";
+  const no = a.unread ? `<p class="tk-avail-no">${esc(`Positions at ${venueName || "the venue"} could not be read: ${a.unread}`)}</p>` : "";
+  const html = `<div><span class="dim">Available to trade</span><span class="tab-nums">${esc(avail)}</span></div>${away}<div><span class="dim">Current position</span><span class="tab-nums">${esc(pos)}</span></div>${no}`;
+  return { html, slider: a.coin ? a.coin.qty > 0 : selling ? known && a.qty > 0 : a.cash > 0 };
+}
+/** what the percent slider writes for a share (0 to 1) of what is available: paying with a coin, how much of it is sold first (in its own
+ * units, down to its market's step — `coinStep`); a sell, how much of the holding (down to the market's step — `qtyStep`); else dollars, down
+ * to the cent. Nothing at 0 */
+function tkPctFill(a, share, { sell = false, qtyStep = 0, coinStep = 0 } = {}) {
+  const s = Math.max(0, Math.min(1, Number(share) || 0));
+  if (a && a.coin) return { unit: "qty", amount: s > 0 && a.coin.qty > 0 ? tkPlain(tkFloor(a.coin.qty * s, Number(coinStep) || 0)) : "" };
+  if (a && sell && !a.perp) return { unit: "qty", amount: s > 0 && a.qty > 0 ? tkPlain(tkFloor(a.qty * s, Number(qtyStep) || 0)) : "" };
+  return { unit: "usd", amount: s > 0 && a && a.cash > 0 ? String(Math.floor(a.cash * s * 100) / 100) : "" };
+}
+
 /** THE TICKET. Find the market (at the connected venues and at the venues that publish prices without a key), pick where (the best price of
  * your accounts first; a venue not connected says "Connect to trade"), then the order as that market takes it: the side, the amount, what it
  * is paid with (a coin held: two steps), the type and its prices, the leverage (a perpetual), the rest under Advanced, and the face's own
@@ -717,7 +849,10 @@ function tkTicket(panel, kind0, preset) {
   let payPlan = null;
   let second = null;
   let payMarkets = [];
+  // the positions read at the venue picked (a perpetual's, an event's): null until read, and when the venue's could not be read — then
+  // `posNo` holds its words
   let positions = null;
+  let posNo = "";
   const spec = () => tkKindSpec(kind);
   const longShort = () => kind === "perps" || kind === "preipo";
   /* the face follows the market: a row of another kind than the ticket was opened on moves the seg and the words */
@@ -880,7 +1015,7 @@ function tkTicket(panel, kind0, preset) {
       // a venue that takes the user only in part (close-only) or wants something here first: its word, its whole sentence on hover
       if (r.state === "public") return `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why"><b>${esc(r.terms.word)}</b>${r.terms.said ? ` — ${esc(r.terms.said)}` : ""}</span>` : !r.connector && r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>${r.connector ? '<span class="tk-sep"> · </span>' : ""}` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`;
       if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
-      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
+      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(r.venueName)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why tk-at-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
     }).join("")}${fold ? `<details class="tk-pubs"><summary>${esc(plural(pubCount, "other venue"))} list it <span class="dim">· connect one to trade there</span></summary>${rows.map((r, i) => (r.state !== "public" ? "" : `<div class="tk-at pub"><span><b>${esc(r.venueName)}</b> <span class="tag">Public</span>${r.refuses ? `<span class="why" title="${esc(r.refuses.said || "")}"><b>${esc(r.refuses.word)}</b></span>` : r.terms ? `<span class="why" title="${esc(r.terms.said || "")}"><b>${esc(r.terms.word)}</b></span>` : ""}${unitOf(r)}</span><span class="tk-at-r">${priceOf(r) ? `<span class="tab-nums">${priceOf(r)}</span>` : ""}${r.connector ? `<button type="button" class="link" data-connect="${i}">Connect to trade</button>` : ""}</span></div>`)).join("")}</details>` : ""}`;
     for (const b of box2.querySelectorAll("button[data-at]")) b.addEventListener("click", () => choose(rows[Number(b.dataset.at)]));
     // the switch: the best (else the first) account of that kind, the form kept as it is
@@ -908,12 +1043,13 @@ function tkTicket(panel, kind0, preset) {
     }
   };
   /* after "Connect to trade": the market read again — what was kept of it at the venues and in the public listings is dropped — so the
-     venue just connected is where it trades, picked; a market it does not list stays as it was, its places read again */
+     venue just connected is where it trades, picked; a market it does not list stays as it was, its places read again. Its row is searched
+     by the words a search may hold (an event's question cut to them: tkQueryOf) and asked for by its key */
   const refind = async (venue) => {
     for (const k of [...API.keys()]) if (/^\/api\/account\/(explore|compare|market)\?/.test(k)) API.delete(k);
     if (!item) return void search();
     const was = item;
-    const got = await tkReadKind(kind, was.base || was.name);
+    const got = await tkReadKind(kind, tkQueryOf(was), was.key || "");
     if (!live() || item !== was) return;
     const again = got.items.find((x) => x.key === was.key);
     if (again) return void pick(again, { venue });
@@ -996,12 +1132,16 @@ function tkTicket(panel, kind0, preset) {
     const words = mk ? tkAdvSummary(mk, formFields(form)) : "";
     if (sum.textContent !== words) sum.textContent = words;
   };
-  /* what is held at this venue's markets (perpetuals, event contracts), read again at most every ten seconds: the face's block and the
-     leverage line say it */
+  /* what is held at this venue's markets (perpetuals, event contracts), read again at most every ten seconds: the face's block, the
+     leverage line and the position line say it. A venue the read could not reach (`missing`, in its own words), or a read refused whole,
+     gives no positions at all — nothing is said held or not held there, and the panel says why */
   const readPositions = (m) => {
     api("/api/account/positions", { ttl: 10_000 }).then((b) => {
       if (!live() || mk !== m) return;
-      positions = b && b.ok !== false ? b.positions || [] : [];
+      const read = !!b && b.ok !== false;
+      const miss = read ? (b.missing || []).find((x) => picked && x.venue === picked.venue) : null;
+      positions = read && !miss ? b.positions || [] : null;
+      posNo = !read ? refusalOf(b) || "no answer" : miss ? miss.why || "no answer" : "";
       levLine();
       drawKind();
       drawAvail();
@@ -1030,7 +1170,10 @@ function tkTicket(panel, kind0, preset) {
       const tifSel = tifBox.querySelector("select");
       setOptions(tifSel, [["", "The venue's default"], ...m.tifs.map((t) => [t, TK_TIF_NAMES[t] || t])], presetUsed ? tifSel.value : preset.tif || "");
     }
+    // a flag this market does not take is not only hidden but unticked: a box ticked at another venue is never sent from out of sight
     q("[data-reduce]").hidden = !m.reduceOnly;
+    if (!m.reduceOnly) form.elements.reduceOnly.checked = false;
+    if (!m.postOnly) form.elements.postOnly.checked = false;
     // outside the regular session, where the venue trades the session that is on, a limit goes with extended hours unless the owner says not
     const takesEh = !!(m.session && m.session.extendedHours);
     if (!takesEh) form.elements.extendedHours.checked = false;
@@ -1063,8 +1206,10 @@ function tkTicket(panel, kind0, preset) {
         tkLeverage(lev, picked, m, live, () => drawKind());
       } else lev.innerHTML = `<div class="label">Leverage</div><div class="dim small" data-lev-ro></div>`;
     } else lev.innerHTML = "";
+    // the positions read are this venue's from here: none said until its read lands
+    positions = null;
+    posNo = "";
     if (perp || m.kind === "event") readPositions(m);
-    else positions = null;
     payLoad(m);
     if (kind === "rwas" && !chains) loadChains();
     levLine();
@@ -1100,46 +1245,36 @@ function tkTicket(panel, kind0, preset) {
     form.elements.orderType.dispatchEvent(new Event("change", { bubbles: true }));
   });
 
-  /* WHAT IS AVAILABLE: the dollars at the venue the order goes to (what a buy, or a perpetual's margin, is paid from) and what is held of
-     this market there (a sell sells only that); the percent slider sizes the order from it */
-  const availOf = () => {
-    const v = venueOf();
-    if (!v.id || !mk) return null;
-    const perp = mk.kind === "perp" || mk.kind === "future";
-    const h = held();
-    const base = String(mk.base || "").toUpperCase();
-    const holding = !perp && mk.kind !== "event" ? (v.holdings || []).filter((x) => String(x.asset).toUpperCase() === base && !x.inTransit && x.amount > 0).reduce((s2, x) => s2 + x.amount, 0) : 0;
-    const qty = perp || mk.kind === "event" ? (h ? h.qty : 0) : holding;
-    return { cash: num(v.cashUsd), qty, side: h ? h.side : qty > 0 ? "long" : "", perp };
-  };
+  /* WHAT IS AVAILABLE (tkAvail): the dollars free at the venue the order goes to (what a buy, or a perpetual's margin, is paid from), what
+     is held of this market there that can be sold now (a sell sells only that), and — a buy paid with a coin held — that coin; the percent
+     slider sizes the order from it (tkPctFill) */
+  const availOf = () => tkAvail(venueOf(), mk, { positions, unread: posNo, pay: side === "buy" ? payCoin() : null });
   const drawAvail = () => {
-    const a = availOf();
-    const box2 = q("[data-avail]");
-    const pct = q("[data-pct]");
-    if (!a) {
-      pct.hidden = true;
-      return void paint(box2, "");
-    }
-    const unit = mk.kind === "event" ? "contracts" : mk.base;
-    const pos = a.qty > 0 ? `${a.perp ? `${a.side === "short" ? "Short" : "Long"} ` : ""}${qtyOf(a.qty)} ${unit}` : `0 ${unit}`;
-    paint(box2, `<div><span class="dim">Available to trade</span><span class="tab-nums">${side === "sell" && !a.perp ? `${esc(qtyOf(a.qty))} ${esc(unit)}` : money(a.cash)}</span></div><div><span class="dim">Current position</span><span class="tab-nums">${esc(pos)}</span></div>`);
-    // the slider sizes from what is there: dollars for a buy (or a perpetual either way), the holding for a sell
-    pct.hidden = !(side === "sell" && !a.perp ? a.qty > 0 : a.cash > 0);
+    const w = tkAvailWords(availOf(), mk, side, picked ? picked.venueName || nameOf(picked.venue) : "");
+    paint(q("[data-avail]"), w.html);
+    q("[data-pct]").hidden = !w.slider;
+  };
+  /* the step a pay coin is sold in: its own dollar market's at the venue (the plan's first leg) */
+  const payStep = () => {
+    const plan = payCoin() ? payPlanNow() : null;
+    return plan && plan.market ? Number(plan.market.qtyStep) || 0 : 0;
   };
   form.elements.pct.addEventListener("input", () => {
     const a = availOf();
-    const share = Number(form.elements.pct.value) / 100;
     setText(q("[data-pct-v]"), `${form.elements.pct.value}%`);
     if (!a) return;
-    if (side === "sell" && !a.perp) {
-      form.elements.unit.value = "qty";
-      form.elements.amount.value = share > 0 ? tkPlain(tkFloor(a.qty * share, mk.qtyStep)) : "";
-    } else {
-      form.elements.unit.value = "usd";
-      form.elements.amount.value = share > 0 ? String(Math.floor(a.cash * share * 100) / 100) : "";
-    }
+    const fill = tkPctFill(a, Number(form.elements.pct.value) / 100, { sell: side === "sell", qtyStep: mk.qtyStep, coinStep: a.coin ? payStep() : 0 });
+    form.elements.unit.value = fill.unit;
+    form.elements.amount.value = fill.amount;
     form.elements.amount.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  /* the account read again (a fill, the page's refresh): what is available and the position held drawn from that read — the positions
+     asked again, kept at most ten seconds (a placed order drops them: the submit below) */
+  TK.refreshAvail = () => {
+    if (!live() || !mk) return;
+    if (mk.kind === "perp" || mk.kind === "future" || mk.kind === "event") readPositions(mk);
+    else drawAvail();
+  };
   /* a price pressed in the order book: the order becomes a limit at it (where the market takes limits) */
   TK.setLimit = (p) => {
     if (!live() || !mk || !(p > 0)) return;
@@ -1201,6 +1336,8 @@ function tkTicket(panel, kind0, preset) {
     }
     const n = q("[data-pay-n]");
     n.textContent = coin ? "Two steps, two signatures." : "";
+    // what there is to pay with follows: the venue's dollars, or the coin held
+    drawAvail();
   };
   /* a pay coin's plan from the fields: its sale for the dollar both markets share, then the buy with what that brings (tkSwapPlan) */
   const payPlanNow = () => {
@@ -1428,6 +1565,8 @@ function tkTicket(panel, kind0, preset) {
       return void (leg2 ? prepSecond() : requote(true));
     }
     prepared = null;
+    // the order is placed: the positions kept are the ones before it, so the next read (the panel's position line) asks the venues afresh
+    forget("/api/account/positions");
     let o = r.body.kind === "order" ? r.body.order : null;
     let words = saidOf(r.body);
     let bad = false;
@@ -1477,17 +1616,28 @@ function tkTicket(panel, kind0, preset) {
   });
 
   // ---- what the ticket was opened with ----
+  // a ticket the owner opened (not the panel at rest) — or one at rest on a market (a draft reopened, the terminal's own start) — is left
+  // as it was opened: the terminal does not start on a market of its own over it (ui/terminal.js ttDraw). Said as it opens, before its
+  // market is looked up: a kind's read landing meanwhile would otherwise start on the busiest and replace it
+  if ((!preset.rest || preset.item || preset.venue) && typeof TT === "object") TT.started = true;
+  // a ticket on no market (the "t" key, a venue's Trade, a market not found): the terminal's bar, chart and book let go of the last one, so
+  // nothing shows a market the panel is not on (a price pressed in the book would have no ticket to go to)
+  const onNone = () => {
+    if (typeof ttSetItem === "function") ttSetItem(null);
+  };
   if (preset.item && typeof preset.item === "object") pick(preset.item, preset.venue ? { venue: preset.venue, symbol: preset.symbol } : undefined);
-  else if (preset.venue && preset.symbol) tkPresetItem(preset).then((x) => live() && x && pick(x, { venue: preset.venue, symbol: preset.symbol }));
+  else if (preset.venue && preset.symbol) tkPresetItem(preset).then((x) => live() && (x ? pick(x, { venue: preset.venue, symbol: preset.symbol }) : onNone()));
   else if (preset.venue && preset.base) tkPresetByBase(preset, kind).then((x) => {
     if (!live()) return;
     if (x) pick(x, { venue: preset.venue });
     else {
+      onNone();
       form.elements.q.value = String(preset.base);
       search();
     }
   });
   else {
+    onNone();
     if (preset.symbol) form.elements.q.value = String(preset.symbol);
     search();
     // opened on purpose (the "t" key, a row): the cursor goes to the search; the panel at rest takes no focus
@@ -1808,6 +1958,9 @@ function tkLeverage(box, at, m, live, after) {
 
 // ---- under way ---------------------------------------------------------------------------------
 
+/* the orders on a book or on their way to one, in the lens (an agent's lens: that agent's): Under way's rows, and the Open orders tab's count
+   (ui/terminal.js), one list for both */
+const tkOpenOrders = () => (A.orders || []).filter((o) => isLive(o) && inLens(o.venue, o.agent));
 /* cards for trading the owner answers (under Portfolio › Waiting for you): an agent's order, its change, its close, money it puts to earn */
 const tkTradeCard = (c) => /order|amend|close|earn|trade/i.test(String(c.kind || ""));
 const tkCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {}).value || "";
@@ -1816,7 +1969,7 @@ const tkCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {
  * earn — in the lens; an agent's card as a status row whose one action is Review (it is answered under Portfolio, the one place). Drawn
  * again only when it changed, the focused button (by its data-fk) focused again: core paint */
 function tkDrawOpen(sec, owner) {
-  const orders = (A.orders || []).filter((o) => isLive(o) && inLens(o.venue, o.agent));
+  const orders = tkOpenOrders();
   const cards = A.cards.filter((c) => tkTradeCard(c) && inLens(tkCardVenue(c), c.agent));
   const pays = A.payments.filter((p) => p.live && ["pending", "authorized"].includes(p.status) && inLens(p.from, p.agent));
   const earns = (A.earns || []).filter((x) => x.status === "pending" && inLens(x.venue, x.agent));

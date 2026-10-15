@@ -99,6 +99,8 @@ button.tk-at:hover:not(:disabled) { border-color: var(--dim); }
 .tk-at[aria-pressed="true"] { border: 1.5px solid var(--rule); padding: 9.5px 11.5px; }
 .tk-at-r { display: flex; flex-direction: column; align-items: flex-end; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tk-at-r .why { font-weight: 400; }
+/* a venue line's note (a paper account says its whole rule while its market is shut): three lines at most, all of it on hover */
+.tk-at-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .tk-at.pub { color: var(--dim); }
 /* a public venue: its price over "Connect to trade", so its name keeps the room to read on one or two lines */
 .tk-at.pub .tk-at-r { flex-direction: column; gap: 2px; align-items: flex-end; font-size: 12px; }

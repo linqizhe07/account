@@ -20,7 +20,7 @@ import type { Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
 import { exchangeTrader } from "./exchange-trade.ts";
-import { bannedNo, bannedUntil, edgeRefused, edgeWords, IP_LIST, ipListWords, isStable, notTheApiWords, num, rateLimitedNo, redact, REGION, retryAfterMs, transportCode, unreachable, type LiveBalance, type LiveProbe, type LiveSource } from "./types.ts";
+import { bannedNo, bannedUntil, edgeRefused, edgeWords, freePart, IP_LIST, ipListWords, isStable, notTheApiWords, num, rateLimitedNo, redact, REGION, retryAfterMs, transportCode, unreachable, type LiveBalance, type LiveProbe, type LiveSource } from "./types.ts";
 import { exchangeWriter } from "./writes.ts";
 
 /** the part of a ccxt exchange this file uses; the tests hand in a stand-in with the same shape */
@@ -371,10 +371,12 @@ const LEDGERS: Record<string, Array<{ where: string; params?: Record<string, unk
   bybit: [{ where: "unified" }, { where: "funding", params: { type: "funding" } }],
 };
 
-/** what the library made of an answer it could not read — a page, an empty body — carries that answer as its `info`: it is not a balance */
-function readBalance(bal: Record<string, unknown>, id: string): Record<string, unknown> {
+/** what the library made of an answer it could not read — a page, an empty body — carries that answer as its `info`: it is not a balance.
+ * `free`: of each asset, what the exchange says is free (not held in an open order, or as margin), where it says */
+function readBalance(bal: Record<string, unknown>, id: string): { total: Record<string, unknown>; free: Record<string, unknown> } {
   if ("info" in bal && (bal.info === null || typeof bal.info !== "object")) throw Object.assign(new Error(`${id} answered the balance with something that is not its API's answer`), { name: "BadResponse" });
-  return (bal.total ?? {}) as Record<string, unknown>;
+  const free = bal.free !== null && typeof bal.free === "object" ? (bal.free as Record<string, unknown>) : {};
+  return { total: (bal.total ?? {}) as Record<string, unknown>, free };
 }
 
 /** A second ledger (a funding wallet) that fails: not shown only when the exchange said this key may not see it. A ban, an edge's page, a
@@ -390,15 +392,17 @@ async function balances(client: ExchangeClient, who: { venue: string; name: stri
   const ledgers = LEDGERS[client.id] ?? [{ where: "" }];
   const out: LiveBalance[] = [];
   for (const [i, l] of ledgers.entries()) {
-    let total: Record<string, unknown>;
+    let read: ReturnType<typeof readBalance>;
     try {
-      total = readBalance(await client.fetchBalance(l.params ?? {}), client.id);
+      read = readBalance(await client.fetchBalance(l.params ?? {}), client.id);
     } catch (err) {
       // the main ledger failing is the read failing; a second ledger the key may not see is just not shown
       if (i === 0 || !keyMayNotSee(who.venue, who.name, err, who.key)) throw err;
       continue;
     }
-    for (const [asset, v] of Object.entries(total)) if (num(v) > 0) out.push({ asset, amount: num(v), ...(l.where ? { where: l.where } : {}) });
+    // each line with what of it is free, where the exchange says part of it is held (in an open order, as margin): its dollars follow, in
+    // the same share (adapters/live.ts)
+    for (const [asset, v] of Object.entries(read.total)) if (num(v) > 0) out.push({ asset, amount: num(v), ...(l.where ? { where: l.where } : {}), ...freePart(read.free[asset], num(v), "amount") });
   }
   // what the exchange itself last traded each held asset at, for the ones that are not dollars
   const assets = [...new Set(out.filter((b) => !isStable(b.asset)).map((b) => b.asset))];

@@ -496,6 +496,59 @@ describe("a stock's session", () => {
     expect(pubOnly.items[0]).toMatchObject({ key: "stock:MSFT", at: [{ public: true, session: CLOSED, note: HELD }] });
     expect(pubOnly.items[0]!.session).toBeUndefined();
   });
+
+  it("says which source priced a US stock's line and the row, and how far behind it is: the US stocks line's name says none, its price does", async () => {
+    const READ_ONLY = "Real-time quotes from Robinhood or Nasdaq, else Cboe's own delayed ones, 15 minutes behind the market — each line says which";
+    const stocks = pub("cboe", "US stocks", {
+      kind: "stocks",
+      connectTo: "alpaca",
+      connector: "live:alpaca",
+      readOnly: READ_ONLY,
+      listings: [
+        mk("AAPL", "stock", "AAPL", "USD", { name: "Apple Inc.", price: 344.375, bid: 344.36, ask: 344.39, quoteFrom: "Robinhood · real time", delayMs: 0, venueName: "US stocks", types: [] }),
+        mk("ZION", "stock", "ZION", "USD", { name: "Zions Bancorporation", price: 51.2, bid: 51.19, ask: 51.22, quoteFrom: "Cboe · 15 min delayed", delayMs: 900_000, venueName: "US stocks", types: [] }),
+      ],
+    });
+    const out = await exploreAcross({ public: [stocks] }, { clock });
+    const zion = out.items.find((i) => i.key === "stock:ZION")!;
+    expect(zion).toMatchObject({ price: 51.2, quoteFrom: "Cboe · 15 min delayed", at: [{ venueName: "US stocks", price: 51.2, quoteFrom: "Cboe · 15 min delayed", note: READ_ONLY }] });
+    expect(out.items.find((i) => i.key === "stock:AAPL")).toMatchObject({ quoteFrom: "Robinhood · real time", at: [{ quoteFrom: "Robinhood · real time" }] });
+    // a venue that names no source carries none, on its line or on the row it prices
+    const alpaca = trader({ markets: [mk("AAPL", "stock", "AAPL", "USD", { name: "Apple Inc.", price: 344.4, volumeUsd24h: 5e9 })] });
+    const both = await exploreAcross({ connected: [venue("alpaca", "Alpaca", alpaca)], public: [stocks] }, { clock });
+    const aapl = both.items.find((i) => i.key === "stock:AAPL")!;
+    expect([aapl.price, aapl.quoteFrom, aapl.at.map((a) => [a.venue, a.quoteFrom])]).toEqual([344.4, undefined, [["alpaca", undefined], ["cboe", "Robinhood · real time"]]]);
+  });
+
+  it("carries the price's own time beside its source: a real-time source's last trade from Friday says so on the row and its line, whatever the line's note", async () => {
+    const READ_ONLY = "Real-time quotes from Robinhood or Nasdaq, else Cboe's own delayed ones, 15 minutes behind the market — each line says which";
+    // a share not traded since Friday: Nasdaq's real-time answer is its last trade, at 15:59 New York on Fri 2 Oct, read on Monday
+    const stale = "2026-10-02T19:59:00.000Z";
+    const stocks = pub("cboe", "US stocks", {
+      kind: "stocks",
+      connectTo: "alpaca",
+      connector: "live:alpaca",
+      readOnly: READ_ONLY,
+      listings: [
+        mk("JPM", "stock", "JPM", "USD", { name: "JPMorgan Chase & Co.", price: 334.82, quoteFrom: "Nasdaq · real time", quoteAt: stale, delayMs: 0, venueName: "US stocks", types: [], note: "Open until 16:00 New York: the price is Nasdaq's last trade at 15:59 New York on Fri 2 Oct (regular session)" }),
+        // a time not written as one is carried as none; nor is a market that stamps none given one
+        mk("ZION", "stock", "ZION", "USD", { name: "Zions Bancorporation", price: 51.2, quoteFrom: "Cboe · 15 min delayed", quoteAt: "yesterday morning", delayMs: 900_000, venueName: "US stocks", types: [] }),
+        mk("AMD", "stock", "AMD", "USD", { name: "Advanced Micro Devices", price: 160.1, quoteFrom: "Nasdaq · real time", delayMs: 0, venueName: "US stocks", types: [] }),
+      ],
+    });
+    const out = await exploreAcross({ public: [stocks] }, { clock });
+    const jpm = out.items.find((i) => i.key === "stock:JPM")!;
+    expect(jpm).toMatchObject({ price: 334.82, quoteFrom: "Nasdaq · real time", quoteAt: stale, at: [{ venueName: "US stocks", quoteFrom: "Nasdaq · real time", quoteAt: stale, note: READ_ONLY }] });
+    for (const key of ["stock:ZION", "stock:AMD"]) {
+      const row = out.items.find((i) => i.key === key)!;
+      expect([row.quoteFrom, row.quoteAt, row.at[0]!.quoteAt]).toEqual([key === "stock:ZION" ? "Cboe · 15 min delayed" : "Nasdaq · real time", undefined, undefined]);
+    }
+    // the row's time is the line's that priced it, not another's: a connected venue that stamps none prices the row, and the row says none
+    const alpaca = trader({ markets: [mk("JPM", "stock", "JPM", "USD", { name: "JPMorgan Chase & Co.", price: 335.1, volumeUsd24h: 5e9 })] });
+    const both = await exploreAcross({ connected: [venue("alpaca", "Alpaca", alpaca)], public: [stocks] }, { clock });
+    const held = both.items.find((i) => i.key === "stock:JPM")!;
+    expect([held.price, held.quoteFrom, held.quoteAt, held.at.map((a) => [a.venue, a.quoteAt])]).toEqual([335.1, undefined, undefined, [["alpaca", undefined], ["cboe", stale]]]);
+  });
 });
 
 describe("order among ties", () => {
@@ -572,6 +625,50 @@ describe("movers, closing, all", () => {
     const out = await exploreAcross({ connected: [venue("okx", "OKX", x)] }, { clock, q: "bitcoin" });
     expect(out.items.map((i) => i.key)).toEqual(["coin:BTC"]);
     expect(x.calls).toContain("markets:bitcoin");
+  });
+
+  it("a search for a short name lists the row that IS it first, before the cut: T (Threshold) is not lost under thirteen busier markets that start with T", async () => {
+    // the sources match a search by prefix and the rows by a part of a word, so every busier T-something is a match too
+    const busier = ["TRX", "TON", "TAO", "TIA", "TRUMP", "TURBO", "TNSR", "TRB", "TWT", "THETA", "TFUEL", "TLM", "TST"].map((b, n) => mk(`${b}/USDT`, "spot", b, "USDT", { price: 1, volumeUsd24h: 9e8 - n * 1e7 }));
+    const binance = pub("binance", "Binance", { listings: [...busier, mk("T/USDT", "spot", "T", "USDT", { price: 0.02, volumeUsd24h: 3e6 })] });
+    const out = await exploreAcross({ public: [binance] }, { clock, q: "T", limit: 12 });
+    // the row named exactly first, then the busiest of the rest as before, twelve in all
+    expect(out.items.map((i) => i.key)).toEqual(["coin:T", ...busier.slice(0, 11).map((m) => `coin:${m.base}`)]);
+    // without regard to case, and in a tab (the Trade bar's picker reads its kind's tab, twelve rows)
+    expect((await exploreAcross({ public: [binance] }, { clock, q: "t", tab: "crypto", limit: 12 })).items[0]?.key).toBe("coin:T");
+    // a row with no base (an event) is named by its name: the question, whole
+    const fed = (n: number, title: string, v: number) => kalshi(`KXFED-${n}`, title, 0.5, { volumeUsd24h: v, types: [] });
+    const kalshiPub = pub("kalshi", "Kalshi", { kind: "events", connector: "live:kalshi", listings: [...Array.from({ length: 13 }, (_, n) => fed(n, `Fed rate cut in meeting ${n + 1}?`, 9e6 - n * 1e5)).flat(), ...fed(99, "Fed", 1e3)] });
+    const events = await exploreAcross({ public: [kalshiPub] }, { clock, q: "fed", tab: "predictions", limit: 12 });
+    expect(events.items.map((i) => i.name)).toEqual(["Fed", ...Array.from({ length: 11 }, (_, n) => `Fed rate cut in meeting ${n + 1}?`)]);
+    // with nothing named exactly, the busiest that match, as before
+    expect((await exploreAcross({ public: [binance] }, { clock, q: "TR", limit: 2 })).items.map((i) => i.key)).toEqual(["coin:TRX", "coin:TRUMP"]);
+  });
+
+  it("a row's key keeps that row alone, before the cut: the question picked is found among thirteen busier ones that start with the same 60 characters", async () => {
+    // a search is at most 60 characters, so a long question is read again by its first 60, which every question of its series starts with
+    const stem = "Will the upper bound of the federal funds rate be above 3.75% after the";
+    const legs = Array.from({ length: 14 }, (_, n) => kalshi(`KXFEDUB-${n}`, `${stem} meeting ${n + 1}?`, 0.5, { contracts24h: n === 13 ? 1_000 : 900_000 - n * 10_000, category: "Economics", types: [] })).flat();
+    const k = pub("kalshi", "Kalshi", { kind: "events", connectTo: "kalshi", connector: "live:kalshi", listings: legs });
+    const picked = "kalshi:KXFEDUB-13";
+    const q = `${stem} meeting 14?`.slice(0, 60);
+    expect(q).toHaveLength(60);
+    // by the search alone, twelve busier questions fill the read and the one picked is cut
+    const searched = await exploreAcross({ public: [k] }, { clock, q, tab: "predictions", limit: 12 });
+    expect(searched.items).toHaveLength(12);
+    expect(searched.items.some((i) => i.key === picked)).toBe(false);
+    // with its key, that row alone, and what is made of the rows is made of it alone; the source is still asked for the search
+    const keyed = await exploreAcross({ public: [k] }, { clock, q, key: picked, tab: "predictions", limit: 12 });
+    expect(keyed.items.map((i) => [i.key, i.name, i.contracts24h])).toEqual([[picked, `${stem} meeting 14?`, 1_000]]);
+    expect(keyed.tabs.map((t) => [t.id, t.count])).toEqual([["all", 1], ["predictions", 1]]);
+    expect(k.asked).toContain(`listings:${q}`);
+    // with no search, the few busiest Predictions do not hold it back either, nor leave out a question of a category they never show (sports)
+    expect((await exploreAcross({ public: [k] }, { clock, key: picked, tab: "predictions", limit: 12 })).items.map((i) => i.key)).toEqual([picked]);
+    const sports = pub("kalshi", "Kalshi", { kind: "events", connectTo: "kalshi", connector: "live:kalshi", listings: kalshi("KXNFL-1", "Falcons win?", 0.6, { category: "Sports", types: [] }) });
+    expect((await exploreAcross({ public: [sports] }, { clock })).items).toEqual([]);
+    expect((await exploreAcross({ public: [sports] }, { clock, key: "kalshi:KXNFL-1" })).items.map((i) => i.key)).toEqual(["kalshi:KXNFL-1"]);
+    // exactly that key: one no row has, or written in another case, keeps none
+    for (const key of ["kalshi:KXFEDUB-99", picked.toLowerCase()]) expect((await exploreAcross({ public: [k] }, { clock, q, key, limit: 12 })).items).toEqual([]);
   });
 });
 

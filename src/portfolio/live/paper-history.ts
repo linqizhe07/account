@@ -3,8 +3,9 @@
  * A paper account (paper.ts) is the account's own record: every order it ever filled is in its book (`book.orders` is never pruned — the
  * fills list keeps only the last 500, so the replay is not built from it), with the size filled, the price, the fee and when. So what the paper
  * account was worth at any moment since it started is KNOWN, not guessed: its cash is the starting money moved by each fill in turn, and
- * what it held is valued at the public sources' price bars between the fills. This module does that and nothing else: it is pure (no file,
- * no network, no clock), the caller hands it the book and the bars and gets the curve back.
+ * what it held is valued at the public sources' price bars between the fills. This module does that, and says which bars it needs
+ * (paperBarsWanted), and nothing else: it is pure (no file, no network, no clock), the caller hands it the book and the bars and gets the
+ * curve back.
  *
  * What is read, and what it is:
  *   the book     `PaperBook` (paper.ts): `createdAt` and `startCashUsd` (the start: that much cash, nothing held), every order whose
@@ -26,8 +27,9 @@
  *   a perpetual  the side, the size and the average entry kept exactly as fill() keeps them: an order on the position's side (or with none
  *                open) opens or adds, an order on the other side reduces it up to the position and never flips it. The margin put up is
  *                the paper account's own money still, so here it is counted as cash: opening moves cash by −fee only, reducing by
- *                +realised − fee, realised being (price − entry) × qty for a long and (entry − price) × qty for a short. A liquidation (an
- *                order the engine wrote, `liquidation-…`) is a reduce at its price. Funding moves cash by what was paid, at its time
+ *                +realised − fee, realised being (price − entry) × qty for a long and (entry − price) × qty for a short — and, the margin
+ *                being all a position can lose, by the loss past it back again, as the order says it (`lossPastMarginUsd`). A liquidation
+ *                (an order the engine wrote, `liquidation-…`) is a reduce at its price. Funding moves cash by what was paid, at its time
  *
  * What it is worth at a moment t: the cash, plus each holding's qty × its close at t, plus each perpetual's unrealised
  * profit at its close at t. The close at t is that of the latest bar whose close is known at or before t — of every series given for the
@@ -38,13 +40,16 @@
  * wrote the payout at its next look. No bar known yet: the last price the paper account traded that symbol at, at or before t — a price it
  * really traded at — and the point is marked partial, with the symbol in `missing`.
  *
- * The points: one at the book's start (its starting money) when that is inside the range, then one at every multiple of `stepMs` from the
- * range's start (never before the book's start) to its end; when the caller gives the live value now (`nowUsd`), the last point, at the
- * range's end, is that — it has in it what the replay cannot see. Rounded to cents.
+ * The points: one at the book's start (its starting money) when that is inside the range — or, a book started before the range, one at the
+ * range's start itself, valued as every point is, so that a curve and its change start where the account stood then and not at the grid's
+ * first step after it — then one at every multiple of `stepMs` from the range's start (never before the book's start) to its end; when the
+ * caller gives the live value now (`nowUsd`), the last point, at the range's end, is that — it has in it what the replay cannot see.
+ * Rounded to cents.
  *
  * What it cannot know is said, in `inexact`, in plain sentences, never papered over — and only when it is so, with the book's own figure:
- * funding an open position paid that the book's list hour by hour does not have (its `fundingUsd` against the list), a liquidation's loss
- * past the position's margin (the margin rests on a leverage the order does not keep), a symbol with no bars. And the replay checks itself against the book: the cash and
+ * funding an open position paid that the book's list hour by hour does not have (its `fundingUsd` against the list), the loss past the
+ * position's margin of a liquidation whose order does not say it (a book's from before it was written down: the margin rests on a leverage
+ * the order does not keep), a symbol with no bars. And the replay checks itself against the book: the cash and
  * margin it ends with (any funding missing from the list shows here, with its size), and what it ends holding, on which side, against the
  * book's own — a difference is said, with its size.
  */
@@ -137,8 +142,15 @@ type Step =
   | { kind: "fill"; at: number; rank: number; seq: number; o: PaperOrder; qty: number; price: number; fee: number }
   | { kind: "funding"; at: number; rank: number; seq: number; symbol: string; usd: number };
 
+/** where each thing that moved the book falls among the things at the same millisecond: the order of the book's own pass (see stepsOf) */
+const RANK = { funding: 0, liquidation: 1, fill: 2, settlement: 3 } as const;
+
 /** everything that moved the book, in the order it happened. At one millisecond the book's own pass runs in this order (paper.ts settle):
- * the orders judged, then the perpetuals' funding, then what the engine wrote (a liquidation, a settlement) */
+ * the perpetuals marked first — each one's funding, then its liquidation where the margin left has fallen that far (one perpetual's funding
+ * and another's liquidation move different things, so every funding is placed before every liquidation) — then the orders judged, then
+ * the event contracts settled. So a position a look liquidates is gone before an order the same look fills opens the next one, and a
+ * contract sold in part in a look is paid out on what is left. Funding a fill pays before it moves its position (paper.ts fill) is
+ * stamped at the hour it settles to, at or before the fill: first as well */
 function stepsOf(book: PaperBook, t: Told): Step[] {
   const out: Step[] = [];
   Object.values(book.orders ?? {}).forEach((o, i) => {
@@ -159,13 +171,13 @@ function stepsOf(book: PaperBook, t: Told): Step[] {
     }
     if (o.status === "partial" || o.filledQty < o.qty - QTY_EPS)
       t.notes.add(`${o.ref} (${o.symbol}) filled ${plain(o.filledQty)} of ${plain(o.qty)}: the replay places all of it at its last fill (${iso(at)}), at its average price`);
-    const engine = isLiquidation(o) || isSettlement(o);
-    out.push({ kind: "fill", at, rank: engine ? 2 : 0, seq: seqOf(o.ref, i), o, qty: o.filledQty, price: o.avgPrice, fee: finite(o.feeUsd) ? o.feeUsd : 0 });
+    const rank = isLiquidation(o) ? RANK.liquidation : isSettlement(o) ? RANK.settlement : RANK.fill;
+    out.push({ kind: "fill", at, rank, seq: seqOf(o.ref, i), o, qty: o.filledQty, price: o.avgPrice, fee: finite(o.feeUsd) ? o.feeUsd : 0 });
   });
   (book.funding ?? []).forEach((f, i) => {
     const at = Date.parse(f?.at ?? "");
     if (!Number.isFinite(at) || !finite(f.usd)) return;
-    out.push({ kind: "funding", at, rank: 1, seq: i, symbol: f.symbol, usd: f.usd });
+    out.push({ kind: "funding", at, rank: RANK.funding, seq: i, symbol: f.symbol, usd: f.usd });
   });
   return out.sort((a, b) => a.at - b.at || a.rank - b.rank || a.seq - b.seq);
 }
@@ -227,7 +239,12 @@ class Replay {
       const q = Math.min(qty, p.qty);
       if (qty > p.qty + QTY_EPS) this.told.notes.add(`${o.ref} closes ${plain(qty)} ${o.symbol} where the replay has ${plain(p.qty)} open: the book never flips a side in one order, so only the position is closed here`);
       const realised = round((p.side === "long" ? price - p.entryPrice : p.entryPrice - price) * q, 6);
-      this.cash = round(this.cash + realised - fee, 6);
+      // isolated margin: a loss past the margin was never taken from the cash, and the order says how much of it (lossPastMarginUsd). The
+      // margin here is counted with the cash, so whatever of the position's margin the engine took for the loss — the part closed, and on a
+      // partial close the margin left before anything past it — is in realised − fee already: what is added back is only what the margin did
+      // not take, and the replay's cash and margin move as the book's did
+      const past = finite(o.lossPastMarginUsd) && o.lossPastMarginUsd > 0 ? o.lossPastMarginUsd : 0;
+      this.cash = round(this.cash + realised - fee + past, 6);
       if (q >= p.qty - QTY_EPS) {
         this.positions.delete(o.symbol);
         this.openedAt.delete(o.symbol);
@@ -255,6 +272,58 @@ export function replayPaperBook(book: PaperBook, untilMs = Number.POSITIVE_INFIN
   const r = new Replay(book, stepsOf(book, t), t);
   r.until(untilMs);
   return { cashUsd: r.cash, held: Object.fromEntries(r.held), positions: Object.fromEntries([...r.positions].map(([k, p]) => [k, { ...p }])) };
+}
+
+/** When a book started: its `createdAt`, or — a book that does not say (one edited by hand) — the first thing that moved it, where
+ * rebuildEquity starts its curve too; nothing, a book with neither. What a caller asks the rebuild for starts here, never at a time that
+ * does not parse */
+export function paperBookStart(book: PaperBook): number | undefined {
+  const created = Date.parse(book.createdAt);
+  return Number.isFinite(created) ? created : stepsOf(book, told())[0]?.at;
+}
+
+/** five-minute bars are asked over the last day, and a range a little longer than a day (a clock that moved on) is still told with them */
+const FIVE_MINUTE_REACH_MS = DAY + HOUR;
+/** hourly bars reach back about twelve days (a source gives 300 at most) */
+const HOURLY_REACH_MS = 12 * DAY;
+/** a US stock's daily bars are asked from a week before the range: the session that closed last before it started is in them, over a
+ * weekend and the holidays beside one */
+const STOCK_DAYS_BACK_MS = 7 * DAY;
+
+/** The bars a book's past from `fromMs` to `now` is told with, to be asked of the paper account's own trader (its market's source): every
+ * market it held at `fromMs` or traded since, in the finest bars that reach back that far — five-minute bars over the last day, hourly over
+ * the last twelve days, daily before — each from the bar before the one where it is needed starts: a bar is stamped at its start and a
+ * source gives the bars that start at or after what was asked, so the bar that had closed when the range started is the one before the bar
+ * the range started in (a coin's daily bar, the one that started at midnight UTC the day before), and without it the range's first point
+ * would have no price. And a US stock's daily bars whatever the range: its source keeps minutes for the last market day alone
+ * (public-stocks.ts), so before that day's first minute only its daily closes price it — without them it would stand at its fill price
+ * through every night and weekend of a day's or a week's curve. Its daily bar is stamped at its session's open, so the caller says it is
+ * known at the session's end (a series' `closeAt`), never before */
+export function paperBarsWanted(book: PaperBook, fromMs: number, now: number): Array<{ symbol: string; interval: CandleInterval; since: number }> {
+  /** the start of the bar before the one that t falls in */
+  const barBefore = (t: number, interval: CandleInterval): number => Math.floor(t / BAR_MS[interval]) * BAR_MS[interval] - BAR_MS[interval];
+  // the markets held at fromMs, and the ones traded since
+  const held = new Map<string, number>();
+  const traded = new Set<string>();
+  const fills = Object.values(book.orders ?? {}).filter((o) => o?.filledQty > 0).sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+  for (const o of fills) {
+    const at = Date.parse(o.updatedAt);
+    if (at >= fromMs) traded.add(o.symbol);
+    else held.set(o.symbol, (held.get(o.symbol) ?? 0) + (o.side === "buy" ? o.filledQty : -o.filledQty) * (book.markets?.[o.symbol]?.kind === "perp" ? 0 : 1));
+  }
+  for (const sym of Object.keys(book.positions ?? {})) traded.add(sym);
+  const symbols = [...new Set([...traded, ...[...held].filter(([, q]) => Math.abs(q) > 1e-12).map(([s]) => s)])];
+  const wants: Array<{ symbol: string; interval: CandleInterval; since: number }> = [];
+  for (const symbol of symbols) {
+    if (now - fromMs <= FIVE_MINUTE_REACH_MS) wants.push({ symbol, interval: "5m", since: barBefore(fromMs, "5m") });
+    else {
+      wants.push({ symbol, interval: "1h", since: barBefore(Math.max(fromMs, now - HOURLY_REACH_MS), "1h") });
+      wants.push({ symbol, interval: "5m", since: now - DAY });
+    }
+    if (book.markets?.[symbol]?.kind === "stock") wants.push({ symbol, interval: "1d", since: fromMs - STOCK_DAYS_BACK_MS });
+    else if (fromMs < now - HOURLY_REACH_MS) wants.push({ symbol, interval: "1d", since: barBefore(fromMs, "1d") });
+  }
+  return wants;
 }
 
 /** one symbol's bars, every series given for it, each walked forward as the points move forward */
@@ -335,15 +404,8 @@ export function rebuildEquity(book: PaperBook, series: PriceSeries[], o: { fromM
   const points: RebuiltEquity["points"] = [];
   const now = o.nowUsd !== undefined && finite(o.nowUsd) ? o.nowUsd : undefined;
 
-  if (created >= o.fromMs && created <= o.toMs) points.push({ at: created, usd: startUsd });
-  const first = Math.ceil(Math.max(o.fromMs, created) / o.stepMs) * o.stepMs;
-  const count = first <= o.toMs ? Math.floor((o.toMs - first) / o.stepMs) + 1 : 0;
-  if (count > REBUILD_MAX_POINTS) throw new RangeError(`a rebuild of ${count} points is more than the ${REBUILD_MAX_POINTS} one curve draws: a longer step, or a shorter range`);
-  for (let k = 0; k < count; k++) {
-    const t = first + k * o.stepMs;
-    if (t === created) continue;
-    // the last point is the live value when it is given: nothing to rebuild there
-    if (now !== undefined && t === o.toMs) continue;
+  /** what the book was worth at t (the moments asked only ever move forward): the cash, what it held at its close, its perpetuals' unrealised */
+  const worth = (t: number): RebuiltEquity["points"][number] => {
     replay.until(t);
     let value = replay.cash;
     let partial = false;
@@ -362,7 +424,22 @@ export function rebuildEquity(book: PaperBook, series: PriceSeries[], o: { fromM
       const c = priced(symbol);
       value += (p.side === "long" ? c - p.entryPrice : p.entryPrice - c) * p.qty;
     }
-    points.push({ at: t, usd: cents(value), ...(partial ? { partial: true as const } : {}) });
+    return { at: t, usd: cents(value), ...(partial ? { partial: true as const } : {}) };
+  };
+
+  const first = Math.ceil(Math.max(o.fromMs, created) / o.stepMs) * o.stepMs;
+  const count = first <= o.toMs ? Math.floor((o.toMs - first) / o.stepMs) + 1 : 0;
+  if (count > REBUILD_MAX_POINTS) throw new RangeError(`a rebuild of ${count} points is more than the ${REBUILD_MAX_POINTS} one curve draws: a longer step, or a shorter range`);
+  if (created >= o.fromMs && created <= o.toMs) points.push({ at: created, usd: startUsd });
+  // a book started before the range: where it stood at the range's start, unless the grid has a point there, or the live value is the
+  // range's only point
+  else if (created < o.fromMs && first !== o.fromMs && !(now !== undefined && o.fromMs === o.toMs)) points.push(worth(o.fromMs));
+  for (let k = 0; k < count; k++) {
+    const t = first + k * o.stepMs;
+    if (t === created) continue;
+    // the last point is the live value when it is given: nothing to rebuild there
+    if (now !== undefined && t === o.toMs) continue;
+    points.push(worth(t));
   }
   if (now !== undefined && o.toMs >= created) {
     while (points.length && points[points.length - 1]!.at >= o.toMs) points.pop();
@@ -372,10 +449,13 @@ export function rebuildEquity(book: PaperBook, series: PriceSeries[], o: { fromM
   // what the rebuild cannot know, said once each — and only what is so, with the book's own figure where it has one
   replay.until(Number.POSITIVE_INFINITY);
   const orders = Object.values(book.orders ?? {}).filter((x): x is PaperOrder => !!x && typeof x.symbol === "string");
-  const liquidations = orders.filter((x) => isLiquidation(x) && x.filledQty > 0);
+  // a liquidation that does not say how far its loss went past the margin (`lossPastMarginUsd`: a book's orders from before it was written
+  // down): the margin it lost rests on a leverage the order does not keep. A close or a liquidation that says it is replayed exactly; a close
+  // from before it never lost less than its price says (no close was held to its margin then)
+  const liquidations = orders.filter((x) => isLiquidation(x) && x.filledQty > 0 && !finite(x.lossPastMarginUsd));
   for (const x of liquidations) {
     const at = filledAtOf(x);
-    notes.add(`${x.symbol} was liquidated (${x.ref}${Number.isFinite(at) ? `, ${iso(at)}` : ""}): the replay closes it at its price as a reduce, but a loss past the position's margin is not known to the replay — the paper account lost no more than the margin, and the margin rests on a leverage the order does not keep — so the curve from then on can sit below the book`);
+    notes.add(`${x.symbol} was liquidated (${x.ref}${Number.isFinite(at) ? `, ${iso(at)}` : ""}): the replay closes it at its price as a reduce, but a loss past the position's margin is not known to the replay — the order does not say it, the paper account lost no more than the margin, and the margin rests on a leverage the order does not keep — so the curve from then on can sit below the book`);
   }
   if (missing.size)
     notes.add(`no price bar was at hand for ${[...missing].join(", ")} at some points: there ${missing.size === 1 ? "it is" : "they are"} valued at the last price this account traded ${missing.size === 1 ? "it" : "them"} at, and those points are marked partial`);

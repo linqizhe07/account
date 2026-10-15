@@ -152,13 +152,14 @@
 .mk-quiet { font-size: 12px; color: var(--dim); margin: 6px 0 0; line-height: 1.5; }
 
 /* a market's hover card (markets.js mkPeek): one for the pane, on the page's body, beside the market a mouse rests on or a key reached. Its
-   whole name, what kind of thing it is with its countdown, who issues it, where it is listed (public prices quieter). It takes no click:
+   whole name, what kind of thing it is with its countdown, who issues it, where it is listed (public prices quieter), where its price is
+   from (a US stock's: real time, or Cboe's 15 minutes delayed; and when, once that is more than a minute or two ago). It takes no click:
    a click goes to what is under it. It comes in on opacity and transform only */
 .mk-peek { position: fixed; left: 0; top: 0; z-index: 25; display: flex; flex-direction: column; gap: 4px; width: max-content; max-width: min(360px, calc(100vw - 16px)); padding: 12px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--card-border); border-radius: var(--radius-m); box-shadow: var(--shadow); font-size: 13px; line-height: 1.45; pointer-events: none; overflow-wrap: anywhere; }
 .mk-peek[hidden] { display: none; }
 .mk-peek-n { font-size: 14px; font-weight: 700; }
-.mk-peek-k, .mk-peek-i { color: var(--dim); }
-.mk-peek-i { font-size: 12px; }
+.mk-peek-k, .mk-peek-i, .mk-peek-f { color: var(--dim); }
+.mk-peek-i, .mk-peek-f { font-size: 12px; }
 .mk-peek-w { font-size: 12px; }
 .mk-peek .mk-close { font-size: 13px; }
 .mk-peek:not([hidden]) { animation: mk-peek-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1); }

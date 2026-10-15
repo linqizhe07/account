@@ -384,12 +384,16 @@ export class LiveOrders {
     if (trailing && !(trailStop !== undefined && trailStop > 0)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a trail of ${trailPercent !== undefined ? `${plain(trailPercent)}%` : plain(trailPrice!)} from ${book !== undefined ? plain(book) : "no price"} leaves no stop for ${mk.name}` });
     const price = type === "stop" ? stopPrice : trailing ? (side === "buy" ? trailStop : book) : limitPrice === undefined ? book : side === "buy" ? limitPrice : type === "stop_limit" ? Math.max(limitPrice, stopPrice ?? 0) : Math.max(limitPrice, book ?? 0);
     if (!(price !== undefined && price > 0)) return no("E_ACCOUNT_UNPRICED", { venue: v.id, message: `${v.name} shows no price for ${mk.name} right now, so no limit can be judged: try a limit order` });
-    // a bracket's exits stand on the right sides of its entry: a buy's take-profit above it and its stop-loss below; a sell's the other way
+    // a bracket's exits stand on the right sides of its entry: a buy's take-profit above it and its stop-loss below; a sell's the other way.
+    // A limit fills at its limit or better, and one that crosses the book fills at the book: each exit is judged against the fill that is
+    // worst for it. The take-profit against the limit itself; the stop-loss against the book where the limit crosses it — a buy limited at
+    // 70,000 with the ask at 60,010 fills at 60,010, and a stop-loss at 65,000 above that fill would sell at once
     const entry = limitPrice ?? book;
-    if (entry !== undefined) {
+    const fill = limitPrice === undefined || book === undefined ? entry : side === "buy" ? Math.min(limitPrice, book) : Math.max(limitPrice, book);
+    if (entry !== undefined && fill !== undefined) {
       const up = side === "buy";
-      if (takeProfit !== undefined && (up ? takeProfit <= entry : takeProfit >= entry)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the take-profit (${plain(takeProfit)}) is ${up ? "above" : "below"} the entry (${plain(entry)}) for a ${side}` });
-      if (stopLoss !== undefined && (up ? stopLoss >= entry : stopLoss <= entry)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the stop-loss (${plain(stopLoss)}) is ${up ? "below" : "above"} the entry (${plain(entry)}) for a ${side}` });
+      if (takeProfit !== undefined && (up ? takeProfit <= entry : takeProfit >= entry)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the take-profit (${plain(takeProfit)}) must be ${up ? "above" : "below"} the entry (${plain(entry)}) for a ${side}` });
+      if (stopLoss !== undefined && (up ? stopLoss >= fill : stopLoss <= fill)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the stop-loss (${plain(stopLoss)}) must be ${up ? "below" : "above"} the entry (${plain(fill)}) for a ${side}${fill !== entry ? `: a ${side} limited at ${plain(entry)} crosses the book and fills there, at ${plain(fill)}` : ""}` });
     }
     // a market order — and a stop or a trailing stop, once it triggers — carries a worst price: 2% past where it is valued
     const worstPrice = type === "market" || type === "stop" || trailing ? (side === "buy" ? floorTo(price * (1 + SLIPPAGE), mk.priceStep) : ceilTo((trailing ? trailStop! : price) * (1 - SLIPPAGE), mk.priceStep)) : undefined;
@@ -423,6 +427,9 @@ export class LiveOrders {
     if (p.worstPrice === undefined) return p;
     const least = worth * (1 - SLIPPAGE);
     if (p.notional < least - 1e-9) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the price fell: at ${plain(p.price)} the order fetches ${usd(p.notional)} now, more than 2% under the ${usd(worth)} ${what}. Nothing was placed`, detail: { price: p.price, notionalUsd: p.notional, worthUsd: worth } });
+    // a trailing sell is valued at the book but sells where its stop triggers, under the book by its trail: its worst price stays the plan's,
+    // 2% under that stop. Pushed up toward the book, it would sit above the stop, and a stop that triggered could never fill
+    if (p.type === "trailing_stop") return p;
     return { ...p, worstPrice: Math.min(p.price, ceilTo(Math.max(p.worstPrice, least / per), p.m.priceStep)) };
   }
 
@@ -855,6 +862,13 @@ export class LiveOrders {
     const ref = r.ref && /^[^\s<>]{1,200}$/.test(r.ref) ? unaddressed(r.ref) : undefined;
     Object.assign(o, { status, filledQty, ...(ref ? { ref } : {}), ...(r.avgPrice !== undefined && r.avgPrice > 0 ? { avgPrice: r.avgPrice } : {}), ...(r.feeUsd !== undefined ? { feeUsd: r.feeUsd } : {}), native: r.native, updatedAt: new Date(this.money()?.realNow() ?? Date.now()).toISOString() });
     if (o.ref) o.unconfirmed = undefined;
+    // a bracket's exit closes what is left of its position and never more: one the venue trimmed to that (part of the holding sold, or the
+    // position reduced, since the exit was placed) fills smaller than it was placed. What filled is its size from then on — on its
+    // statement line, in its note and in what it was worth — never the size it was placed at. It counts on no limit, so nothing goes back
+    if (o.exitOf && o.status === "filled" && o.filledQty > 0 && o.filledQty < o.qty - 1e-12) {
+      o.qty = o.filledQty;
+      o.usd = Number(notionalOf(o, o.filledQty, o.price).toFixed(6));
+    }
     if (DONE.has(o.status)) {
       o.canceling = undefined;
       // a change still unconfirmed when the order is done: what filled settles the count (giveBack), whichever of the two stood
@@ -973,7 +987,8 @@ export class LiveOrders {
     if (given(a.stopPrice) && o.type !== "stop" && o.type !== "stop_limit") return no("E_ACCOUNT_BAD_ACTION", { message: `${o.id} is a ${o.type} order: it has no stop price to change` });
     const qty = given(a.qty) ? a.qty.trim() : plain(o.qty);
     if (DEC.test(qty) && Number(qty) < o.filledQty - 1e-12) return no("E_ACCOUNT_BAD_ACTION", { message: `${o.id} has ${qtyText(o.filledQty)} filled already: it cannot be made smaller than that` });
-    const f: Fields = { venue: o.venue, symbol: o.symbol, side: o.side, orderType: o.type, qty, usd: "", limitPrice: given(a.limitPrice) ? a.limitPrice.trim() : o.limitPrice !== undefined ? plain(o.limitPrice) : "", stopPrice: given(a.stopPrice) ? a.stopPrice.trim() : o.stopPrice !== undefined ? plain(o.stopPrice) : "", tif: o.tif ?? "", postOnly: o.postOnly ? "true" : "", reduceOnly: o.reduceOnly ? "true" : "", extendedHours: o.extendedHours ? "true" : "", trailPercent: o.trailPercent !== undefined ? plain(o.trailPercent) : "", trailPrice: o.trailPrice !== undefined ? plain(o.trailPrice) : "", takeProfit: "", stopLoss: "" };
+    const f: Fields = { venue: o.venue, symbol: o.symbol, side: o.side, orderType: o.type, qty, usd: "", limitPrice: given(a.limitPrice) ? a.limitPrice.trim() : o.limitPrice !== undefined ? plain(o.limitPrice) : "", stopPrice: given(a.stopPrice) ? a.stopPrice.trim() : o.stopPrice !== undefined ? plain(o.stopPrice) : "", tif: o.tif ?? "", postOnly: o.postOnly ? "true" : "", reduceOnly: o.reduceOnly ? "true" : "", extendedHours: o.extendedHours ? "true" : "", trailPercent: o.trailPercent !== undefined ? plain(o.trailPercent) : "", trailPrice: o.trailPrice !== undefined ? plain(o.trailPrice) : "", takeProfit: o.takeProfit !== undefined ? plain(o.takeProfit) : "", stopLoss: o.stopLoss !== undefined ? plain(o.stopLoss) : "" };
+    // a bracketed entry keeps its exits: the new limit is judged against them as a new order's would be, and the quote shows them
     const planned = await this.plan(f);
     if (isRefusal(planned)) return planned;
     // a stop's worst price is never pulled in by a change: a venue that holds a stop as a stop-limit at its worst price (Alpaca) keeps the
@@ -1173,11 +1188,66 @@ export class LiveOrders {
       const amount = micro((asking ? cents(p.maxUsd) : p.maxUsd).toFixed(6));
       const limit = covers(spend, v.id, amount, Date.parse(this.e.host.now()));
       if (limit) return { ...limit, message: `${limit.message}. A close that sells a holding is a sell order, and counts against the trading limit like one` };
-      if (asking) return this.closeCard(a, p, qty, who, spend);
-      return this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent!.address, action: who.hash, approval: spend.id, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) });
+      if (asking) return this.closeCard(a, p, qty, who, spend, pos);
+      return this.closed(await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent!.address, action: who.hash, approval: spend.id, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }), v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
     }
-    if (spend && who.card === undefined && !(open && micro(p.maxUsd.toFixed(6)) <= spend.perPaymentMicro)) return this.closeCard(a, p, qty, who);
-    return this.place(p, { signer: who.signer, authority: who.authority, ...(who.agent ? { agent: who.agent.address } : {}), action: who.hash, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }, native ? (clientId) => native.call(v.trader, pos.symbol, qty, clientId) : undefined);
+    if (spend && who.card === undefined && !(open && micro(p.maxUsd.toFixed(6)) <= spend.perPaymentMicro)) return this.closeCard(a, p, qty, who, undefined, pos);
+    return this.closed(await this.place(p, { signer: who.signer, authority: who.authority, ...(who.agent ? { agent: who.agent.address } : {}), action: who.hash, ...(who.envelope ? { envelope: who.envelope } : {}), ...(who.card ? { card: who.card } : {}) }, native ? (clientId) => native.call(v.trader, pos.symbol, qty, clientId) : undefined), v as LiveVenue & { trader: LiveTrader }, pos, qty, who);
+  }
+
+  /** the exits the venue placed for a position's entries (a bracket's take-profit and stop-loss, followed as the account's own orders: exitOf)
+   * still open at the venue — what a close of the whole position takes with it. Only those on the close's side: a long's sells, a short's
+   * buys, as the paper account's own cancel takes a holding's sells once it is sold whole. An exit the other way is a sell's bracket buying
+   * back what it sold (part of a holding sold with a take-profit under it and a stop-loss over it): it closes nothing of what is held, and
+   * stays when what is held is closed */
+  private exitsOf(venue: string, pos: Position): LiveOrder[] {
+    const side: Side = pos.side === "long" ? "sell" : "buy";
+    return this.e.orders.filter((o) => o.venue === venue && o.symbol === pos.symbol && o.side === side && o.exitOf !== undefined && !DONE.has(o.status) && !o.unfollowed && !!o.ref);
+  }
+
+  /** what a close of the whole position says of its exits, for the owner's quote and an agent's card: each canceled with it */
+  private exitsWords(venue: string, pos: Position, qty: number): string {
+    const exits = qty < pos.qty - 1e-12 ? [] : this.exitsOf(venue, pos);
+    return exits.length ? ` · ${exits.map((o) => `its ${o.exitOf!.kind} ${o.id}`).join(" and ")} ${exits.length > 1 ? "are" : "is"} canceled with it` : "";
+  }
+
+  /** A close that took the whole position takes its exits off the venue's book, through the venue's cancel: the position they guarded is
+   * gone, and an exit left armed trades the next position in that market (a stop-loss selling a holding bought later, or shrinking a later
+   * perpetual the same way). Only once the close has FILLED: a close of part of the position leaves them to what is left of it; a close
+   * the venue refused, or that ended without filling, leaves them as they were; and so does a close still waiting — a stock's market sell
+   * queued for the open, a close resting at the venue — for until it fills the position is still there, and the exits still guard it (the
+   * owner may yet cancel the close). A paper account cancels a position's exits itself when a close that waited takes the position whole
+   * (paper.ts cancelExits), and the account's poll then sees them canceled; a venue that does not would leave them, to be canceled there.
+   * Whoever closed, the exits go: they are the position's, not the closer's. A cancel the venue refuses is said on the exit's line, to be
+   * canceled at the venue */
+  private async closed(out: Outcome, v: LiveVenue & { trader: LiveTrader }, pos: Position, qty: number, who: { signer: string; authority: "owner" | "agent"; agent?: AgentKey | undefined; envelope?: Envelope | undefined }): Promise<Outcome> {
+    if (isRefusal(out) || out.kind !== "order" || qty < pos.qty - 1e-12) return out;
+    const close = out.order;
+    if (close.status !== "filled") return out;
+    const by = who.authority === "owner" ? "the owner" : (who.agent?.name ?? "an agent");
+    for (const o of this.exitsOf(v.id, pos)) {
+      const of = `${o.exitOf!.kind} of ${o.exitOf!.order}`;
+      const r = await safely(() => v.trader.cancel(o.ref, o.symbol), o.venue, o.venueName);
+      if (isRefusal(r)) {
+        this.holdOn(o.venue, r);
+        o.note = `${of} · the position was closed (${close.id}), and ${o.venueName} refused to cancel this exit: ${r.message}. Cancel it at ${o.venueName}`;
+        o.updatedAt = new Date(this.money()?.realNow() ?? Date.now()).toISOString();
+        this.e.host.log({ kind: "account-refusal", venue: o.venue, tool: "live cancel", code: r.code, reason: `${o.id} · ${of}, with the close ${close.id}: ${r.message}`, native: r.native, signer: who.signer });
+        this.line(o);
+        continue;
+      }
+      if (DONE.has(r.status)) this.apply(o, r, "");
+      else {
+        // the venue took the cancel but has not said the exit is gone: followed until it says, as any cancel is
+        o.canceling = true;
+        this.apply(o, r, `${of} · cancel asked of ${o.venueName} with the close ${close.id}: waiting for it to say the order is gone`);
+        this.polled.set(o.id, 0);
+      }
+      if (o.status === "canceled") o.note = `${of} · canceled: the position was closed (${close.id})`;
+      this.line(o);
+      this.e.host.log({ kind: "order", venue: o.venue, tool: "live cancel", outcome: o.status, venueOrderId: o.ref, reason: `${o.id} · ${of} · ${by} closed the position (${close.id}), so its exit was canceled`, signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}) });
+    }
+    return out;
   }
 
   /** What a close at `v` would be: the position, how much of it, the venue's own close or a reduce-only market order (a plain sell where a
@@ -1218,7 +1288,7 @@ export class LiveOrders {
     if (!f.symbol.trim()) return no("E_ACCOUNT_BAD_ACTION", { message: "a close names the position's market" });
     const c = await this.closing(v as LiveVenue & { trader: LiveTrader }, f, true);
     if (isRefusal(c)) return c;
-    const { p, qty } = c;
+    const { p, qty, pos } = c;
     const line = await this.placeRule(p.v, p.side, true, p.m.symbol);
     if (line) return line;
     const capUsd = m.writes().capUsd;
@@ -1226,14 +1296,14 @@ export class LiveOrders {
     const overCap = !v.paper && p.maxUsd > capUsd + 1e-9;
     return {
       action: { type: "liveClose", venue: v.id, symbol: p.m.symbol, qty: f.qty === "" ? "" : plain(qty) },
-      quote: { words: `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} at ${v.name}: ${this.words(p)}`, venue: v.id, venueName: v.name, symbol: p.m.symbol, name: p.m.name, side: p.side, qty, ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), price: p.price, worthUsd, capUsd, overCap, ...(v.paper ? { paper: true as const } : {}), ...(overCap ? { why: `${usd(worthUsd)} is more than the most one order may be on this server (${usd(capUsd)}): close part of it, or start the server with a higher --live-cap` } : {}) },
+      quote: { words: `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} at ${v.name}: ${this.words(p)}${this.exitsWords(v.id, pos, qty)}`, venue: v.id, venueName: v.name, symbol: p.m.symbol, name: p.m.name, side: p.side, qty, ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), price: p.price, worthUsd, capUsd, overCap, ...(v.paper ? { paper: true as const } : {}), ...(overCap ? { why: `${usd(worthUsd)} is more than the most one order may be on this server (${usd(capUsd)}): close part of it, or start the server with a higher --live-cap` } : {}) },
     };
   }
 
   /** an agent's close the owner answers: what it closes and what that is worth, shown on a card. A derivative's reduce-only close counts
    * against no limit, so its card holds none of one; a plain sell of a holding is an order, so its card holds its share of `spend` while it
    * waits, as an order's card does */
-  private closeCard(a: CloseFields | AgentLiveCloseAction, p: Plan, qty: number, who: { signer: string; agent?: AgentKey | undefined; envelope?: Envelope | undefined; hash: Hex }, spend?: SpendApproval): Outcome {
+  private closeCard(a: CloseFields | AgentLiveCloseAction, p: Plan, qty: number, who: { signer: string; agent?: AgentKey | undefined; envelope?: Envelope | undefined; hash: Hex }, spend: SpendApproval | undefined, pos: Position): Outcome {
     const agent = who.agent!;
     const now = Date.parse(this.e.host.now());
     const flight = this.e.host.openFlight({ id: slug(agent.name), name: agent.name, code: agent.code }, `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} · ${p.v.paper ? "paper" : "real money"}`);
@@ -1241,7 +1311,7 @@ export class LiveOrders {
     const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `close · ${p.side} ${qtyText(qty)} ${p.m.base}`, protocol: `${p.v.paper ? "paper order (no real money)" : "real order"} · a close at market`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)} · ${spend ? "it sells what is held, and counts against the trading limit like a sell order" : "it only shrinks what is held"}` };
     // the owner's answer signs the card's hash: the agent's request AND the market and size the owner is shown
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, symbol: p.m.symbol, qty: plain(qty), worth: worth.toFixed(2) })));
-    const card = this.e.host.raiseCard(flight.no, { account: p.v.id, intent: { kind: "trade", symbol: p.m.symbol, side: p.side, qty }, usd: worth, reason: `${agent.name} asks to close ${qtyText(qty)} ${p.m.base} of ${p.m.name}`, why: "live", action: a as AgentLiveCloseAction, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, ...(spend ? { approval: spend.id } : {}) });
+    const card = this.e.host.raiseCard(flight.no, { account: p.v.id, intent: { kind: "trade", symbol: p.m.symbol, side: p.side, qty }, usd: worth, reason: `${agent.name} asks to close ${qtyText(qty)} ${p.m.base} of ${p.m.name}${this.exitsWords(p.v.id, pos, qty)}`, why: "live", action: a as AgentLiveCloseAction, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, ...(spend ? { approval: spend.id } : {}) });
     this.shownClose.set(card.id, { symbol: p.m.symbol, qty });
     if (spend) this.e.patchSpend(spend.id, (x) => ({ ...x, reservedMicro: x.reservedMicro + micro(worth.toFixed(2)) }));
     this.e.host.log({ kind: "action", venue: p.v.id, tool: "agentLiveClose", signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}), outcome: "card", notionalUsd: worth, reason: `${card.id} · close ${qtyText(qty)} of ${p.m.name}`, flight: flight.no, intentId: card.id });
@@ -1432,6 +1502,9 @@ export class LiveOrders {
       if ((l.type !== "limit" && l.type !== "stop") || (l.side !== "buy" && l.side !== "sell") || !(typeof l.qty === "number" && l.qty > 0)) continue;
       const price = typeof l.limitPrice === "number" ? l.limitPrice : typeof l.stopPrice === "number" ? l.stopPrice : parent.price;
       const status = typeof l.status === "string" && ["pending", "open", "partial", "filled", "canceled", "rejected", "expired"].includes(l.status) ? (l.status as OrderStatus) : "open";
+      const filledQty = typeof l.filledQty === "number" && l.filledQty > 0 ? l.filledQty : 0;
+      // one that filled before it was followed, trimmed to what was left of its position: what filled is its size, as apply has it
+      const qty = status === "filled" && filledQty > 0 && filledQty < l.qty - 1e-12 ? filledQty : l.qty;
       const exit: LiveOrder = {
         id: this.e.nextOrderId(),
         clientId: typeof l.clientId === "string" && l.clientId ? l.clientId : `${parent.clientId}-${l.type === "limit" ? "tp" : "sl"}`,
@@ -1444,7 +1517,7 @@ export class LiveOrders {
         base: parent.base,
         side: l.side,
         type: l.type,
-        qty: l.qty,
+        qty,
         ...(typeof l.limitPrice === "number" ? { limitPrice: l.limitPrice } : {}),
         ...(typeof l.stopPrice === "number" ? { stopPrice: l.stopPrice } : {}),
         tif: "gtc",
@@ -1453,9 +1526,9 @@ export class LiveOrders {
         ...(parent.paper ? { paper: true as const } : {}),
         exitOf: { order: parent.id, kind: l.type === "limit" ? "take-profit" : "stop-loss" },
         price,
-        usd: Number(notionalOf(parent, l.qty, price).toFixed(6)),
+        usd: Number(notionalOf(parent, qty, price).toFixed(6)),
         status,
-        filledQty: typeof l.filledQty === "number" ? l.filledQty : 0,
+        filledQty,
         ...(typeof l.avgPrice === "number" ? { avgPrice: l.avgPrice } : {}),
         ...(typeof l.feeUsd === "number" ? { feeUsd: l.feeUsd } : {}),
         ref: l.ref,

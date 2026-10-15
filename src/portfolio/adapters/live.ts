@@ -67,7 +67,12 @@ export async function liveAccount(id: string, source: LiveSource, opts: LiveAcco
       if (p !== undefined) usd = b.amount * p;
     }
     const note = [b.where, usd === undefined ? "no price" : undefined].filter(Boolean).join(" · ");
-    return { account: id, asset: b.asset, amount: b.amount, usd: r2(usd ?? 0), class: b.class ?? (isStable(b.asset) ? (b.asset.toUpperCase() === "USD" ? "cash" : "stable") : "crypto"), ...(note ? { note } : {}) };
+    // what of it is free now, when the source says only part is: kept within the line (never more than it holds, never less than none), and
+    // its dollars, when the source said only the units, the same share of the line's dollars as the units are of its amount
+    const freeAmount = b.freeAmount !== undefined && Number.isFinite(b.freeAmount) && b.amount > 0 ? Math.max(0, Math.min(b.freeAmount, b.amount)) : undefined;
+    const freeUsd = b.freeUsd !== undefined && Number.isFinite(b.freeUsd) ? b.freeUsd : freeAmount !== undefined && usd !== undefined ? (usd * freeAmount) / b.amount : undefined;
+    const worth = r2(usd ?? 0);
+    return { account: id, asset: b.asset, amount: b.amount, usd: worth, class: b.class ?? (isStable(b.asset) ? (b.asset.toUpperCase() === "USD" ? "cash" : "stable") : "crypto"), ...(note ? { note } : {}), ...(freeUsd !== undefined ? { freeUsd: Math.max(0, Math.min(r2(freeUsd), worth)) } : {}), ...(freeAmount !== undefined ? { freeAmount } : {}) };
   };
   // what is held, and a short as the venue carries it (a negative amount, worth what buying it back costs): the venue's total is net of it,
   // as the venue's own equity is; the holdings by asset (account/holdings.ts) list only what is held
