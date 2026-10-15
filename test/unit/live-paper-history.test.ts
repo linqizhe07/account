@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rebuildEquity, REBUILD_MAX_POINTS, replayPaperBook, type PriceSeries } from "../../src/portfolio/live/paper-history.ts";
+import { paperBarsWanted, paperBookStart, rebuildEquity, REBUILD_MAX_POINTS, replayPaperBook, type PriceSeries } from "../../src/portfolio/live/paper-history.ts";
 import type { PaperBook, PaperFill, PaperMarketRef, PaperOrder } from "../../src/portfolio/live/paper.ts";
 import type { Candle } from "../../src/portfolio/live/trade.ts";
 
@@ -217,6 +217,100 @@ describe("a paper account's past, told again from its own book", () => {
       );
     });
 
+    it("holds a close past the margin to the margin as the order says it, and replays it exactly; a liquidation whose order does not say it is still said", () => {
+      // long 1 at 100 at 20x: 5 of margin. A gap to 80, and the owner closes half: 10 lost and 0.04 of fee against the 2.5 of margin the half
+      // had — the 2.5 left takes the rest first, and 5.04 is past all of it. Then the other half at 90, with no margin left: 5.045 past it.
+      // The cash the book ends with is the cash it had after the open
+      const closed = bookOf({
+        createdAt: iso(C),
+        startCashUsd: 1000,
+        cashUsd: 994.9,
+        orders: {
+          p1: order("p1", "BTC-PERP", "buy", 1, 100, C + 10 * MIN),
+          p2: order("p2", "BTC-PERP", "sell", 0.5, 80, C + 2 * HOUR + 10 * MIN, { lossPastMarginUsd: 5.04 }),
+          p3: order("p3", "BTC-PERP", "sell", 0.5, 90, C + 3 * HOUR + 10 * MIN, { lossPastMarginUsd: 5.045 }),
+        },
+        markets: { "BTC-PERP": market("perp", "BTC", "USD", { maxLeverage: 40 }) },
+        funding: [],
+      });
+      expect(replayPaperBook(closed)).toEqual({ cashUsd: 994.9, held: {}, positions: {} });
+      const r = rebuildEquity(closed, [{ symbol: "BTC-PERP", interval: "1h", candles: bars(C, HOUR, [100, 100, 80, 90]) }], { fromMs: C, toMs: C + 4 * HOUR, stepMs: HOUR });
+      // 3h: half closed, the half left marked 80 with no margin under it (−10), as the book itself would value it then
+      expect(r.points.map((p) => p.usd)).toEqual([1000, 999.9, 999.9, 984.9, 994.9]);
+      expect(r.inexact).toEqual([]);
+      // liquidated at 90 with 5 of margin: 10 lost and 0.09 of fee, 5.09 past the margin. The engine writes it on the order: exact
+      const liquidated = (past: Partial<PaperOrder>): PaperBook =>
+        bookOf({
+          createdAt: iso(C),
+          startCashUsd: 1000,
+          cashUsd: 994.9,
+          orders: {
+            p1: order("p1", "BTC-PERP", "buy", 1, 100, C + 10 * MIN),
+            p2: order("p2", "BTC-PERP", "sell", 1, 90, C + 2 * HOUR + 10 * MIN, { clientId: "liquidation-2", reduceOnly: true, note: "liquidated at the mark (90)", ...past }),
+          },
+          markets: { "BTC-PERP": market("perp", "BTC", "USD", { maxLeverage: 40 }) },
+        });
+      expect(replayPaperBook(liquidated({ lossPastMarginUsd: 5.09 })).cashUsd).toBe(994.9);
+      expect(rebuildEquity(liquidated({ lossPastMarginUsd: 5.09 }), series, { fromMs: C, toMs: C + 3 * HOUR, stepMs: HOUR }).inexact).toEqual([]);
+      // a book's liquidation from before the engine wrote it: not known, and said — with the size the cash check finds
+      const old = rebuildEquity(liquidated({}), series, { fromMs: C, toMs: C + 3 * HOUR, stepMs: HOUR });
+      expect(old.inexact).toHaveLength(2);
+      expect(old.inexact[0]).toContain("BTC-PERP was liquidated (p2, 2026-10-03T02:10:00.000Z)");
+      expect(old.inexact[0]).toContain("a loss past the position's margin is not known to the replay");
+      expect(old.inexact[1]).toBe(
+        "the replay ends with $989.81 in cash and margin, the book with $994.90: $5.09 the replay cannot place in time (funding paid or received before the account kept it hour by hour, a liquidation's loss past its margin, or a fill the book no longer has), so the curve before now is below the book by up to that",
+      );
+    });
+
+    it("replays a liquidation the margin covered as the engine writes it — nothing past the margin, 0 — with nothing to say; one with no figure (a book from before it) is still said", () => {
+      // long 1 at 100 at 20x: 5 of margin. Marked 96: 4 lost, 1 left — under the maintenance margin (96 / 80 = 1.20) — so liquidated at 96,
+      // the fee (0.096) out of what is left and 0.904 back to cash: nothing past the margin
+      const covered = (past: Partial<PaperOrder>): PaperBook =>
+        bookOf({
+          createdAt: iso(C),
+          startCashUsd: 1000,
+          cashUsd: round6(1000 - 5 - 0.1 + 0.904),
+          orders: {
+            p1: order("p1", "BTC-PERP", "buy", 1, 100, C + 10 * MIN),
+            p2: order("p2", "BTC-PERP", "sell", 1, 96, C + 2 * HOUR + 10 * MIN, { clientId: "liquidation-2", reduceOnly: true, note: "liquidated at the mark (96)", ...past }),
+          },
+          markets: { "BTC-PERP": market("perp", "BTC", "USD", { maxLeverage: 40 }) },
+        });
+      expect(replayPaperBook(covered({ lossPastMarginUsd: 0 })).cashUsd).toBe(995.804);
+      expect(rebuildEquity(covered({ lossPastMarginUsd: 0 }), series, { fromMs: C, toMs: C + 3 * HOUR, stepMs: HOUR }).inexact).toEqual([]);
+      const old = rebuildEquity(covered({}), series, { fromMs: C, toMs: C + 3 * HOUR, stepMs: HOUR });
+      expect(old.inexact).toHaveLength(1);
+      expect(old.inexact[0]).toContain("BTC-PERP was liquidated (p2, 2026-10-03T02:10:00.000Z)");
+    });
+
+    it("replays a look's liquidation, its funding and an order it filled at the same millisecond in the engine's order: the funding, the liquidation, then the order", () => {
+      // long 1 at 100 at 20x, opened at 0h; a stop to sell 1 at 95 stands (neither a bracket's exit nor reduce-only). The price gaps to 90 and
+      // the look at 2h marks the perpetual first: two hours of funding (0.20) out of the margin, then the long liquidated at 90 — 10 lost and
+      // 0.09 of fee against 4.80 of margin, 5.29 past it. Then it judges the stop, which sells 1 at 90 with no position left: a short opened,
+      // 4.50 of margin put up. All of it at one millisecond, the liquidation's ref after the stop's
+      const T = C + 2 * HOUR;
+      const book = bookOf({
+        createdAt: iso(C),
+        startCashUsd: 1000,
+        cashUsd: round6(1000 - 5 - 0.1 - 4.5 - 0.09),
+        positions: { "BTC-PERP": { side: "short", qty: 1, entryPrice: 90, marginUsd: 4.5, leverage: 20, fundingUsd: 0, fundedAt: T } },
+        orders: {
+          p1: order("p1", "BTC-PERP", "buy", 1, 100, C),
+          p2: order("p2", "BTC-PERP", "sell", 1, 90, T, { type: "stop", stopPrice: 95, at: iso(C + 20 * MIN), triggeredAt: iso(T), filledAt: iso(T) }),
+          p3: order("p3", "BTC-PERP", "sell", 1, 90, T, { clientId: "liquidation-3", reduceOnly: true, lossPastMarginUsd: 5.29, note: "liquidated at the mark (90)" }),
+        },
+        markets: { "BTC-PERP": market("perp", "BTC", "USD", { maxLeverage: 40 }) },
+        funding: [{ at: iso(T), symbol: "BTC-PERP", usd: 0.2 }],
+      });
+      // the replay ends where the book does: short 1 from 90, 994.81 in cash and margin (990.31 + 4.50)
+      expect(replayPaperBook(book)).toEqual({ cashUsd: 994.81, held: {}, positions: { "BTC-PERP": { side: "short", qty: 1, entryPrice: 90 } } });
+      const r = rebuildEquity(book, [{ symbol: "BTC-PERP", interval: "1h", candles: bars(C, HOUR, [100, 90, 95, 92]) }], { fromMs: C, toMs: C + 4 * HOUR, stepMs: HOUR });
+      // 3h: the short marked 95 (−5); 4h: marked 92 (−2)
+      expect(r.points.map((p) => p.usd)).toEqual([1000, 999.9, 994.81, 989.81, 992.81]);
+      // the funding at 2h was the long's, not the short's opened at that moment: nothing is missing from either
+      expect(r.inexact).toEqual([]);
+    });
+
     it("keeps a short's sign and an added position's average entry as fill() does, and counts an open position's margin in the check", () => {
       // SOL: short 1 at 100, then 1 more at 120 — short 2 from 110, 220 of margin at 1x still put up; ETH: short 2 at 50, bought back at 40
       const book = bookOf({
@@ -373,6 +467,47 @@ describe("a paper account's past, told again from its own book", () => {
     expect(later.points.map((p) => p.at)).toEqual([ms("2026-10-14T00:00:00Z"), ms("2026-10-14T01:00:00Z"), ms("2026-10-14T02:00:00Z")]);
   });
 
+  it("starts a range that begins after the book, off the grid, with where the book stood at that very moment, valued as every point is", () => {
+    // an hour's curve asked at 15:03:17: the range starts at 14:03:17, between two grid points
+    const start = ms("2026-10-14T14:03:17Z");
+    const now = ms("2026-10-14T15:03:17Z");
+    const r = rebuildEquity(realBook(), realBars(), { fromMs: start, toMs: now, stepMs: 5 * MIN, nowUsd: 9987.564 });
+    // after p1 and p2, before p3 (as at 18:05 the day before): the cash, 0.000235 BTC at 82,000 and 0.098031 ETH at 2,450
+    expect(r.points[0]).toEqual({ at: start, usd: 9994.5 });
+    expect(r.points[1]).toEqual({ at: ms("2026-10-14T14:05:00Z"), usd: 9994.5 });
+    expect(r.points).toHaveLength(1 + 12 + 1);
+    expect(r.points.at(-1)).toEqual({ at: now, usd: 9987.56 });
+    // a symbol with no bar at that moment: valued at its last fill, partial and missing, as at any point
+    const C = ms("2026-10-06T00:00:00Z");
+    const book = bookOf({ createdAt: iso(C), cashUsd: 9499.5, holdings: { TSLAX: { qty: 2, costUsd: 500.5 } }, orders: { p1: order("p1", "TSLAX", "buy", 2, 250, C + 90 * MIN, { feeUsd: 0.5 }) }, markets: { TSLAX: market("token", "TSLAX", "USD", { source: "xstocks" }) } });
+    const t = rebuildEquity(book, [], { fromMs: C + 2 * HOUR + 17 * MIN, toMs: C + 4 * HOUR, stepMs: HOUR });
+    expect(t.points).toEqual([
+      { at: C + 2 * HOUR + 17 * MIN, usd: 9999.5, partial: true },
+      { at: C + 3 * HOUR, usd: 9999.5, partial: true },
+      { at: C + 4 * HOUR, usd: 9999.5, partial: true },
+    ]);
+    expect(t.missing).toEqual(["TSLAX"]);
+    // the grid has a point at the range's start, or the live value is the range's only point: nothing more
+    expect(rebuildEquity(book, [], { fromMs: C + 2 * HOUR, toMs: C + 3 * HOUR, stepMs: HOUR }).points.map((p) => p.at)).toEqual([C + 2 * HOUR, C + 3 * HOUR]);
+    expect(rebuildEquity(book, [], { fromMs: C + 2 * HOUR + 17 * MIN, toMs: C + 2 * HOUR + 17 * MIN, stepMs: HOUR, nowUsd: 9998 }).points).toEqual([{ at: C + 2 * HOUR + 17 * MIN, usd: 9998 }]);
+  });
+
+  it("starts a book whose own start does not parse at its first fill, as the rebuild does, so what a caller asks for never starts at a time that is not one", () => {
+    const C = ms("2026-10-06T00:00:00Z");
+    const good = bookOf({ createdAt: iso(C), cashUsd: 9399.4, holdings: { "BTC/USD": { qty: 0.01, costUsd: 600.6 } }, orders: { p1: order("p1", "BTC/USD", "buy", 0.01, 60_000, C + HOUR, { feeUsd: 0.6 }) }, markets: { "BTC/USD": market("spot", "BTC") } });
+    expect(paperBookStart(good)).toBe(C);
+    // edited by hand
+    const edited = { ...good, createdAt: "not a date" };
+    expect(paperBookStart(edited)).toBe(C + HOUR);
+    const from = Math.max(C - DAY, paperBookStart(edited)!);
+    const r = rebuildEquity(edited, [{ symbol: "BTC/USD", interval: "1h", candles: flat(C, C + 3 * HOUR, HOUR, 61_000) }], { fromMs: from, toMs: C + 3 * HOUR, stepMs: HOUR, nowUsd: 10_009.4 });
+    expect(r.createdAt).toBe(C + HOUR);
+    expect(r.points[0]).toEqual({ at: C + HOUR, usd: 10_000 });
+    expect(r.inexact).toEqual([`the book does not say when it started; the curve starts at its first fill (${iso(C + HOUR)})`]);
+    // nothing filled and no start: nothing to start at
+    expect(paperBookStart({ ...edited, orders: {}, holdings: {} })).toBeUndefined();
+  });
+
   it("ends on the live value when it is given: a point of its own at the range's end, or in place of the grid's last", () => {
     const from = ms("2026-10-14T15:00:00Z");
     const off = rebuildEquity(realBook(), realBars(), { fromMs: from, toMs: ms("2026-10-14T15:37:12Z"), stepMs: 5 * MIN, nowUsd: 9987.564 });
@@ -434,6 +569,67 @@ describe("a paper account's past, told again from its own book", () => {
     expect(valueAt(r, ms("2026-10-13T19:00:00Z"))?.usd).toBe(10_020);
     expect(valueAt(r, ms("2026-10-13T20:00:00Z"))?.usd).toBe(10_050);
     expect(r.missing).toEqual(["AAPL"]);
+  });
+
+  it("asks a US stock's daily closes over every range, from a week before it — its minutes are the last market day's alone — and a coin's only past the hourly bars' reach", () => {
+    const C = ms("2026-10-05T14:00:00Z");
+    const book = bookOf({
+      createdAt: iso(C - 60 * DAY),
+      cashUsd: 7399.4,
+      holdings: { AAPL: { qty: 10, costUsd: 2000 }, "BTC/USD": { qty: 0.01, costUsd: 600.6 } },
+      orders: { p1: order("p1", "AAPL", "buy", 10, 200, C, { feeUsd: 0 }), p2: order("p2", "BTC/USD", "buy", 0.01, 60_000, C, { feeUsd: 0.6 }) },
+      markets: { AAPL: market("stock", "AAPL", "USD", { source: "us-stocks" }), "BTC/USD": market("spot", "BTC") },
+    });
+    // Monday 12 October, 10:00 in New York
+    const now = ms("2026-10-12T14:00:00Z");
+    const wants = (fromMs: number) => paperBarsWanted(book, fromMs, now).map((w) => `${w.symbol} ${w.interval} ${iso(w.since)}`).sort();
+    // a day: five-minute bars from the one that had closed when the range started, and the stock's daily closes from a week before the
+    // Sunday the range starts on, so Friday's is in them
+    expect(wants(now - DAY)).toEqual(["AAPL 1d 2026-10-04T14:00:00.000Z", "AAPL 5m 2026-10-11T13:55:00.000Z", "BTC/USD 5m 2026-10-11T13:55:00.000Z"]);
+    // a week: hourly bars and the last day's five-minute ones, and the stock's daily closes
+    expect(wants(now - 7 * DAY)).toEqual(["AAPL 1d 2026-09-28T14:00:00.000Z", "AAPL 1h 2026-10-05T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1h 2026-10-05T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
+    // a month: hourly bars reach back twelve days; daily bars before that, a coin's from the one that had closed when the range started (it
+    // started at midnight UTC the day before), not from a day before the range's start, which a source that gives the bars starting at or
+    // after it would leave out
+    expect(wants(now - 30 * DAY)).toEqual(["AAPL 1d 2026-09-05T14:00:00.000Z", "AAPL 1h 2026-09-30T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1d 2026-09-11T00:00:00.000Z", "BTC/USD 1h 2026-09-30T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
+    // with them, the weekend stands at Friday's close (known at the session's end, 20:00 UTC), not at the price the account paid
+    const daily = { symbol: "AAPL", interval: "1d" as const, candles: [{ t: ms("2026-10-08T13:30:00Z"), o: 205, h: 205, l: 205, c: 205 }, { t: ms("2026-10-09T13:30:00Z"), o: 210, h: 210, l: 210, c: 210 }], closeAt: (c: Candle) => c.t + 6.5 * HOUR };
+    const stock = bookOf({ createdAt: iso(C), cashUsd: 8000, holdings: { AAPL: { qty: 10, costUsd: 2000 } }, orders: { p1: order("p1", "AAPL", "buy", 10, 200, C, { feeUsd: 0 }) }, markets: { AAPL: market("stock", "AAPL", "USD", { source: "us-stocks" }) } });
+    const r = rebuildEquity(stock, [daily], { fromMs: now - DAY, toMs: now - HOUR, stepMs: HOUR });
+    expect(r.points.every((p) => p.usd === 10_100 && !p.partial)).toBe(true);
+    expect(r.missing).toEqual([]);
+  });
+
+  it("tells a month's curve of a coin from its start with the bars it asks, as a source gives them — those that start at or after what was asked", () => {
+    // 0.1 BTC bought at 100,000 sixty days ago; BTC rises 100 a day, a bar's close being its price when it closed
+    const created = ms("2026-08-13T00:00:00Z");
+    const book = bookOf({
+      createdAt: iso(created),
+      startCashUsd: 20_000,
+      cashUsd: 9990,
+      holdings: { "BTC/USD": { qty: 0.1, costUsd: 10_010 } },
+      orders: { p1: order("p1", "BTC/USD", "buy", 0.1, 100_000, created + HOUR) },
+      markets: { "BTC/USD": market("spot", "BTC") },
+    });
+    const now = ms("2026-10-12T14:00:00Z");
+    const span = { "5m": 5 * MIN, "1h": HOUR, "1d": DAY } as const;
+    /** a source's candles: the bars of the interval that have closed by now, from the first that starts at or after `since` */
+    const candles = (interval: keyof typeof span, since: number): Candle[] => {
+      const out: Candle[] = [];
+      for (let t = Math.floor(created / span[interval]) * span[interval]; t + span[interval] <= now; t += span[interval]) {
+        const c = 100_000 + (100 * (t + span[interval] - created)) / DAY;
+        if (t >= since) out.push({ t, o: c, h: c, l: c, c });
+      }
+      return out;
+    };
+    const fromMs = now - 30 * DAY;
+    const series: PriceSeries[] = paperBarsWanted(book, fromMs, now).map((w) => ({ symbol: w.symbol, interval: w.interval, candles: candles(w.interval, w.since) }));
+    const r = rebuildEquity(book, series, { fromMs, toMs: now, stepMs: 6 * HOUR });
+    // at the range's start (14:00 UTC): the daily bar that closed at midnight before it, thirty days after the book started — 103,000
+    expect(r.points[0]).toEqual({ at: fromMs, usd: 9990 + 10_300 });
+    expect(r.points.every((p) => !p.partial)).toBe(true);
+    expect(r.missing).toEqual([]);
+    expect(r.inexact).toEqual([]);
   });
 
   it("refuses a step that is not a positive number of milliseconds, a range that ends before it starts, and a grid of more points than one curve draws", () => {

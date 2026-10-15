@@ -38,6 +38,13 @@ export interface LiveBalance {
   /** which of the venue's own ledgers, or which chain */
   where?: string | undefined;
   class?: AssetClass | undefined;
+  /** of this line's dollars, how many are free to spend now, as the venue says: the rest is margin in use (Hyperliquid's perps account
+   * value against what it says is withdrawable) or locked. Absent: all of it — unless `freeAmount` says less, when its dollars are the same
+   * share of the line's (adapters/live.ts) */
+  freeUsd?: number | undefined;
+  /** of this line's units, how many are free now, as the venue says: the rest is held in resting orders or as margin (an exchange's `free`
+   * beside its `total`, Hyperliquid's spot `hold`). Absent: all of it */
+  freeAmount?: number | undefined;
 }
 
 /** one real account or address: read, never written */
@@ -85,9 +92,7 @@ export interface HttpReply {
   /** a redirect's target, its host only — never followed, and never its path, which may carry a place or an address */
   location?: string | undefined;
 }
-/** `charset`: the body's encoding where it is not UTF-8 (Tencent's quotes are GBK), decoded so; `full`: the whole text is kept (a text feed
- * that is not JSON, read by its fields), not the first 2000 characters a refusal's words need */
-export type Http = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; charset?: string; full?: boolean }) => Promise<HttpReply>;
+export type Http = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }) => Promise<HttpReply>;
 
 /** the real network: one request, a timeout (the body's too), no redirect followed — a redirect comes back as the answer it is, with the
  * host it pointed at, so it is told as the venue answering and not as "did not answer" */
@@ -99,14 +104,14 @@ export const realHttp: Http = async (url, init = {}) => {
     const host = hostOf(r.headers.get("location"), url);
     return { status: r.status, body: undefined, text: "", ...(host ? { location: host } : {}), ...(wait ? { retryAfterMs: wait } : {}) };
   }
-  const text = init.charset ? new TextDecoder(init.charset).decode(await r.arrayBuffer()) : await r.text();
+  const text = await r.text();
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
     body = undefined;
   }
-  return { status: r.status, body, text: init.full ? text : text.slice(0, 2000), ...(wait ? { retryAfterMs: wait } : {}) };
+  return { status: r.status, body, text: text.slice(0, 2000), ...(wait ? { retryAfterMs: wait } : {}) };
 };
 
 /** a Retry-After header — seconds, or an HTTP date — as milliseconds from now; nothing when it says nothing usable. An hour at most */
@@ -290,3 +295,12 @@ export interface MarketExtras {
  * Stock Tokens trade against on Robinhood Chain */
 export const STABLES = new Set(["USD", "USDC", "USDC.E", "USDT", "USDT0", "USD₮0", "USD₮", "FDUSD", "PYUSD", "DAI", "TUSD", "USDP", "PUSD", "USDG"]);
 export const isStable = (asset: string): boolean => STABLES.has(asset.toUpperCase());
+
+/** a line's free part (LiveBalance freeAmount, freeUsd) as the venue said it, a number or a numeric string: set only where it is less than
+ * the whole line, and never below none. A field the venue left out, or one that is not a number, is no word about it: all of it is free.
+ * `unit`: whether the venue said it in the line's units or in its dollars */
+export const freePart = (said: unknown, whole: number, unit: "amount" | "usd"): Pick<LiveBalance, "freeAmount" | "freeUsd"> => {
+  const n = typeof said === "number" ? said : typeof said === "string" && said.trim() !== "" ? Number(said) : NaN;
+  if (!Number.isFinite(n) || n >= whole) return {};
+  return unit === "usd" ? { freeUsd: Math.max(0, n) } : { freeAmount: Math.max(0, n) };
+};

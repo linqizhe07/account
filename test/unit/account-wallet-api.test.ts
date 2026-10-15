@@ -217,6 +217,17 @@ describe("Markets: what there is to trade", () => {
     expect([badTab.status, badTab.body.refusal.code]).toEqual([409, "E_ACCOUNT_BAD_ACTION"]);
     expect((await get("/api/account/explore?sort=random")).status).toBe(409);
   });
+
+  it("reads one row by its own key — kept apart from the plain read it may follow in the cache — and refuses a key too long or asked twice", async () => {
+    // the plain read first: its answer stands in the cache for a while
+    expect((await get("/api/account/explore")).body.items.length).toBeGreaterThan(1);
+    const one = await get("/api/account/explore?key=coin:BTC");
+    expect(one.status).toBe(200);
+    expect(one.body.items.map((i: { key: string }) => i.key)).toEqual(["coin:BTC"]);
+    const long = await get(`/api/account/explore?key=${"x".repeat(201)}`);
+    expect([long.status, long.body.refusal.code]).toEqual([409, "E_ACCOUNT_BAD_ACTION"]);
+    expect((await get("/api/account/explore?key=a&key=b")).status).toBe(400);
+  });
 });
 
 describe("Portfolio: what is held", () => {

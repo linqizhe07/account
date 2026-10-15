@@ -20,14 +20,14 @@
  */
 import { no } from "../refuse.ts";
 import type { Refusal } from "../../core/errors.ts";
-import { bucketFor, NETWORTH_RANGES, type NetWorthBucket, type NetWorthEvent, type NetWorthHistory, type NetWorthRange } from "./networth.ts";
+import { bucketFor, NETWORTH_RANGES, NETWORTH_STANDS_MS, type NetWorthBucket, type NetWorthEvent, type NetWorthHistory, type NetWorthRange } from "./networth.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const SPAN_MS: Readonly<Record<Exclude<NetWorthRange, "all">, number>> = { "1d": DAY, "1w": 7 * DAY, "1m": 30 * DAY };
 export const BUCKET_MS: Readonly<Record<NetWorthBucket, number>> = { "5m": 5 * MINUTE, "1h": HOUR, "1d": DAY };
-/** a written point stands for the time after it this long: past it, with no newer point, the told-again past speaks */
+/** a written point stands for the time after it this long, whatever comes after it */
 const STANDS_MS = 20 * MINUTE;
 
 export interface PaperPoint {
@@ -81,8 +81,12 @@ export function paperRangeStart(range: NetWorthRange, now: number, series: Reado
   return starts.length ? Math.min(...starts) : now;
 }
 
-/** one account's points, the written ones first: a told-again point stands only where no written point stands (one written within the
- * last STANDS_MS before it), and the last point is the value now */
+/** One account's points, the written ones first: a told-again point stands only where no written point stands, and the last point is the
+ * value now. A written point stands STANDS_MS after it; and on, up to the next written point (or now), where that is within the log's own
+ * NETWORTH_STANDS_MS of it (account/networth.ts): the paper log writes a changed paper account at the next five-minute look and an
+ * unchanged one only once an hour, so nothing written in between means nothing changed — a written point that gave way sooner would hand
+ * the rest of every quiet hour to the told-again past, and the curve would saw between the two. A longer gap is the service not running
+ * for some of it, and there, past STANDS_MS, the told-again past speaks */
 function merged(s: PaperVenueSeries, now: number): PaperPoint[] {
   const rec = [...(s.recorded ?? [])].filter((p) => p.at <= now).sort((a, b) => a.at - b.at);
   const covered = (t: number): boolean => {
@@ -97,7 +101,9 @@ function merged(s: PaperVenueSeries, now: number): PaperPoint[] {
         lo = mid + 1;
       } else hi = mid - 1;
     }
-    return best >= 0 && t - rec[best]!.at <= STANDS_MS;
+    if (best < 0) return false;
+    const at = rec[best]!.at;
+    return t - at <= STANDS_MS || (rec[best + 1]?.at ?? now) - at <= NETWORTH_STANDS_MS;
   };
   const re = (s.rebuilt ?? []).filter((p) => p.at < now && !covered(p.at));
   const out = [...rec, ...re].sort((a, b) => a.at - b.at);
@@ -130,9 +136,16 @@ export function paperCurve(series: readonly PaperVenueSeries[], o: { range: stri
   const bucket = bucketFor(range, now - startMs);
   const step = BUCKET_MS[bucket];
   const accounts = series.map((s) => {
-    const points = merged(s, now);
+    let points = merged(s, now);
+    const since = s.createdAt ?? points[0]?.at;
+    // an account told by its written points alone (no book) stands at the range's start only on a point written close enough before it, as
+    // the net worth curve's start does (account/networth.ts): past that the service was not looking, so its curve and its change start at
+    // its first point in the range — it comes in there as a connection would, moving the total and not the change. A book's told-again
+    // past has a point at the range's start of its own (live/paper-history.ts)
+    const anchor = s.createdAt === undefined ? valueAt(points, startMs) : undefined;
+    if (anchor && startMs - anchor.at > NETWORTH_STANDS_MS) points = points.filter((p) => p.at >= startMs);
     const begins = s.createdAt ?? points[0]?.at ?? now;
-    return { s, points, begins };
+    return { s, points, begins, since };
   });
   // the instants drawn: the buckets' ends, every account's start inside the range, and now
   const times = new Set<number>();
@@ -173,7 +186,7 @@ export function paperCurve(series: readonly PaperVenueSeries[], o: { range: stri
   const startUsd = allStarted ? r2(series.reduce((x, s) => x + s.startUsd!, 0)) : undefined;
   const inexact = [...new Set(series.flatMap((s) => s.inexact ?? []))];
   const missing = [...new Set(series.flatMap((s) => s.missing ?? []))];
-  const first = accounts.map((a) => a.begins).filter((x) => Number.isFinite(x));
+  const first = accounts.map((a) => a.since).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
   const events = (o.events ?? []).filter((e) => {
     const ms = Date.parse(e.at);
     return ms >= startMs && ms <= now;

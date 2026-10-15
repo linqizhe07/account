@@ -347,6 +347,42 @@ export function malformed(action: Action): string | null {
   return extra === undefined ? null : `"${extra}" is not part of what "${action.type}" signs`;
 }
 
+/** an order as a seat's tools take it (mcp.ts portfolio_live_order, portfolio_live_batch, portfolio_live_preview): numbers, and the type
+ * left out for a market order */
+export interface SeatOrder {
+  venue: string;
+  symbol: string;
+  side: "buy" | "sell";
+  orderType?: "market" | "limit" | "stop" | "stop_limit" | "trailing_stop" | undefined;
+  qty?: number | undefined;
+  usd?: number | undefined;
+  limitPrice?: number | undefined;
+  stopPrice?: number | undefined;
+  tif?: "gtc" | "ioc" | "fok" | "day" | undefined;
+  postOnly?: boolean | undefined;
+  reduceOnly?: boolean | undefined;
+  extendedHours?: boolean | undefined;
+  trailPercent?: number | undefined;
+  trailPrice?: number | undefined;
+  takeProfit?: number | undefined;
+  stopLoss?: number | undefined;
+}
+
+/** The agentLiveOrder a seat signs for an order, or what is missing from it as asked. Every price and trail the seat gave goes into the
+ * action, whatever the order's type: the door judges the order as it was asked, and refuses a field its type does not carry in its own
+ * words ("a market order has no trail", "a market order has no limit price"). A field dropped here would sign another order than the one
+ * asked for — a trailing stop, or a limit sell, gone out as a market sell */
+export function seatOrderAction(o: SeatOrder): Omit<Extract<AgentAction, { type: "agentLiveOrder" }>, "nonce"> | string {
+  if ((o.qty === undefined) === (o.usd === undefined)) return "give the size once: qty (the market's units) or usd (dollars)";
+  const type = o.orderType ?? "market";
+  const limited = type === "limit" || type === "stop_limit";
+  const stopped = type === "stop" || type === "stop_limit";
+  if (limited && o.limitPrice === undefined) return `a ${type} order needs limitPrice`;
+  if (stopped && o.stopPrice === undefined) return `a ${type} order needs stopPrice`;
+  if (type === "trailing_stop" && (o.trailPercent === undefined) === (o.trailPrice === undefined)) return "a trailing_stop needs trailPercent or trailPrice (one of the two)";
+  return { type: "agentLiveOrder", venue: o.venue, symbol: o.symbol, side: o.side, orderType: type, qty: o.qty !== undefined ? String(o.qty) : "", usd: o.usd !== undefined ? String(o.usd) : "", limitPrice: o.limitPrice !== undefined ? String(o.limitPrice) : "", ...(o.stopPrice !== undefined ? { stopPrice: String(o.stopPrice) } : {}), ...(o.tif ? { tif: o.tif } : {}), ...(o.postOnly ? { postOnly: "true" } : {}), ...(o.reduceOnly ? { reduceOnly: "true" } : {}), ...(o.extendedHours ? { extendedHours: "true" } : {}), ...(o.trailPercent !== undefined ? { trailPercent: String(o.trailPercent) } : {}), ...(o.trailPrice !== undefined ? { trailPrice: String(o.trailPrice) } : {}), ...(o.takeProfit !== undefined ? { takeProfit: String(o.takeProfit) } : {}), ...(o.stopLoss !== undefined ? { stopLoss: String(o.stopLoss) } : {}) };
+}
+
 /** the typed data an owner signs for an action — and what a card shows, field for field */
 export function ownerTypedData(action: OwnerAction): TypedData {
   const def = OWNER_FIELDS[action.type];

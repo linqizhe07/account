@@ -91,6 +91,11 @@ export interface Holding {
   redeemable?: boolean | undefined;
   /** money that is on its way (a T+1 redemption): owned, but not yet anywhere it can be used */
   inTransit?: boolean | undefined;
+  /** a live venue's line of which only part is free to spend now (live/types.ts LiveBalance): of its dollars, how many — the rest is
+   * margin in use or locked. Absent: all of it. It never changes what the line is worth, or the venue's cash */
+  freeUsd?: number | undefined;
+  /** of its units, how many are free now (the rest is held in resting orders or as margin). Absent: all of it */
+  freeAmount?: number | undefined;
 }
 
 export type Intent =

@@ -384,7 +384,7 @@ export function fixedHosts(http: Http, hosts: readonly string[], timeoutMs: numb
       throw new Error("not a URL: not asked");
     }
     if (u.protocol !== "https:" || u.username || u.password || u.port || !hosts.includes(u.hostname) || (init.method ?? "GET") !== "GET" || init.body !== undefined) throw new Error(`${u.protocol}//${u.host} is not asked: a public market is read with a GET from ${hosts.join(", ")} only`);
-    return http(url, { method: "GET", headers: { accept: "application/json", ...(init.headers ?? {}) }, timeoutMs: Math.min(init.timeoutMs ?? timeoutMs, timeoutMs), ...(init.charset ? { charset: init.charset } : {}), ...(init.full ? { full: true } : {}) });
+    return http(url, { method: "GET", headers: { accept: "application/json", ...(init.headers ?? {}) }, timeoutMs: Math.min(init.timeoutMs ?? timeoutMs, timeoutMs) });
   };
 }
 

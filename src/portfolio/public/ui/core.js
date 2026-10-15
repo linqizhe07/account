@@ -313,8 +313,10 @@ const qtyOf = (n) => (n === undefined || n === null || n === "" || !Number.isFin
 const typeText = (o) => (o.type === "limit" ? `limit ${px(o.limitPrice)}` : o.type === "stop" ? `stop at ${px(o.stopPrice)}` : o.type === "stop_limit" ? `stop ${px(o.stopPrice)}, limit ${px(o.limitPrice)}` : "market") + (o.tif ? ` · ${o.tif.toUpperCase()}` : "") + (o.postOnly ? " · post-only" : "") + (o.reduceOnly ? " · reduce-only" : "");
 /* an order still on a book, or on its way to one */
 const isLive = (o) => ["open", "partial", "pending"].includes(o.status);
-/* who did it: you, or an agent — on your yes (Guard), or inside its limit (Beast); the account's own words for a line's `by` */
-const byOf = (p) => (p.authority !== "agent" ? "You" : `${keyName(p.agent)}, ${p.card ? "approved by you" : "inside its limit"}`);
+/* who did it: you, or an agent — on your yes (Guard), or inside its limit (Beast); the account's own words for a line's `by`. A bracket's
+   exit was placed by the venue when its entry filled, through no limit and no card of its own: it is named as the exit of that entry, as
+   its statement line says */
+const byOf = (p) => (p.authority !== "agent" ? "You" : `${keyName(p.agent)}, ${p.exitOf ? `${p.exitOf.kind} of ${p.exitOf.order}` : p.card ? "approved by you" : "inside its limit"}`);
 /* one icon from the sprite in account.html: stroke drawings, nobody's logo */
 const icon = (name, cls = "") => `<svg class="ico${cls ? ` ${cls}` : ""}" aria-hidden="true" focusable="false"><use href="#i-${esc(name)}"></use></svg>`;
 /* the logos that did not load on this page: not asked for again, their letter tiles stand (avatar) */

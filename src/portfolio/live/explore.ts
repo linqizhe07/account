@@ -40,7 +40,10 @@
  *   · each venue appears once in a row, by its most traded market for it (its symbol is the one the account's order there names), and a
  *     price more than 10% from the middle of the others' (three venues or more) may be another token under the same name: it is left out of
  *     the row and said in `missing`, as compareAcross leaves it out of the best.
- * A row's price and 24-hour change are its most traded venue's (`changeFrom` says which venue the change is from). Its volume is counted
+ * A row's price and 24-hour change are its most traded venue's (`changeFrom` says which venue the change is from; `quoteFrom`, on the row
+ * and on each line, which source a price came from and how far behind it is, where a line reads more than one: a US stock's real-time quote,
+ * or Cboe's 15 minutes delayed; `quoteAt`, beside it, the price's own time as that source stamps it — a real-time source's last trade is
+ * a day old in pre-market for a share that has not traded since, and nothing on the way here ages it). Its volume is counted
  * once per market: venues that read the same exchange's data (two accounts at OKX; MetaMask's mm, Polymarket's CLOB and its public Gamma
  * data, which all report Gamma's volume for one Polymarket market) count it once, the largest figure of them, and different exchanges'
  * are summed; an event's volume is its one market's, whichever venues read it. A venue the owner connected that reads an exchange makes that
@@ -111,8 +114,15 @@ export type ExploreKind = "coin" | "stock" | "perp" | "event" | "rwa";
 export type ExploreSort = "volume" | "movers" | "closing";
 
 export interface ExploreOptions {
-  /** a few letters of a symbol or a name: only the rows that match */
+  /** a few letters of a symbol or a name: only the rows that match, those named by it whole (their base, or an event's name, without
+   * regard to case) first, before the cut to `limit` */
   q?: string | undefined;
+  /** one row's own key, exactly as `items` names it (`coin:BTC`, `kalshi:<market ticker>`, `pm:<condition id>`): only that row is kept,
+   * before the cut to `limit` and before what is made of the rows (tabs, movers, closing), as a search keeps only what matches. It finds the
+   * one row a search alone may not: a search is at most 60 characters, and thirteen busier questions that start with the same 60 would
+   * cut the one picked. `q` still says what the sources are asked for, so it narrows what is read, and is best given with it. Like a
+   * search, it is not held to the few busiest Predictions */
+  key?: string | undefined;
   /** only this tab's rows in `items` (absent, or `all`: every row) */
   tab?: TabId | undefined;
   /** `items` by volume (the default; the curated Predictions keep their own order), by the size of the 24-hour change, or by how soon they close */
@@ -156,6 +166,13 @@ export interface ExploreAt {
   /** the venue's book for it, where its listing gives one (an event's: the lead outcome's) */
   bid?: number | undefined;
   ask?: number | undefined;
+  /** which source this line's price, bid and ask came from, and how far behind the market it is, in the source's words (Market.quoteFrom:
+   * "Robinhood · real time", "Cboe · 15 min delayed"), where a line reads more than one source — the US stocks line, whose name says none */
+  quoteFrom?: string | undefined;
+  /** the price's own time, ISO 8601, as its source stamps it (Market.quoteAt: Nasdaq's last trade, Robinhood's quote, Cboe's last trade
+   * fifteen minutes behind), where the line's market stamps one: "real time" is the source, not the price's age — a share not yet traded in
+   * pre-market carries yesterday's last trade */
+  quoteAt?: string | undefined;
   /** the market takes orders now, as the venue says — except a Kalshi event past its close, which is closed whatever the listing says */
   open?: boolean | undefined;
   /** the venue's trading session for it, where the venue keeps one (a stock: Market.session) — in session now, when it next opens or closes.
@@ -199,6 +216,11 @@ export interface ExploreItem {
   base?: string | undefined;
   /** dollars; an event's is its first outcome's */
   price?: number | undefined;
+  /** which source `price` came from and how far behind the market it is, in its words (ExploreAt.quoteFrom), where the line that priced the
+   * row says: a US stock's real-time or delayed quote */
+  quoteFrom?: string | undefined;
+  /** the price's own time, ISO 8601, as its source stamps it (ExploreAt.quoteAt), from the same line as `quoteFrom` */
+  quoteAt?: string | undefined;
   changePct24h?: number | undefined;
   change24h?: number | undefined;
   /** the venue whose 24-hour change is shown */
@@ -570,6 +592,14 @@ const lineName = (r: Reader, m: Market): string => {
   const own = (m as Listing).venueName;
   return !r.connected && typeof own === "string" && own.trim() ? own.trim().slice(0, 80) : r.name;
 };
+/** where a market's price is from, as the market says: which source and how far behind the market it is, in the source's words
+ * (Market.quoteFrom, cut as a line's name is), and the price's own time as that source stamps it (Market.quoteAt, as ISO 8601) — each only
+ * where the market says it, a time only where it is one */
+function quoteOf(m: Market): { quoteFrom?: string; quoteAt?: string } {
+  const from = typeof m.quoteFrom === "string" && m.quoteFrom.trim() ? m.quoteFrom.trim().slice(0, 80) : undefined;
+  const at = typeof m.quoteAt === "string" ? Date.parse(m.quoteAt) : NaN;
+  return { ...(from ? { quoteFrom: from } : {}), ...(Number.isFinite(at) ? { quoteAt: new Date(at).toISOString() } : {}) };
+}
 /** a market's session as the venue said it (Market.session), with nothing else carried; none where it said none, or not in that shape */
 function sessionOf(m: Market): MarketSession | undefined {
   const s = m.session;
@@ -611,6 +641,9 @@ function atOf(r: Reader, m: Market, symbol = m.symbol, price = priceOf(m), open 
     ...(price !== undefined ? { price } : {}),
     ...(pos(m.bid) !== undefined ? { bid: m.bid } : {}),
     ...(pos(m.ask) !== undefined ? { ask: m.ask } : {}),
+    // the US stocks line's name says no source (a real-time quote or Cboe's delayed one): its price says which, with how far behind it is,
+    // and its own time (the line's note, which would say a real-time last trade is yesterday's, is the listing's read-only words here)
+    ...quoteOf(m),
     ...(typeof open === "boolean" ? { open } : {}),
     ...(session ? { session } : {}),
     ...(!r.connected && offer && r.connectTo ? { connectTo: r.connectTo } : {}),
@@ -679,7 +712,7 @@ function rowOf(key: string, kind: ExploreKind, venues: Map<string, Got[]>, aside
     kind,
     name,
     base,
-    ...(priceAt ? { price: priceOf(priceAt.m) } : {}),
+    ...(priceAt ? { price: priceOf(priceAt.m), ...quoteOf(priceAt.m) } : {}),
     ...(paperOnly ? { paper: true as const } : {}),
     ...(moved ? { changePct24h: moved.m.changePct24h, ...(fin(moved.m.change24h) !== undefined ? { change24h: moved.m.change24h } : {}), changeFrom: { venue: moved.r.id, venueName: lineName(moved.r, moved.m) } } : {}),
     ...(vols.length ? { volumeUsd24h: vols.reduce((s, v) => s + v, 0) } : {}),
@@ -876,6 +909,7 @@ export async function exploreAcross(sources: ExploreSources, opts: ExploreOption
   const limit = Math.max(1, Math.floor(pos(opts.limit) ?? 60));
   const window = pos(opts.closingWithinMs) ?? DAY_MS;
   const q = (opts.q ?? "").trim();
+  const only = (opts.key ?? "").trim();
   const floor = (k: Exclude<ExploreKind, "event">): number => (typeof opts.moversMinUsd === "number" ? opts.moversMinUsd : (opts.moversMinUsd?.[k] ?? FLOOR_USD[k]));
 
   const connected = sources.connected ?? [];
@@ -904,6 +938,8 @@ export async function exploreAcross(sources: ExploreSources, opts: ExploreOption
   }
   const made: ExploreItem[] = [];
   for (const [key, row] of rows) {
+    // one row asked for by its key: no other is made, nor said to have a price set aside
+    if (only && key !== only) continue;
     const aside: ExploreMissing[] = [];
     const item = rowOf(key, row.kind, row.venues, aside, now);
     if (!item || (q && !matches(item, row.words, q.toLowerCase()))) continue;
@@ -916,10 +952,11 @@ export async function exploreAcross(sources: ExploreSources, opts: ExploreOption
   // Predictions is a few of the busiest when nothing is searched for: the other event rows are not shown anywhere. An event under an
   // excluded category (sports, weather, entertainment, what someone says — categories.ts) is not one of the few, whatever venue lists it,
   // connected or not: the owner asked for a few hot markets, not every bet. A search still finds it, and a position in it is still a position.
-  // The IPO questions stay beside the few whatever their volume (the Pre-IPO company drawer names them), after the interleaved rows
+  // The IPO questions stay beside the few whatever their volume (the Pre-IPO company drawer names them), after the interleaved rows. One row
+  // asked for by its key is found as a search finds it, whatever its volume or category
   const events = made.filter((i) => i.kind === "event" && !isExcludedCategory([i.category]));
   const ipo = events.filter((i) => isIpoCategory([i.category]));
-  const curated = q ? undefined : [...inTurn(events.filter((i) => !ipo.includes(i))), ...ipo.sort(byVolume)];
+  const curated = q || only ? undefined : [...inTurn(events.filter((i) => !ipo.includes(i))), ...ipo.sort(byVolume)];
   const kept = curated ? new Set(curated) : undefined;
   const all = kept ? made.filter((i) => i.kind !== "event" || kept.has(i)) : made;
   const notes = [...new Set(answers.flatMap((a) => a.notes))];
@@ -939,5 +976,12 @@ export async function exploreAcross(sources: ExploreSources, opts: ExploreOption
   const sorter = opts.sort === "movers" ? byMove : opts.sort === "closing" ? byClose(now) : byVolume;
   // the curated Predictions list keeps its own order (the venues in turn, then the IPO questions), unless a sort is asked for
   const chosen = opts.tab === "predictions" && curated && !opts.sort ? curated : (opts.tab && opts.tab !== "all" ? all.filter((i) => i.tabs.includes(opts.tab!)) : all).sort(sorter);
-  return { asOf: new Date(now).toISOString(), tabs, items: chosen.slice(0, limit), movers, closing, mostTraded, missing: dedupe(missing), notes };
+  // A search lists the rows that ARE what was typed first — whose base (a row with none: whose name) is the search, whole, without regard
+  // to case — before the cut to `limit`, and the rest after them in the order asked for. The sources match a search by the start of a
+  // name and this file by any part of one, so a short name is matched by every busier market that starts with it: Threshold's T would
+  // otherwise lose to TRX, TON, TAO, TIA, TRUMP and the rest and never be listed at twelve, in the picker's own search or in the Trade
+  // bar's read of a market it picked
+  const named = (i: ExploreItem): boolean => (i.base || i.name).toLowerCase() === q.toLowerCase();
+  const items = q ? [...chosen.filter(named), ...chosen.filter((i) => !named(i))] : chosen;
+  return { asOf: new Date(now).toISOString(), tabs, items: items.slice(0, limit), movers, closing, mostTraded, missing: dedupe(missing), notes };
 }

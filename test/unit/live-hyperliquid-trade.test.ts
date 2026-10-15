@@ -415,12 +415,13 @@ describe("Hyperliquid's trading connection: an API wallet for the account", () =
     expect(asked.filter((x) => x.startsWith("exchange"))).toEqual([]);
     // every read names the account's own address, never the API wallet's
     for (const s of connect.filter((x) => x.to === "info" && x.body.user !== undefined)) expect(s.body.user).toBe(ACCOUNT.toLowerCase());
+    // the perps account value with what of it is free (its withdrawable: the rest is the open positions' margin), each HIP-3 DEX's the same
     expect(first).toEqual<LiveBalance[]>([
-      { asset: "USDC", amount: 3656.784576, usd: 3656.784576, where: "perps · 1.72 withdrawable", class: "stable" },
+      { asset: "USDC", amount: 3656.784576, usd: 3656.784576, where: "perps · 1.72 withdrawable", class: "stable", freeUsd: 1.723197 },
       { asset: "USDC", amount: 500.25, usd: 500.25, where: "spot", class: "stable" },
       { asset: "HYPE", amount: 2.5, usd: 210.20125, where: "spot" },
       { asset: "BTC", amount: 0.01, usd: 815.075, where: "spot · UBTC on Hyperliquid" },
-      { asset: "USDC", amount: 250, usd: 250, where: "perps · XYZ (HIP-3) · 200.00 withdrawable", class: "stable" },
+      { asset: "USDC", amount: 250, usd: 250, where: "perps · XYZ (HIP-3) · 200.00 withdrawable", class: "stable", freeUsd: 200 },
     ]);
     expect(source.kind).toBe("perp");
     // the account is the owner's because it approved this API wallet: no watched address goes with it
@@ -436,11 +437,21 @@ describe("Hyperliquid's trading connection: an API wallet for the account", () =
 
   it("a unified account: its spot balances are the whole account, and no perps or HIP-3 figure is added to them", async () => {
     const { first, connect } = await connected({ info: { userAbstraction: "unifiedAccount", spotClearinghouseState: SPOT_UNIFIED } });
+    // what Hyperliquid holds of its USDC (the perps margin, under a unified account) is not free
     expect(first).toEqual([
-      { asset: "USDC", amount: 9685.51736653, usd: 9685.51736653, where: "spot and perps · unified account", class: "stable" },
+      { asset: "USDC", amount: 9685.51736653, usd: 9685.51736653, where: "spot and perps · unified account", class: "stable", freeAmount: 6029.45982453 },
       { asset: "HYPE", amount: 0.00836466, usd: 0.7033048, where: "spot and perps · unified account" },
     ]);
     expect(types(connect)).not.toContain("info clearinghouseState xyz");
+  });
+
+  it("a perps account answered with no withdrawable (the main one's or a HIP-3 DEX's): no word about what of it is free, so all of it is, never none", async () => {
+    const noWord = (ch: Dict) => Object.fromEntries(Object.entries(ch).filter(([k]) => k !== "withdrawable"));
+    const { first } = await connected({ info: { clearinghouseState: (b: Dict) => (b.dex === "xyz" ? noWord(CH_XYZ) : b.dex ? CH_EMPTY : noWord(CH)) } });
+    expect(first.filter((l) => l.where?.startsWith("perps")).map((l) => [l.asset, l.usd, l.freeUsd, l.freeAmount])).toEqual([
+      ["USDC", 3656.784576, undefined, undefined],
+      ["USDC", 250, undefined, undefined],
+    ]);
   });
 
   it("the API wallet: approved and named (with its end); not approved, said with how to approve one; past its end; unnamed (userRole answers for it); approved for another account", async () => {

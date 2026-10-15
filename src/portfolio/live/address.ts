@@ -25,7 +25,7 @@ import { dexTrader, issuedHoldings, USDG_ROBINHOOD } from "./dex.ts";
 import { stockTokenHoldings } from "./robinhood.ts";
 import { walletWriter } from "./writes.ts";
 import { walletBridge } from "./wallet-bridge.ts";
-import { asRefusal, notTheApi, notTheApiWords, num, unreachable, venueSaidNo, type Http, type LiveBalance, type LiveProbe, type LiveSource } from "./types.ts";
+import { asRefusal, freePart, notTheApi, notTheApiWords, num, unreachable, venueSaidNo, type Http, type LiveBalance, type LiveProbe, type LiveSource } from "./types.ts";
 
 export interface AddressRequest {
   venue: string;
@@ -170,9 +170,15 @@ export async function hyperliquidSource(req: AddressRequest): Promise<Opened> {
     const unified = mode === "unifiedAccount" || mode === "portfolioMargin";
     const margin = (perps.marginSummary ?? {}) as Record<string, unknown>;
     const out: LiveBalance[] = [];
-    // the perps ledger is one dollar figure: what the account is worth there, open positions marked — counted only where it is its own money
-    if (!unified && num(margin.accountValue) > 0) out.push({ asset: "USDC", amount: num(margin.accountValue), usd: num(margin.accountValue), where: `perps · ${num(perps.withdrawable).toFixed(2)} withdrawable`, class: "stable" });
-    for (const b of (Array.isArray(spot.balances) ? spot.balances : []) as Array<Record<string, unknown>>) if (num(b.total) > 0) out.push({ asset: String(b.coin ?? "?"), amount: num(b.total), where: unified ? "spot · one account with the perps (unified)" : "spot" });
+    // the perps ledger is one dollar figure: what the account is worth there, open positions marked — counted only where it is its own money.
+    // Of it, what Hyperliquid says can be withdrawn is free: the rest is margin the open positions use. The field as it came, for freePart
+    // to read: one left out is no word about it (all of it free), not none free — and the note names a withdrawable only where Hyperliquid
+    // gave one (a number or a numeric string, as freePart reads it), never a 0.00 it did not say beside a line all free
+    const w = perps.withdrawable;
+    const said = typeof w === "number" ? w : typeof w === "string" && w.trim() !== "" ? Number(w) : NaN;
+    if (!unified && num(margin.accountValue) > 0) out.push({ asset: "USDC", amount: num(margin.accountValue), usd: num(margin.accountValue), where: Number.isFinite(said) ? `perps · ${said.toFixed(2)} withdrawable` : "perps", class: "stable", ...freePart(w, num(margin.accountValue), "usd") });
+    // a spot balance's `hold` (an open order's, or under a unified account the perps margin too) is not free
+    for (const b of (Array.isArray(spot.balances) ? spot.balances : []) as Array<Record<string, unknown>>) if (num(b.total) > 0) out.push({ asset: String(b.coin ?? "?"), amount: num(b.total), where: unified ? "spot · one account with the perps (unified)" : "spot", ...(num(b.hold) > 0 ? freePart(Number((num(b.total) - num(b.hold)).toFixed(8)), num(b.total), "amount") : {}) });
     return out;
   };
   try {

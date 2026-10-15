@@ -26,6 +26,9 @@
 .tt-st-v.down { color: var(--down); }
 .tt-bar .tp-state { margin-left: auto; }
 .tt-bar .tp-state:empty { display: none; }
+/* the bar's market (or, no account chosen for it, its row) not read on the last beat: under the figures, a line of its own, in the
+   warning's text colour */
+.tt-said { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--warn-text); overflow-wrap: anywhere; }
 
 /* ---- the picker's panel: the kinds and their lists, under the bar -------------------------------------------------------------- */
 .tt-pop { display: flex; flex-direction: column; gap: 10px; max-height: min(70vh, 640px); overflow-y: auto; overscroll-behavior: contain; animation: tt-drop 160ms cubic-bezier(.2,.8,.2,1) both; }
@@ -54,8 +57,11 @@
 }
 
 /* ---- the order panel: the ticket, as a trading screen holds it ---------------------------------------------------------------- */
-/* the market is the bar's: the ticket's own search, its picked row and its head stand aside */
-.tt-order .tk-h, .tt-order .tk-find, .tt-order .tk-picked { display: none; }
+/* the market is the bar's: the ticket's own head (its close puts the panel at rest) and its picked row stand aside. Its search stays — the
+   ticket hides it itself once a market is picked, and a ticket opened on no market ("t", a venue's Trade) is picked from it — and so does
+   the Hand-to-agent composer's head, which holds the composer's only close. Two rules: a browser without :has() drops only the first */
+.tt-order .tk-picked { display: none; }
+.tt-order .tk-h:has([data-tk-close]) { display: none; }
 .tt-order .tk-form, .tt-order .tk-stack { gap: 12px; }
 /* where the order goes: compact rows */
 .tt-order .tk-where-w > .label { font-size: 11px; }
@@ -86,6 +92,8 @@
 .tk-avail:empty { display: none; }
 .tk-avail > div { display: flex; justify-content: space-between; gap: 10px; }
 .tk-avail .tab-nums { font-weight: 600; }
+/* the venue's positions not read: its words under the two lines */
+.tk-avail .tk-avail-no { margin: 0; font-size: 12px; color: var(--warn-text); overflow-wrap: anywhere; }
 /* the percent slider under the size */
 .tk-pct { display: flex; align-items: center; gap: 12px; }
 .tk-pct[hidden] { display: none; }
@@ -106,6 +114,9 @@
 .tt-tab[hidden] { display: none; }
 .tt-tab .empty { padding: 14px 0; }
 .tt-t td .why { display: block; }
+/* the venues whose positions could not be read, under the table */
+.tt-miss { margin: 8px 0 0; font-size: 12px; }
+ul.tt-miss { padding-left: 18px; color: var(--warn-text); }
 .tt-t .up { color: var(--up); }
 .tt-t .down { color: var(--down); }
 /* Under way, as the Open orders tab: its own head stands aside (the tab says it) */

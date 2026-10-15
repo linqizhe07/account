@@ -34,8 +34,11 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** an unchanged account still writes a point this often */
 export const NETWORTH_KEEP_MS = HOUR;
-/** a point older than this before the start of a range does not stand for the range's start: nothing was looking in between */
-const ANCHOR_MS = HOUR + 15 * MINUTE;
+/** how long a point stands for the time after it. An unchanged account writes one only every NETWORTH_KEEP_MS, and the snapshot that writes
+ * the next comes on the five-minute tick after that, a read later: so while the service runs, the next point comes within this. Past it
+ * nothing was looking in between — a point older than this before the start of a range does not stand for the range's start, and a paper
+ * account's written point stands on to the next one only within it (account/paper-equity.ts) */
+export const NETWORTH_STANDS_MS = NETWORTH_KEEP_MS + 15 * MINUTE;
 
 export type NetWorthRange = "1d" | "1w" | "1m" | "all";
 export const NETWORTH_RANGES: readonly NetWorthRange[] = ["1d", "1w", "1m", "all"];
@@ -298,8 +301,11 @@ export class NetWorthLog {
     return { points: used.map(({ p, ms }) => ({ at: ms, usd: p.usd, byVenue: { ...p.byVenue }, stale: [...(p.stale ?? [])] })), events };
   }
 
-  /** The curve over `range`, as of `now`. A range that is not one of 1d, 1w, 1m, all is a refusal. `hide`: connections not to be marked on
-   * this curve (a paper account's, written before paper accounts had a log of their own) */
+  /** The curve over `range`, as of `now`. A range that is not one of 1d, 1w, 1m, all is a refusal. The connections marked on it are those
+   * of venues this log has counted — a venue connected here is in the point written with its connection, and in every point while it stays
+   * — so a connection written without its venue ever counted (a paper account's, written on this log before paper accounts had one of their
+   * own, with its numbers kept out) is not marked, whether or not the paper account is still connected. `hide`: connections not to be marked
+   * on this curve all the same */
   read(range: string, now: number = this.now(), hide?: (venue: string) => boolean): NetWorthHistory | Refusal {
     if (!(NETWORTH_RANGES as readonly string[]).includes(range)) return no("E_ACCOUNT_BAD_ACTION", { message: `a net worth range is one of ${NETWORTH_RANGES.join(", ")}: not "${range}"`, detail: { ranges: NETWORTH_RANGES } });
     const r = range as NetWorthRange;
@@ -311,7 +317,7 @@ export class NetWorthLog {
     const used: Array<{ p: PointRow; ms: number }> = all.filter((x) => x.ms >= startMs && x.ms <= now);
     // the last point before the range stands for its start, if the account was looked at close enough to it
     const before = all.filter((x) => x.ms < startMs).pop();
-    if (before && startMs - before.ms <= ANCHOR_MS) used.unshift({ p: before.p, ms: startMs });
+    if (before && startMs - before.ms <= NETWORTH_STANDS_MS) used.unshift({ p: before.p, ms: startMs });
     // the curve: the last point in each bucket
     const kept = new Map<number, { p: PointRow; ms: number }>();
     const size = BUCKET_MS[bucket];
@@ -341,9 +347,10 @@ export class NetWorthLog {
       }
     }
     const base = used.length ? used[0]!.p.usd + came : 0;
+    const counted = new Set(this.points.flatMap((p) => Object.keys(p.byVenue)));
     const events = this.events
       .map((e, i) => ({ e, ms: Date.parse(e.at), i }))
-      .filter((x) => x.ms >= startMs && x.ms <= now && !hide?.(x.e.event.venue))
+      .filter((x) => x.ms >= startMs && x.ms <= now && counted.has(x.e.event.venue) && !hide?.(x.e.event.venue))
       .sort((a, b) => a.ms - b.ms || a.i - b.i)
       .map(({ e }): NetWorthEvent => ({ at: e.at, ...e.event }));
     const two = used.length >= 2;

@@ -1270,6 +1270,88 @@ describe("a stock out of its session", () => {
   });
 });
 
+describe("a US stock's price says where it is from", () => {
+  const DELAYED = "Cboe · 15 min delayed";
+  const READ_ONLY = "Real-time quotes from Robinhood or Nasdaq, else Cboe's own delayed ones, 15 minutes behind the market — each line says which: a US stock trades at a connected broker (Alpaca, Robinhood), or in a paper account";
+  /* the US stocks line (live/public-stocks.ts): its name says no source, its price does (quoteFrom), on the line and on the row it prices */
+  const usLine = (price: number, from: string) => ({ venue: "cboe", venueName: "US stocks", symbol: "ZION", connected: false, canTrade: false, public: true, price, bid: price - 0.01, ask: price + 0.02, quoteFrom: from, connectTo: "alpaca", connector: "live:alpaca", note: READ_ONLY });
+  const zion = { key: "stock:ZION", kind: "stock", name: "Zions Bancorporation", base: "ZION", price: 51.2, quoteFrom: DELAYED, tabs: ["all", "stocks"], at: [usLine(51.2, DELAYED)] };
+
+  it("names the source and how far behind it is — in the row's hover card and its Where title, for a screen reader, in the drawer's facts and in Across venues — escaped, and nothing where no line says", () => {
+    const p = page(() => ({}));
+    p.set("A", account());
+    p.set("ITEMS", { zion, odd: { ...zion, quoteFrom: '<img src=x onerror="alert(1)">' }, btc });
+    expect(p.run<string>("mkPeekHtml(ITEMS.zion)")).toContain('<span class="mk-peek-f">Price from Cboe · 15 min delayed</span>');
+    const row = p.run<string>("MKT.reg = []; mkTable([ITEMS.zion], '')");
+    expect(row).toContain('<span class="mk-v pub" title="Public prices, read without a key. Price from Cboe · 15 min delayed">US stocks</span>');
+    expect(row).toContain('<span class="sr">. ZION · Price from Cboe · 15 min delayed</span>');
+    const drawer = p.run<string>('mkDrawerHtml({ item: ITEMS.zion, interval: "1h", ipo: [] })');
+    expect(drawer).toContain("<dt>Price from</dt><dd>Cboe · 15 min delayed</dd>");
+    expect(p.run<string>("mkAcrossHtml({ item: ITEMS.zion })")).toContain('US stocks <span class="tag">Public</span><span class="why">Price from Cboe · 15 min delayed</span>');
+    // the source's words are escaped wherever they are drawn
+    const odd = p.run<string>("mkPeekHtml(ITEMS.odd)");
+    expect(odd).toContain("Price from &lt;img src=x");
+    expect(odd).not.toContain("<img");
+    // a coin's venues name themselves: no line says a source, and nothing is said
+    expect(p.run<string>("mkPeekHtml(ITEMS.btc)")).not.toContain("Price from");
+    expect(p.run<string>('mkDrawerHtml({ item: ITEMS.btc, interval: "1h", ipo: [] })')).not.toContain("Price from");
+  });
+
+  it("says the source of the price it shows: a connected venue's fresh price says its own (or none), never the public line's", () => {
+    const p = page(() => ({}));
+    p.set("A", account({ venues: [...account().venues, venue("broker", "Broker", { trade: { can: true, what: "US stocks and ETFs", kinds: ["stock"] } })] }));
+    // the broker priced the row (its line names no source); the US stocks line beside it is Cboe's delayed quote
+    const held = { ...zion, price: 51.3, quoteFrom: undefined, at: [{ venue: "broker", venueName: "Broker", symbol: "ZION", connected: true, canTrade: true, public: false, price: 51.3, open: true }, usLine(51.2, DELAYED)] };
+    p.set("ITEMS", { held });
+    expect(p.run<string>("mkPeekHtml(ITEMS.held)")).not.toContain("Price from");
+    expect(p.run<string>("mkAcrossHtml({ item: ITEMS.held })")).toContain('<span class="why">Price from Cboe · 15 min delayed</span>');
+    // a fresh price from the broker that says its source: that one
+    p.run(`MKT.quotes.set("broker|ZION", { at: ${NOW}, market: { price: 51.31, quoteFrom: "Nasdaq · real time" } })`);
+    expect(p.run<string>("mkPeekHtml(ITEMS.held)")).toContain('<span class="mk-peek-f">Price from Nasdaq · real time</span>');
+    expect(p.run<string>('mkDrawerHtml({ item: ITEMS.held, interval: "1h", ipo: [] })')).toContain("<dt>Price from</dt><dd>Nasdaq · real time</dd>");
+    // and one that says none: nothing, rather than the public line's source beside the broker's price
+    p.run(`MKT.quotes.set("broker|ZION", { at: ${NOW}, market: { price: 51.32 } })`);
+    expect(p.run<string>("mkPeekHtml({ ...ITEMS.held, quoteFrom: " + JSON.stringify(DELAYED) + " })")).not.toContain("Price from");
+  });
+
+  it("says when the price is from once it is more than a couple of minutes old — a real-time source's last trade from the day before is not called real time alone — and not when it is recent", () => {
+    const RT = "Nasdaq · real time";
+    // the page's clock is 01:00 New York on Tue 6 Oct: Nasdaq's real-time answer for a share not traded since is its last trade, Monday 10:29
+    const STALE = "2026-10-05T14:29:00.000Z";
+    const SAID = "Nasdaq · real time · last at 10:29 New York, Mon 5 Oct";
+    const line = (quoteAt?: string) => ({ ...usLine(51.2, RT), ...(quoteAt ? { quoteAt } : {}) });
+    const p = page(() => ({}));
+    p.set("A", account());
+    p.set("ITEMS", {
+      stale: { ...zion, quoteFrom: RT, quoteAt: STALE, at: [line(STALE)] },
+      recent: { ...zion, quoteFrom: RT, quoteAt: new Date(NOW - 60_000).toISOString(), at: [line(new Date(NOW - 60_000).toISOString())] },
+      unstamped: { ...zion, quoteFrom: RT, quoteAt: "not a time", at: [line("not a time")] },
+    });
+    // the stale one, wherever its source is said: the hover card, the Where title, for a screen reader, the drawer's facts, Across venues
+    expect(p.run<string>("mkPeekHtml(ITEMS.stale)")).toContain(`<span class="mk-peek-f">Price from ${SAID}</span>`);
+    const row = p.run<string>("MKT.reg = []; mkTable([ITEMS.stale], '')");
+    expect(row).toContain(`<span class="mk-v pub" title="Public prices, read without a key. Price from ${SAID}">US stocks</span>`);
+    expect(row).toContain(`<span class="sr">. ZION · Price from ${SAID}</span>`);
+    expect(p.run<string>('mkDrawerHtml({ item: ITEMS.stale, interval: "1h", ipo: [] })')).toContain(`<dt>Price from</dt><dd>${SAID}</dd>`);
+    expect(p.run<string>("mkAcrossHtml({ item: ITEMS.stale })")).toContain(`<span class="why">Price from ${SAID}</span>`);
+    // a minute old, or no time to go by: the source alone
+    for (const k of ["recent", "unstamped"]) {
+      expect(p.run<string>(`mkPeekHtml(ITEMS.${k})`)).toContain(`<span class="mk-peek-f">Price from ${RT}</span>`);
+      expect(p.run<string>(`mkDrawerHtml({ item: ITEMS.${k}, interval: "1h", ipo: [] })`)).toContain(`<dt>Price from</dt><dd>${RT}</dd>`);
+      expect(p.run<string>(`mkAcrossHtml({ item: ITEMS.${k} })`)).not.toContain("last at");
+    }
+    // a fresh price says its own time, not the explore read's: a connected broker's fresh quote from a minute ago, beside the stale line
+    p.set("A", account({ venues: [...account().venues, venue("broker", "Broker", { trade: { can: true, what: "US stocks and ETFs", kinds: ["stock"] } })] }));
+    p.set("HELD", { ...zion, quoteFrom: RT, quoteAt: STALE, at: [{ venue: "broker", venueName: "Broker", symbol: "ZION", connected: true, canTrade: true, public: false, price: 51.3, open: true }, line(STALE)] });
+    p.run(`MKT.quotes.set("broker|ZION", { at: ${NOW}, market: { price: 51.31, quoteFrom: ${JSON.stringify(RT)}, quoteAt: ${JSON.stringify(new Date(NOW - 60_000).toISOString())} } })`);
+    expect(p.run<string>("mkPeekHtml(HELD)")).toContain(`<span class="mk-peek-f">Price from ${RT}</span>`);
+    expect(p.run<string>('mkDrawerHtml({ item: HELD, interval: "1h", ipo: [] })')).toContain(`<dt>Price from</dt><dd>${RT}</dd>`);
+    // and a fresh read of a share still untraded says its time
+    p.run(`MKT.quotes.set("broker|ZION", { at: ${NOW}, market: { price: 51.31, quoteFrom: ${JSON.stringify(RT)}, quoteAt: ${JSON.stringify(STALE)} } })`);
+    expect(p.run<string>("mkPeekHtml(HELD)")).toContain(`<span class="mk-peek-f">Price from ${SAID}</span>`);
+  });
+});
+
 describe("after connect, a venue that refuses this network is a state Markets says, not an error", () => {
   const CLOSE_SAID = "Polymarket lets this location close positions, not open new ones (its own rule)";
   /* Polymarket connected and trading, close-only on this network */

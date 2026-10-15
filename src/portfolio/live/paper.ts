@@ -11,16 +11,25 @@
  *             behind them), the pre-IPO perpetuals). A market is listed here under the symbol its source lists it by (`BTC/USD` from
  *             Kraken, `BTC-PERP` from Hyperliquid, `AAPL`, a Kalshi ticker); where two sources list the same symbol, the first in the sources' order speaks for it (the US stock line comes
  *             before Robinhood's Stock Tokens, so `NVDA` here is the share, not the token). A quote is the source's listing, at most as
- *             old as the service keeps a listing (twenty seconds), and a stock's carries its own time and its source's delay
+ *             old as the service keeps a listing (twenty seconds), and a stock's carries its own time and its source's delay. A market the
+ *             book has traded is its source's alone: when that source does not answer, the market has no quote, and no other source's
+ *             market of the same symbol stands in for it
  *   orders    market, limit, stop (a market order once the price reaches the stop), stop-limit (a limit order once it does) and trailing
  *             stop (a stop a percent or a price behind the best price since it was placed, moving with it) — an event contract takes
  *             market and limit orders only; a time in force of good-till-canceled, immediate-or-cancel or fill-or-kill (the same thing
  *             here: nothing fills in part), and for a stock DAY, which ends with the market's session (the regular one's close, or the
  *             extended one's for an order sent for extended hours), a stock's default; and a BRACKET: an entry with its exits, a
- *             take-profit limit and a stop-loss stop placed the moment it fills, the one that fills canceling the other
+ *             take-profit limit and a stop-loss stop placed the moment it fills, the one that fills canceling the other. Exits go with
+ *             their position: canceled once it is closed, sold, liquidated or settled (on a perpetual, every reduce-only order with them),
+ *             and one larger than what is left closes what is left
  *   fills     the account's OWN RULE, said everywhere it shows: a market order fills at once, whole, at the ask (a buy) or the bid (a sell),
  *             inside the worst price the account's door gave it; a limit order that crosses the quote when it is placed fills at once at the
- *             quote (where that is better than its limit), one that rests fills at its limit when the quote reaches it; a stop triggers when the bid (a sell) or the ask (a buy) reaches it. Resting orders are judged
+ *             quote (where that is better than its limit), one that rests fills at its limit when the quote reaches it (a bracket's
+ *             take-profit beyond its entry's fill rests from the moment it is placed; a stock's rest lasts the session it rested in, and
+ *             no further) — and one that never rested (past the quote the moment
+ *             it was changed, triggered, placed as a bracket's exit after a gap, or let back into its session or out of a halt) takes the
+ *             quote as one crossing when placed does; a stop triggers when the bid (a sell) or the ask (a buy) reaches
+ *             it. A market its source says takes no orders now (a halt, a contract no longer active) fills nothing. Resting orders are judged
  *             whenever the account looks — a read, a poll, the positions, and the service's own look every few seconds — at the quote of
  *             that moment: no depth, no partial fills, no slippage past the quote, no queue. Nothing is reserved for a resting order: it is
  *             judged when it fills, and rejected then if the paper money (or the holding) is not there.
@@ -34,9 +43,12 @@
  *             margin on them). A PERPETUAL is a position, long or short, with ISOLATED margin at
  *             the leverage set for the market (1x unless set, up to the most the market's source shows): the notional over the leverage
  *             is put up as margin, the unrealised profit is marked at the quote, a close (reduce-only, or the opposite side up to the
- *             position) realises it; the side is never flipped by one order.
+ *             position) realises it; the side is never flipped by one order. The margin is all a position can lose: a close past it gives
+ *             nothing back and takes nothing from the cash, and a part closed past its own share of the margin takes the rest of its loss
+ *             out of the margin of what is left. Each look marks the perpetuals before it judges the orders.
  *             FUNDING is paid or received out of the margin each whole hour the position stands, at the rate the source shows when the
- *             account looks (Hyperliquid's rate is hourly; another venue's is for its eight-hour interval, so an eighth of it an hour), on
+ *             account looks, or when an order fills on the position before it moves it (Hyperliquid's rate is hourly; another venue's is
+ *             for its eight-hour interval, so an eighth of it an hour), on
  *             the notional at the mark, the long paying when the rate is above zero; a market whose source shows no rate pays none.
  *             LIQUIDATION: when the margin left — the margin put up, less the loss and the funding paid — falls to the maintenance margin,
  *             half the initial margin at the market's most leverage (the notional at the mark over twice that leverage), the position is
@@ -61,7 +73,7 @@ import type { AssetClass } from "../accounts.ts";
 import { no } from "../refuse.ts";
 import type { Listing, PublicSource } from "./public-markets.ts";
 import { usClock } from "../account/calendar.ts";
-import { cboeQuoteInSession, US_STOCKS_ID, usSession } from "./public-stocks.ts";
+import { CBOE_DELAY_MS, cboeQuoteInSession, US_STOCKS_ID, usSession } from "./public-stocks.ts";
 import { badOrder, CANDLE_INTERVALS, inDollars, onStep, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type SessionPhase, type Side, type TimeInForce } from "./trade.ts";
 import { isStable, type LiveBalance, type LiveSource } from "./types.ts";
 
@@ -139,6 +151,17 @@ export interface PaperOrder {
   hwm?: number | undefined;
   /** a stop that has triggered: from then on it is the market (or limit) order it became */
   triggeredAt?: string | undefined;
+  /** a limit (or a stop-limit that has triggered) that has RESTED: judged at a quote that could fill it and did not reach it. From then on
+   * it is the book's maker and fills at its own price when the quote reaches it; one that never rested — past the quote the moment it was
+   * placed, changed or triggered, or let back into its session — takes the quote where that is better than its limit. Its market out of
+   * session, or taking no orders, it rests no more; a quote that only stopped moving while the market is in session leaves it resting. A
+   * bracket's take-profit beyond its entry's fill rests from birth */
+  rested?: true | undefined;
+  /** a stock's rest: the end of the session it rested in (the regular close, or for an order sent for extended hours the end of
+   * after-hours, on its market's own clock, no line's delay in it). A rest is that session's alone: once the market as a quote sees it (the
+   * quote's line's delay behind) is past it — whether or not a look fell between the close and the next open — it rests no more, and a
+   * quote already past its limit at the open takes the quote. None for a market that never closes */
+  restedTill?: string | undefined;
   tif?: TimeInForce | undefined;
   /** a DAY order: when its session ends, and it with it */
   expiresAt?: string | undefined;
@@ -158,6 +181,10 @@ export interface PaperOrder {
   feeUsd?: number | undefined;
   /** when it filled */
   filledAt?: string | undefined;
+  /** a perpetual's close (or its liquidation) whose loss, with the fee, went past the position's own margin: the part isolated margin did
+   * not take, so the cash moved by that much less than the price says (paper-history.ts can add it back). A liquidation always says it: 0,
+   * nothing past the margin — so the book's past tells a liquidation the margin covered from one written before the figure was (none) */
+  lossPastMarginUsd?: number | undefined;
   at: string;
   updatedAt: string;
   note?: string | undefined;
@@ -268,6 +295,20 @@ class Pricer {
   private readonly known = new Map<string, { source: string; m: Listing; at: number }>();
   constructor(private readonly sources: () => PublicSource[], private readonly clock: () => number) {}
 
+  /** which source a symbol is remembered by. Two sources may name the same symbol (the US share NVDA and Robinhood's Stock Token NVDA):
+   * the one first in the account's own order keeps it, whichever answered last, so a source that was slow to answer once (the share's line
+   * at startup) takes its symbol back when it answers, and the other never takes it from it again — a market asked by that symbol is the
+   * same market every time */
+  private remember(symbol: string, source: string, m: Listing): void {
+    const was = this.known.get(symbol);
+    if (was && was.source !== source) {
+      const order = this.sources().map((s) => s.id);
+      const [mine, theirs] = [order.indexOf(source), order.indexOf(was.source)];
+      if (theirs !== -1 && (mine === -1 || theirs < mine)) return;
+    }
+    this.known.set(symbol, { source, m, at: this.clock() });
+  }
+
   async listAll(q: string, limit: number): Promise<Array<{ source: PublicSource; m: Listing }>> {
     const all = this.sources();
     const answers = await Promise.all(all.map((s) => inTime(s.listings({ ...(q ? { q } : {}), limit }), SOURCE_MS)));
@@ -279,7 +320,7 @@ class Pricer {
       for (const m of a) {
         if (!m || typeof m.symbol !== "string" || seen.has(m.symbol) || !this.offered(m)) continue;
         seen.add(m.symbol);
-        this.known.set(m.symbol, { source: source.id, m, at: this.clock() });
+        this.remember(m.symbol, source.id, m);
         out.push({ source, m });
       }
     });
@@ -296,7 +337,7 @@ class Pricer {
       for (const m of a) {
         if (!m || typeof m.symbol !== "string" || seen.has(m.symbol) || !this.offered(m)) continue;
         seen.add(m.symbol);
-        this.known.set(m.symbol, { source: all[i]!.id, m, at: this.clock() });
+        this.remember(m.symbol, all[i]!.id, m);
         out.push({ source: all[i]!, m });
       }
     });
@@ -313,8 +354,11 @@ class Pricer {
   }
 
   /** a market's listing, asked of its source now (the service keeps a listing twenty seconds, so that is how old a quote can be): from its
-   * own source by its base, then by its symbol, then its source's own few; then of every source. A market no source names now is not
-   * found. What is remembered here is which source lists a symbol, never a price */
+   * own source by its base, then by its symbol, then its source's own few. A market whose source is known (the book's, or the one that
+   * listed it) and still read is that source's alone: when it does not answer, or lists it no more, the market has no quote now — another
+   * source's market of the same symbol (Robinhood's Stock Token NVDA for the share NVDA) never stands in for it. Only a market with no such
+   * source is asked of every source, and one the book holds only as the kind it holds. A market no source names now is not found. What
+   * is remembered here is which source lists a symbol, never a price */
   async find(symbol: string, ref: PaperMarketRef | undefined): Promise<{ source: PublicSource; m: Listing; at: number } | undefined> {
     const k = this.known.get(symbol);
     const source = this.sourceOf(ref?.source ?? k?.source ?? "");
@@ -331,8 +375,9 @@ class Pricer {
         return { source: source!, m, at };
       }
     }
+    if (source) return undefined;
     for (const q of [base, symbol]) {
-      const got = (await this.listAll(q, LIST_LIMIT)).find((x) => x.m.symbol === symbol);
+      const got = (await this.listAll(q, LIST_LIMIT)).find((x) => x.m.symbol === symbol && (!ref || x.m.kind === ref.kind));
       if (got) return { ...got, at: this.clock() };
     }
     return undefined;
@@ -388,14 +433,19 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
   /** the leverage a market is set to, held to the most its source shows */
   const levOf = (symbol: string, max: number): number => Math.max(1, Math.min(max, Math.floor(b.leverage?.[symbol] ?? 1)));
 
+  /** how far behind the market a stock's quote is, as the line that answered says: a line that keeps the market's clock and stamps its
+   * quotes, its own delay for this quote (the US line answers with a real-time quote where one is given, and Cboe's fifteen minutes behind
+   * where it is not, so it is the quote's, not the line's once and for all); the old delayed line without a stamp, Cboe's fifteen minutes;
+   * anything else, none */
+  const delayOf = (q: Quoted): number => (q.source.sessions && Number.isFinite(Date.parse(q.m.quoteAt ?? "")) ? Math.max(0, q.m.delayMs ?? 0) : q.source.id === US_STOCKS_ID ? CBOE_DELAY_MS : 0);
   /** A STOCK'S SESSION, as its quote tells it: the phase the quote's own time is in, and the phase the market is in now as its source sees
-   * it (its delay behind). A quote older than its source's delay and QUOTE_GRACE_MS is in no phase: a quote that stopped moving fills
-   * nothing. A source that stamps no time is judged by its session now — and the old delayed line (Cboe without a stamp) by its window */
+   * it (its delay behind, delayOf). A quote older than its source's delay and QUOTE_GRACE_MS is in no phase: a quote that stopped moving
+   * fills nothing. A source that stamps no time is judged by its session now — and the old delayed line (Cboe without a stamp) by its window */
   const stockPhases = (q: Quoted, at: number): { quote: SessionPhase; now: SessionPhase } => {
     const clock = q.source.sessions;
     const stamped = q.m.quoteAt ? Date.parse(q.m.quoteAt) : NaN;
-    const delay = Math.max(0, q.m.delayMs ?? 0);
     if (clock && Number.isFinite(stamped)) {
+      const delay = delayOf(q);
       const nowPhase = clock.phaseAt(at - delay);
       return { quote: at - stamped > delay + QUOTE_GRACE_MS ? "closed" : clock.phaseAt(stamped), now: nowPhase };
     }
@@ -417,11 +467,34 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     const ph = stockPhases(q, at);
     return tradesIn(ph.quote, o, q.m) && tradesIn(ph.now, o, q.m);
   };
+  /** whether the market's own session takes this order now, as its source sees it, whatever the quote's own stamp says: a quote that
+   * stopped moving, or is stamped in another phase, fills nothing, but the market is still in a session the order trades in — a resting
+   * limit is still on the book */
+  const sessionTakes = (o: Pick<PaperOrder, "type" | "extendedHours">, q: Quoted, at: number): boolean => q.m.kind !== "stock" || tradesIn(stockPhases(q, at).now, o, q.m);
   /** a stop, or a trailing stop, is watched only in the regular session for a stock (as a broker's are) */
   const canTriggerNow = (q: Quoted, at: number): boolean => {
     if (q.m.kind !== "stock") return true;
     const ph = stockPhases(q, at);
     return ph.quote === "regular" && ph.now === "regular";
+  };
+  /** the end of the session a stock's REST belongs to: its market's trading day — the regular close, or for an order sent for extended
+   * hours the end of after-hours — the session the market is in as the quote it rested at sees it (its delay behind, delayOf), and its end
+   * on the market's own clock, no line's delay in it: each later quote is weighed against it by where the market is as that quote sees it
+   * (judge), so a rest earned on a real-time quote is still the session's when a quote fifteen minutes behind answers after the close.
+   * Nothing for a market that never closes */
+  const restEnd = (o: Pick<PaperOrder, "extendedHours">, q: Quoted, at: number): string | undefined => {
+    if (q.m.kind !== "stock") return undefined;
+    const clock = q.source.sessions ?? (q.source.id === US_STOCKS_ID ? usClock : undefined);
+    if (!clock) return undefined;
+    return iso(clock.dayEndAt(at - delayOf(q), o.extendedHours === true));
+  };
+  /** an order RESTS from now, judged at a quote that could fill it and did not reach it: the book's maker, filled at its own price when the
+   * quote reaches it — a stock's within the session it rested in (restEnd) */
+  const rest = (o: PaperOrder, q: Quoted, at: number): void => {
+    o.rested = true;
+    const till = restEnd(o, q, at);
+    if (till) o.restedTill = till;
+    else delete o.restedTill;
   };
 
   /** a market as the paper account trades it: the source's own figures, the account's own steps and rule */
@@ -510,31 +583,71 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
   /** what a fill pays in charges, in dollars: a US share nothing (no commission, as a broker charges none), anything else the book's fee */
   const chargesOf = (ref: PaperMarketRef, notional: number): number => (ref.kind === "stock" ? 0 : round((notional * b.feeBps) / 10_000, 6));
 
-  /** the fill itself: money, holdings or the position moved by the account's rule, or why the paper money is not there */
-  const fill = (o: PaperOrder, px: number, at: number): Refusal | undefined => {
+  /** A POSITION'S EXITS GO WITH IT: once a perpetual position or a holding is gone — closed, sold, liquidated — every exit still open in its
+   * market is canceled: a bracket's take-profit and stop-loss and, on a perpetual, any reduce-only order. Nothing is left for them to
+   * close, and left standing one would close the next position opened in the market. `side`: only the exits on that side (a holding's
+   * are sells; the buy-back of a sell's bracket needs no holding) */
+  const cancelExits = (symbol: string, side: Side | undefined, note: string, at: number): void => {
+    for (const x of Object.values(b.orders)) if (x.symbol === symbol && x.status === "open" && (x.parent || x.reduceOnly) && (!side || x.side === side)) Object.assign(x, { status: "canceled", note, updatedAt: iso(at) });
+  };
+
+  /** the fill itself: money, holdings or the position moved by the account's rule, or why the paper money is not there. `q` is the quote it
+   * fills at: a perpetual's funding owed is settled at it before the position moves */
+  const fill = (o: PaperOrder, px: number, at: number, q: Quoted): Refusal | undefined => {
     const ref = b.markets[o.symbol]!;
+    // a bracket's exit closes what is left of its position and never more: one larger than what is held now (the position reduced, or part
+    // of the holding sold, since it was placed) is trimmed to it, as a venue's reduce-only order is
+    if (o.parent) {
+      const p = b.positions[o.symbol];
+      const left = ref.kind === "perp" ? (p && (p.side === "long" ? "sell" : "buy") === o.side ? p.qty : undefined) : o.side === "sell" ? b.holdings[o.symbol]?.qty : undefined;
+      if (left !== undefined && left > 0 && o.qty > left + 1e-12) o.qty = left;
+    }
     const notional = round(o.qty * px, 8);
     const fee = chargesOf(ref, notional);
     let realized: number | undefined;
+    /** the position or the holding this fill closed whole, and a perpetual's position this fill reduced rather than opened or added to */
+    let gone = false;
+    let reduced = false;
+    /** a part closed at a loss past its own share of the margin: what the margin of the rest of the position took of it */
+    let fromRest = 0;
     if (ref.kind === "perp") {
       const p = b.positions[o.symbol];
       const opposite = !!p && ((p.side === "long" && o.side === "sell") || (p.side === "short" && o.side === "buy"));
       if (o.reduceOnly && !opposite) return reject(`reduce-only: no ${o.side === "sell" ? "long" : "short"} position in ${o.symbol} to reduce`);
       if (opposite && p) {
         if (o.qty > p.qty + 1e-12) return reject(o.reduceOnly ? `reduce-only: ${qtyText(o.qty)} is more than the ${qtyText(p.qty)} held` : `${qtyText(o.qty)} is more than the ${p.side} position of ${qtyText(p.qty)}: it would flip the side — close the position first, then open the other way`);
+        // the funding of every whole hour it stood is paid before the close takes its margin: a close by hand, or an exit judged while the
+        // look's own quote did not come back, never drops the hours owed
+        payFunding(o.symbol, p, q, at);
+        reduced = true;
         const part = o.qty / p.qty;
         const margin = round(p.marginUsd * part, 6);
         realized = round((p.side === "long" ? px - p.entryPrice : p.entryPrice - px) * o.qty, 6);
-        b.cashUsd = round(b.cashUsd + margin + realized - fee, 6);
-        if (o.qty >= p.qty - 1e-12) delete b.positions[o.symbol];
-        else {
+        // isolated margin: the position's own margin, and nothing more, is lost — a close past it (a stop after a gap, the owner's close of a
+        // position the look has not liquidated yet) gives nothing back and takes nothing from the cash; what it did not take is written on
+        // the order, so the book's past can be told again exactly
+        const back = margin + realized - fee;
+        let lost = back < 0 ? round(-back, 6) : 0;
+        b.cashUsd = round(b.cashUsd + Math.max(0, back), 6);
+        if (o.qty >= p.qty - 1e-12) {
+          delete b.positions[o.symbol];
+          gone = true;
+        } else {
+          // a part closed past its own share of the margin: the margin is the whole position's, so the rest of that loss comes out of the
+          // margin of what is left first — a remainder whose margin is gone is liquidated at the next look — and only what is past all of it
+          // is lost to isolated margin
+          fromRest = round(Math.min(lost, Math.max(0, p.marginUsd - margin)), 6);
+          lost = round(lost - fromRest, 6);
           p.qty = round(p.qty - o.qty, 12);
-          p.marginUsd = round(p.marginUsd - margin, 6);
+          p.marginUsd = round(p.marginUsd - margin - fromRest, 6);
         }
+        if (lost > 0) o.lossPastMarginUsd = lost;
       } else {
         const lev = p?.leverage ?? levOf(o.symbol, ref.maxLeverage ?? 1);
         const margin = round(notional / lev, 6);
         if (b.cashUsd + 1e-9 < margin + fee) return no("E_VENUE_INSUFFICIENT", { venue, message: `${b.name}: not enough paper money — ${usd(margin + fee)} needed as margin and fee at ${lev}x, ${usd(b.cashUsd)} there` });
+        // added to: the hours it stood are paid at the size it stood at, before it grows
+        if (p) payFunding(o.symbol, p, q, at);
         b.cashUsd = round(b.cashUsd - margin - fee, 6);
         if (p) {
           p.entryPrice = round((p.entryPrice * p.qty + px * o.qty) / (p.qty + o.qty), 10);
@@ -557,7 +670,10 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       realized = round(notional - fee - h.costUsd * part, 6);
       h.costUsd = round(h.costUsd * (1 - part), 6);
       h.qty = round(h.qty - o.qty, 12);
-      if (h.qty <= 1e-12) delete b.holdings[o.symbol];
+      if (h.qty <= 1e-12) {
+        delete b.holdings[o.symbol];
+        gone = true;
+      }
     }
     const when = iso(at);
     o.status = "filled";
@@ -566,7 +682,14 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     o.feeUsd = fee;
     o.filledAt = when;
     o.updatedAt = when;
-    record({ ref: o.ref, symbol: o.symbol, side: o.side, qty: o.qty, price: px, feeUsd: fee, at: when, ...(realized !== undefined && ref.kind === "perp" ? { realizedUsd: realized } : {}), ...(o.parent ? { note: `${o.type === "limit" ? "take-profit" : "stop-loss"} of ${o.parent}` } : {}) });
+    // what went past this part's share of the margin is what the rest of the margin took and what went past all of it, both said
+    const lossPast = o.lossPastMarginUsd ?? 0;
+    const past = fromRest > 0
+      ? `isolated margin: the loss went ${usd(fromRest + lossPast)} past this part's share of the margin: ${usd(fromRest)} of it taken from the margin of what is left${lossPast > 0 ? `, and ${usd(lossPast)} past all of it — only the margin was lost` : ""}`
+      : lossPast > 0 ? `isolated margin: the loss went ${usd(lossPast)} past the position's margin, and only the margin was lost` : "";
+    if (past) o.note = past;
+    const said = [o.parent ? `${o.type === "limit" ? "take-profit" : "stop-loss"} of ${o.parent}` : "", past].filter(Boolean).join(" · ");
+    record({ ref: o.ref, symbol: o.symbol, side: o.side, qty: o.qty, price: px, feeUsd: fee, at: when, ...(realized !== undefined && ref.kind === "perp" ? { realizedUsd: realized } : {}), ...(said ? { note: said } : {}) });
     // one exit of a bracket filled: the other is no longer needed
     if (o.oco) {
       const sib = b.orders[o.oco];
@@ -576,17 +699,29 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         sib.updatedAt = when;
       }
     }
-    // an entry with exits: the exits go on the book now, for what filled, the one that fills canceling the other
-    if (o.takeProfit !== undefined || o.stopLoss !== undefined) placeExits(o, at);
+    if (gone) cancelExits(o.symbol, ref.kind === "perp" ? undefined : "sell", ref.kind === "perp" ? `canceled: the position it was to close is closed (${o.ref})` : `canceled: what it was to sell is sold (${o.ref})`, at);
+    // an entry with exits: the exits go on the book now, for what filled, the one that fills canceling the other — unless, on a perpetual,
+    // it reduced the position on the other side instead of opening one: there is nothing of its own for them to close
+    if (o.takeProfit !== undefined || o.stopLoss !== undefined) {
+      if (reduced) o.note = [past, `its exits were not placed: it reduced the ${o.side === "sell" ? "long" : "short"} position open in ${o.symbol} rather than opening one, so there is nothing of its own for them to close`].filter(Boolean).join(" · ");
+      else placeExits(o, px, at, q);
+    }
     return undefined;
   };
 
-  /** a bracket's exits, placed the moment its entry fills: a limit the other way at the take-profit, a stop the other way at the stop-loss,
-   * each knowing the other (the one that fills cancels the other); good till canceled, never for extended hours; a perpetual's reduce-only */
-  const placeExits = (o: PaperOrder, at: number): void => {
+  /** a bracket's exits, placed the moment its entry fills at `px`: a limit the other way at the take-profit, a stop the other way at the
+   * stop-loss, each knowing the other (the one that fills cancels the other); good till canceled, never for extended hours; a perpetual's
+   * reduce-only. A take-profit beyond the fill price (above a buy's, below a sell's) is out of the quote's reach when it is placed — a buy
+   * filled at the ask or under it, and its take-profit sells at the bid — so it RESTS from birth: a quote that passes through it before
+   * the next look fills it at its limit — a stock's within the session its entry filled in (restEnd). One at the fill price or past it (an
+   * entry filled at the open after a gap) never rested, and takes the quote. `q` is the quote the entry filled at */
+  const placeExits = (o: PaperOrder, px: number, at: number, q: Quoted): void => {
     const ref = b.markets[o.symbol];
     const side: Side = o.side === "buy" ? "sell" : "buy";
-    const leg = (kind: "tp" | "sl", type: "limit" | "stop", price: number): PaperOrder => ({ ref: `p${++b.seq}`, clientId: `${o.clientId}-${kind}`, symbol: o.symbol, side, type, qty: o.filledQty, ...(type === "limit" ? { limitPrice: price } : { stopPrice: price }), tif: "gtc", ...(ref?.kind === "perp" ? { reduceOnly: true } : {}), status: "open", filledQty: 0, parent: o.ref, at: iso(at), updatedAt: iso(at) });
+    const beyond = (price: number): boolean => (o.side === "buy" ? price > px + 1e-12 : price < px - 1e-12);
+    // exits are never for extended hours: a stock's take-profit rests to its regular close
+    const till = restEnd({}, q, at);
+    const leg = (kind: "tp" | "sl", type: "limit" | "stop", price: number): PaperOrder => ({ ref: `p${++b.seq}`, clientId: `${o.clientId}-${kind}`, symbol: o.symbol, side, type, qty: o.filledQty, ...(type === "limit" ? { limitPrice: price, ...(beyond(price) ? { rested: true as const, ...(till ? { restedTill: till } : {}) } : {}) } : { stopPrice: price }), tif: "gtc", ...(ref?.kind === "perp" ? { reduceOnly: true } : {}), status: "open", filledQty: 0, parent: o.ref, at: iso(at), updatedAt: iso(at) });
     const legs: PaperOrder[] = [];
     if (o.takeProfit !== undefined) legs.push(leg("tp", "limit", o.takeProfit));
     if (o.stopLoss !== undefined) legs.push(leg("sl", "stop", o.stopLoss));
@@ -603,8 +738,8 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
   /** a quote that has passed the order's worst price (a market order's bound from the account's door) */
   const pastWorst = (o: PaperOrder, px: number): boolean => o.worstPrice !== undefined && (o.side === "buy" ? px > o.worstPrice + 1e-12 : px < o.worstPrice - 1e-12);
   /** fill it at px, or mark it rejected with why the paper money was not there */
-  const fillOrReject = (o: PaperOrder, px: number, at: number): void => {
-    const r = fill(o, px, at);
+  const fillOrReject = (o: PaperOrder, px: number, at: number, q: Quoted): void => {
+    const r = fill(o, px, at, q);
     if (r) {
       o.status = "rejected";
       o.note = r.message;
@@ -621,32 +756,61 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     }
   };
 
+  /** an order whose market does not take it now — out of the session the order trades in, or taking no orders — rests no more: when its
+   * market takes it again, a quote already past its limit fills it at that quote, as the open (or a halt's end) fills a broker's resting
+   * limit. A quote that only stopped moving (a stale stamp, the market still in session) ends no rest; the end of the session it rested in
+   * (restedTill) does. True when that changed it */
+  const unrest = (o: PaperOrder): boolean => {
+    if (!o.rested) return false;
+    delete o.rested;
+    delete o.restedTill;
+    return true;
+  };
+
+  /** an order's day over at `t` (its expiresAt reached): expired, its bracket sibling canceled with it. True */
+  const expire = (o: PaperOrder, t: number): boolean => {
+    o.status = "expired";
+    o.note = `${o.tif === "day" ? "a day order" : "it"} expired at the end of its session (${o.expiresAt})${o.note ? ` · ${o.note}` : ""}`;
+    o.updatedAt = iso(t);
+    if (o.oco) {
+      const sib = b.orders[o.oco];
+      if (sib && sib.status === "open") {
+        sib.status = "canceled";
+        sib.note = `canceled: the other exit (${o.ref}) expired`;
+        sib.updatedAt = iso(t);
+      }
+    }
+    return true;
+  };
+
   /** ONE OPEN ORDER JUDGED against a fresh quote — its day over, its trailing stop moved, its stop triggered, its price crossed — by the
-   * account's rule (the top of this file). True when the book changed */
+   * account's rule (the top of this file). Its day is judged at `at`, the moment it was asked about, and again at the moment its quote is
+   * back (a session that ended while the quote was asked ends the order, never fills it after its own end); everything else at that moment.
+   * The order is looked at again then: the owner may have canceled it, an amend changed it, or another judgement filled it while the quote
+   * was asked, and what the owner was told stands. True when the book changed */
   const judge = async (o: PaperOrder, at: number): Promise<boolean> => {
     if (o.status !== "open") return false;
-    if (o.expiresAt && at >= Date.parse(o.expiresAt)) {
-      o.status = "expired";
-      o.note = `${o.tif === "day" ? "a day order" : "it"} expired at the end of its session (${o.expiresAt})${o.note ? ` · ${o.note}` : ""}`;
-      o.updatedAt = iso(at);
-      if (o.oco) {
-        const sib = b.orders[o.oco];
-        if (sib && sib.status === "open") {
-          sib.status = "canceled";
-          sib.note = `canceled: the other exit (${o.ref}) expired`;
-          sib.updatedAt = iso(at);
-        }
-      }
-      return true;
-    }
+    if (o.expiresAt && at >= Date.parse(o.expiresAt)) return expire(o, at);
     const q = await quote(o.symbol);
     if (!q) return false;
-    let changed = false;
+    if (o.status !== "open") return false;
+    // the moment the quote is back: everything from here on — the end of a rest, a trigger, a fill — is at it, never at the moment the quote
+    // was asked. The owner may have filled an order meanwhile (an add to the position this order closes): what this one does comes after it
+    // on the book, so its past, told again in time order, is the book's own
+    const now = req.clock();
+    if (o.expiresAt && now >= Date.parse(o.expiresAt)) return expire(o, now);
+    // a rest is the session's it was earned in: once the market as this quote sees it (its line's delay behind, delayOf) is past that
+    // session's end it rests no more, whether or not a look fell between the close and the open (the Mac asleep overnight, the source
+    // silent out of hours) — the next session's quote past its limit takes the quote
+    let changed = o.restedTill !== undefined && now - delayOf(q) >= Date.parse(o.restedTill) ? unrest(o) : false;
+    // a market its source says takes no orders now (a halted token, a contract no longer active, a pair with its trading off) fills
+    // nothing, triggers nothing, moves no trail — as the account takes no new order in it
+    if (q.m.open === false) return unrest(o) || changed;
     // a stop not yet triggered: watched (in the regular session for a stock), its trail moved, triggered when the price reaches it
     if ((o.type === "stop" || o.type === "stop_limit" || o.type === "trailing_stop") && !o.triggeredAt) {
-      if (!canTriggerNow(q, at)) return false;
+      if (!canTriggerNow(q, now)) return changed;
       const watch = o.side === "sell" ? (pos(q.m.bid) ?? pos(q.m.price)) : (pos(q.m.ask) ?? pos(q.m.price));
-      if (watch === undefined) return false;
+      if (watch === undefined) return changed;
       if (o.type === "trailing_stop") {
         const best = o.hwm === undefined ? watch : o.side === "sell" ? Math.max(o.hwm, watch) : Math.min(o.hwm, watch);
         const stop = trailStop(o.side, best, o);
@@ -659,20 +823,29 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       if (o.stopPrice === undefined) return changed;
       const reached = o.side === "sell" ? watch <= o.stopPrice + 1e-12 : watch >= o.stopPrice - 1e-12;
       if (!reached) return changed;
-      o.triggeredAt = iso(at);
-      o.updatedAt = iso(at);
+      o.triggeredAt = iso(now);
+      o.updatedAt = iso(now);
       changed = true;
     }
-    if (!canFillNow(o.type === "limit" || o.type === "stop_limit" ? { type: "limit", extendedHours: o.extendedHours } : { type: "market" }, q, at)) return changed;
+    const as: Pick<PaperOrder, "type" | "extendedHours"> = o.type === "limit" || o.type === "stop_limit" ? { type: "limit", extendedHours: o.extendedHours } : { type: "market" };
+    if (!canFillNow(as, q, now)) return (!sessionTakes(as, q, now) && unrest(o)) || changed;
     const px = sideQuote(o.side, q.m);
     if (px === undefined) return changed;
     if (o.type === "limit" || o.type === "stop_limit") {
       if (o.limitPrice === undefined) return changed;
       const crossed = o.side === "buy" ? px <= o.limitPrice + 1e-12 : px >= o.limitPrice - 1e-12;
-      if (!crossed) return changed;
-      // a resting limit is the book's maker: it fills at its own price when the quote reaches it (a limit that crossed when it was placed
-      // took the quote then)
-      fillOrReject(o, o.limitPrice, at);
+      if (!crossed) {
+        // a quote that could fill it and does not reach it: it rests from now, the book's maker
+        if (!o.rested) {
+          rest(o, q, now);
+          changed = true;
+        }
+        return changed;
+      }
+      // a limit that rested fills at its own price when the quote reaches it. One that never rested — past the quote the moment it was
+      // placed (a bracket's take-profit after a gap), changed (an amend), triggered (a stop-limit) or let back into its session — crosses
+      // at once, so it takes the quote where that is better than its limit, as a limit crossing when it is placed does
+      fillOrReject(o, o.rested ? o.limitPrice : o.side === "buy" ? Math.min(px, o.limitPrice) : Math.max(px, o.limitPrice), now, q);
       return true;
     }
     // a market order queued for the session, or a stop that triggered: at the quote, inside the worst price its door gave it — past it, it
@@ -681,12 +854,12 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       const note = `waiting: the quote (${plain(px)}) is past the worst price the order allows (${plain(o.worstPrice!)})`;
       if (o.note !== note) {
         o.note = note;
-        o.updatedAt = iso(at);
+        o.updatedAt = iso(now);
         return true;
       }
       return changed;
     }
-    fillOrReject(o, px, at);
+    fillOrReject(o, px, now, q);
     return true;
   };
 
@@ -696,32 +869,48 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     if (typeof r !== "number" || !Number.isFinite(r)) return undefined;
     return HOURLY_FUNDING.test(source.id) ? r : r / FUNDING_INTERVAL_HOURS;
   };
-  /** every perpetual position marked: the funding of each whole hour since it was last settled paid out of the margin, and the position
-   * liquidated at the mark when the margin left has fallen to the maintenance margin. True when the book changed */
-  const markPerps = async (at: number): Promise<boolean> => {
+  /** A POSITION'S FUNDING settled: each whole hour since it was last settled, the notional at the mark times the source's hourly rate, paid
+   * out of the margin. Only at a quote that is the source's answer (`q`) — a source that did not answer in time has said no rate, and the
+   * hours wait for a quote that has it. Every look settles it (markPerps), and so does every fill on the position before it moves it (fill):
+   * a close by hand, or an exit judged at a quote the look's own did not have, never takes the position off with hours unpaid. True when the
+   * book changed */
+  const payFunding = (symbol: string, p: PaperPosition, q: Quoted | undefined, at: number): boolean => {
+    if (!q) return false;
+    const mark = pos(q.m.price) ?? b.markets[symbol]?.last?.price;
+    if (mark === undefined) return false;
+    const fundedAt = p.fundedAt ?? at;
+    const hours = Math.floor((at - fundedAt) / HOUR);
+    if (hours <= 0) return false;
+    const rate = hourlyFunding(q.source, q.m);
+    if (rate !== undefined && rate !== 0) {
+      // the long pays when the rate is above zero, the short receives; the other way round below zero
+      const notional = mark * p.qty;
+      const paid = round(notional * rate * hours * (p.side === "long" ? 1 : -1), 6);
+      p.marginUsd = round(p.marginUsd - paid, 6);
+      p.fundingUsd = round((p.fundingUsd ?? 0) + paid, 6);
+      // written down as it is settled, so the book's past can be told again exactly (paper-history.ts)
+      (b.funding ??= []).push({ at: iso(fundedAt + hours * HOUR), symbol, usd: paid });
+      if (b.funding.length > FUNDING_KEPT) b.funding.splice(0, b.funding.length - FUNDING_KEPT);
+    }
+    p.fundedAt = fundedAt + hours * HOUR;
+    return true;
+  };
+  /** every perpetual position marked: its funding settled (payFunding), and the position liquidated at the mark when the margin left has
+   * fallen to the maintenance margin. A position the owner closed (or closed and opened again) while its quote was asked is not this one:
+   * it is left to the next look. One the owner added to or closed part of meanwhile is the same position, grown or shrunk: it is marked
+   * as it stands when its quote is back, at that moment — so its funding and its liquidation come after the owner's order on the book, never
+   * before it. True when the book changed */
+  const markPerps = async (): Promise<boolean> => {
     let changed = false;
     for (const [symbol, p] of Object.entries(b.positions)) {
-      const ref = b.markets[symbol];
       const q = await quote(symbol);
+      if (b.positions[symbol] !== p) continue;
+      const at = req.clock();
+      const ref = b.markets[symbol];
       const mark = pos(q?.m.price) ?? ref?.last?.price;
       if (mark === undefined) continue;
       const notional = mark * p.qty;
-      const rate = q ? hourlyFunding(q.source, q.m) : undefined;
-      const fundedAt = p.fundedAt ?? at;
-      const hours = Math.floor((at - fundedAt) / HOUR);
-      if (hours > 0) {
-        if (rate !== undefined && rate !== 0) {
-          // the long pays when the rate is above zero, the short receives; the other way round below zero
-          const paid = round(notional * rate * hours * (p.side === "long" ? 1 : -1), 6);
-          p.marginUsd = round(p.marginUsd - paid, 6);
-          p.fundingUsd = round((p.fundingUsd ?? 0) + paid, 6);
-          // written down as it is settled, so the book's past can be told again exactly (paper-history.ts)
-          (b.funding ??= []).push({ at: iso(fundedAt + hours * HOUR), symbol, usd: paid });
-          if (b.funding.length > FUNDING_KEPT) b.funding.splice(0, b.funding.length - FUNDING_KEPT);
-        }
-        p.fundedAt = fundedAt + hours * HOUR;
-        changed = true;
-      }
+      if (payFunding(symbol, p, q, at)) changed = true;
       const maxLeverage = Math.max(1, ref?.maxLeverage ?? pos(q?.m.maxLeverage) ?? 1);
       const pnl = (p.side === "long" ? mark - p.entryPrice : p.entryPrice - mark) * p.qty;
       const left = p.marginUsd + pnl;
@@ -730,12 +919,12 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         const fee = round((notional * b.feeBps) / 10_000, 6);
         const back = round(Math.max(0, left - fee), 6);
         b.cashUsd = round(b.cashUsd + back, 6);
-        const o: PaperOrder = { ref: `p${++b.seq}`, clientId: `liquidation-${b.seq}`, symbol, side: p.side === "long" ? "sell" : "buy", type: "market", qty: p.qty, reduceOnly: true, status: "filled", filledQty: p.qty, avgPrice: mark, feeUsd: fee, at: iso(at), updatedAt: iso(at), filledAt: iso(at), note: `liquidated at the mark (${plain(mark)}): the margin left (${usd(left)}) fell to the maintenance margin (${usd(maintenance)}); ${usd(back)} went back to cash` };
+        const o: PaperOrder = { ref: `p${++b.seq}`, clientId: `liquidation-${b.seq}`, symbol, side: p.side === "long" ? "sell" : "buy", type: "market", qty: p.qty, reduceOnly: true, status: "filled", filledQty: p.qty, avgPrice: mark, feeUsd: fee, lossPastMarginUsd: round(Math.max(0, fee - left), 6), at: iso(at), updatedAt: iso(at), filledAt: iso(at), note: `liquidated at the mark (${plain(mark)}): the margin left (${usd(left)}) fell to the maintenance margin (${usd(maintenance)}); ${usd(back)} went back to cash` };
         b.orders[o.ref] = o;
         record({ ref: o.ref, symbol, side: o.side, qty: p.qty, price: mark, feeUsd: fee, at: iso(at), realizedUsd: round(pnl, 6), note: o.note });
         delete b.positions[symbol];
         // its exits have nothing left to close
-        for (const x of Object.values(b.orders)) if (x.symbol === symbol && x.parent && x.status === "open") Object.assign(x, { status: "canceled", note: `canceled: the position was liquidated (${o.ref})`, updatedAt: iso(at) });
+        cancelExits(symbol, undefined, `canceled: the position was liquidated (${o.ref})`, at);
         changed = true;
       }
     }
@@ -744,7 +933,8 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
 
   /** every event contract held: once its venue says the market has settled, paid out at what the venue paid and taken off the book; a
    * market closed and not settled is marked so. Asked at most every minute past the market's close, every ten minutes before it (a market
-   * may settle early). True when the book changed */
+   * may settle early). A holding sold whole (or sold and bought again) while its venue was asked is not the one asked about: what is held
+   * now is asked about at the next look. True when the book changed */
   const settleEvents = async (at: number): Promise<boolean> => {
     let changed = false;
     for (const [symbol, h] of Object.entries(b.holdings)) {
@@ -758,6 +948,10 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       if (asked !== undefined && at - asked < every) continue;
       settleAsked.set(symbol, at);
       const s = await inTime(source.settlement(symbol), SOURCE_MS);
+      if (b.holdings[symbol] !== h) {
+        settleAsked.delete(symbol);
+        continue;
+      }
       if (!s || isRefusal(s)) continue;
       if (!s.settled) {
         if (s.closed && !ref.closed) {
@@ -782,18 +976,19 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
   };
 
   let settling: Promise<boolean> | undefined;
-  /** every open order judged, every position marked and every held contract's settlement asked, once at a time: a second look while one is
+  /** every position marked, every open order judged and every held contract's settlement asked, once at a time: a second look while one is
    * under way waits for it. True when the book changed */
   const settle = (): Promise<boolean> => {
     if (settling) return settling;
     const run = (async () => {
       let changed = false;
+      // the perpetuals first: the funding of the hours each stood is paid before an order in this look closes it, and a gap past a
+      // position's liquidation price is the liquidation the rule says (its exits canceled with it), not a stop-loss filled below it
+      changed = (await markPerps()) || changed;
       // in the order they were placed, so an entry's exits are judged after it (an exit placed by this look waits for the next)
       const open = Object.values(b.orders).filter((o) => o.status === "open").sort((x, y) => Number(x.ref.slice(1)) - Number(y.ref.slice(1)));
       for (const o of open) changed = (await judge(o, req.clock())) || changed;
-      const at = req.clock();
-      changed = (await markPerps(at)) || changed;
-      changed = (await settleEvents(at)) || changed;
+      changed = (await settleEvents(req.clock())) || changed;
       if (changed) save();
       return changed;
     })();
@@ -823,7 +1018,9 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       const pnl = mark !== undefined ? round((p.side === "long" ? mark - p.entryPrice : p.entryPrice - mark) * p.qty, 2) : 0;
       const worth = round(p.marginUsd + pnl, 2);
       const funding = p.fundingUsd ? ` · ${signed(-p.fundingUsd)} funding` : "";
-      out.push({ asset: "USD", amount: worth, usd: worth, where: `paper margin · ${p.side} ${qtyText(p.qty)} ${symbol} · ${p.leverage ?? 1}x${mark !== undefined ? ` · ${signed(pnl)} unrealised` : " · unmarked"}${funding}`, class: "cash" });
+      // an open perpetual's margin and its unrealised result: counted in what the account is worth, and none of it free to spend — it is
+      // the position's until the position is closed
+      out.push({ asset: "USD", amount: worth, usd: worth, freeUsd: 0, where: `paper margin · ${p.side} ${qtyText(p.qty)} ${symbol} · ${p.leverage ?? 1}x${mark !== undefined ? ` · ${signed(pnl)} unrealised` : " · unmarked"}${funding}`, class: "cash" });
     }
     return out;
   };
@@ -860,12 +1057,16 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       if (o.reduceOnly) return badOrder(venue, b.name, "a reduce-only order is an exit already: it carries no exits of its own");
       if (o.tif === "ioc" || o.tif === "fok") return badOrder(venue, b.name, "a bracket's entry is good for the day or till canceled");
       if (o.extendedHours) return badOrder(venue, b.name, "a bracket is for the regular session");
-      const ref = o.type === "limit" ? o.limitPrice! : (o.side === "buy" ? (pos(m.ask) ?? pos(m.price)) : (pos(m.bid) ?? pos(m.price)));
-      if (ref !== undefined) {
-        const up = o.side === "buy";
-        if (o.takeProfit !== undefined && (up ? o.takeProfit <= ref : o.takeProfit >= ref)) return badOrder(venue, b.name, `the take-profit (${plain(o.takeProfit)}) is ${up ? "above" : "below"} the entry (${plain(ref)})`);
-        if (o.stopLoss !== undefined && (up ? o.stopLoss >= ref : o.stopLoss <= ref)) return badOrder(venue, b.name, `the stop-loss (${plain(o.stopLoss)}) is ${up ? "below" : "above"} the entry (${plain(ref)})`);
-      }
+      // each exit is judged against the entry's fill that is worst for it, as the account's door judges them: the take-profit against the
+      // limit itself (a market order's: the book), the stop-loss against where the entry fills — a limit that crosses the book fills at
+      // the book, better than its limit (a buy limited at 70,000 with the ask at 60,010 fills at 60,010: a stop-loss at 65,000 would sell
+      // at once)
+      const up = o.side === "buy";
+      const atBook = up ? (pos(m.ask) ?? pos(m.price)) : (pos(m.bid) ?? pos(m.price));
+      const ref = o.type === "limit" ? o.limitPrice! : atBook;
+      const slRef = o.type === "limit" && atBook !== undefined ? (up ? Math.min(o.limitPrice!, atBook) : Math.max(o.limitPrice!, atBook)) : ref;
+      if (ref !== undefined && o.takeProfit !== undefined && (up ? o.takeProfit <= ref : o.takeProfit >= ref)) return badOrder(venue, b.name, `the take-profit (${plain(o.takeProfit)}) must be ${up ? "above" : "below"} the entry (${plain(ref)}) for a ${o.side}`);
+      if (slRef !== undefined && o.stopLoss !== undefined && (up ? o.stopLoss >= slRef : o.stopLoss <= slRef)) return badOrder(venue, b.name, `the stop-loss (${plain(o.stopLoss)}) must be ${up ? "below" : "above"} the entry (${plain(slRef)}) for a ${o.side}${slRef !== ref ? `: a ${o.side} limited at ${plain(ref!)} crosses the book and fills there, at ${plain(slRef)}` : ""}`);
     }
     return undefined;
   };
@@ -955,7 +1156,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         if (fillable) {
           // the account's worst price holds here as a marketable limit does: a quote past it fills nothing
           if (pastWorst(order, px)) return no("E_VENUE_REJECTED", { venue, message: `${b.name}: the quote (${plain(px)}) is past the worst price the order allows (${plain(o.worstPrice!)}): nothing was filled`, detail: { quoted: px, worstPrice: o.worstPrice } });
-          const r = fill(order, px, at);
+          const r = fill(order, px, at, q);
           if (r) return r;
           b.orders[order.ref] = order;
           save();
@@ -974,12 +1175,14 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         const crossed = fillable && (o.side === "buy" ? px <= o.limitPrice! + 1e-12 : px >= o.limitPrice! - 1e-12);
         if (crossed) {
           // at the quote where it is better than the limit
-          const r = fill(order, o.side === "buy" ? Math.min(px, o.limitPrice!) : Math.max(px, o.limitPrice!), at);
+          const r = fill(order, o.side === "buy" ? Math.min(px, o.limitPrice!) : Math.max(px, o.limitPrice!), at, q);
           if (r) return r;
         } else if (atOnce) {
           order.status = "canceled";
           order.note = fillable ? `${o.tif}: the quote did not cross the limit, nothing filled` : `${o.tif}: ${m.name} is not in session now, nothing filled`;
         } else if (!fillable) order.note = `resting until ${m.name}'s session is on`;
+        // placed at a quote that could fill it and does not reach it: it rests from now, filled at its own price when the quote comes to it
+        else rest(order, q, at);
         b.orders[order.ref] = order;
         save();
         return stateOf(order);
@@ -1032,22 +1235,29 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       return stateOf(o);
     },
 
-    /** an open order changed in place: its size, its limit, its stop (a trailing stop's trail is set when it is placed) */
+    /** an open order changed in place: its size, its limit, its stop (a trailing stop's trail is set when it is placed). It is looked at
+     * again once its quote is back — a look may have filled it, or the owner canceled it, meanwhile — and changed only if it is still open.
+     * A bracketed entry keeps its exits, checked again against the entry as changed. A new limit is a new price on the book: it rests again
+     * only once a quote that could fill it does not reach it */
     async amend(ref, _symbol, change) {
       const o = b.orders[ref];
       if (!o) return no("E_ACCOUNT_ORDER_UNKNOWN", { venue, message: `${b.name} has no order ${ref}`, detail: { order: ref } });
       if (o.status !== "open") return badOrder(venue, b.name, `order ${ref} is ${o.status}: only an open order is changed`);
       const q = await quote(o.symbol);
       if (!q) return no("E_VENUE_REJECTED", { venue, message: `${b.name}: no public source lists ${o.symbol.slice(0, 60)} just now` });
+      if (o.status !== "open") return badOrder(venue, b.name, `order ${ref} is ${o.status}: only an open order is changed`);
       const m = marketOf(q.source, q.m);
       if (change.limitPrice !== undefined && o.type !== "limit" && o.type !== "stop_limit") return badOrder(venue, b.name, `a ${o.type.replace(/_/g, "-")} order has no limit price to change`);
       if (change.stopPrice !== undefined && o.type !== "stop" && o.type !== "stop_limit") return badOrder(venue, b.name, o.type === "trailing_stop" ? "a trailing stop's stop follows the price: it is not set by hand" : `a ${o.type} order has no stop price to change`);
       if (change.stopPrice !== undefined && o.triggeredAt) return badOrder(venue, b.name, `order ${ref} has triggered already: its stop is behind it`);
       const next = { qty: change.qty ?? o.qty, limitPrice: change.limitPrice ?? o.limitPrice, stopPrice: change.stopPrice ?? o.stopPrice };
-      const bad = checkOrder({ symbol: o.symbol, side: o.side, type: o.type, qty: next.qty, clientId: o.clientId, ...(next.limitPrice !== undefined && (o.type === "limit" || o.type === "stop_limit") ? { limitPrice: next.limitPrice } : {}), ...(next.stopPrice !== undefined && o.type !== "trailing_stop" && o.type !== "limit" && o.type !== "market" ? { stopPrice: next.stopPrice } : {}), ...(o.type === "trailing_stop" ? (o.trailPercent !== undefined ? { trailPercent: o.trailPercent } : { trailPrice: o.trailPrice }) : {}), ...(o.reduceOnly ? { reduceOnly: true } : {}) }, m);
+      const bad = checkOrder({ symbol: o.symbol, side: o.side, type: o.type, qty: next.qty, clientId: o.clientId, ...(next.limitPrice !== undefined && (o.type === "limit" || o.type === "stop_limit") ? { limitPrice: next.limitPrice } : {}), ...(next.stopPrice !== undefined && o.type !== "trailing_stop" && o.type !== "limit" && o.type !== "market" ? { stopPrice: next.stopPrice } : {}), ...(o.type === "trailing_stop" ? (o.trailPercent !== undefined ? { trailPercent: o.trailPercent } : { trailPrice: o.trailPrice }) : {}), ...(o.reduceOnly ? { reduceOnly: true } : {}), ...(o.takeProfit !== undefined ? { takeProfit: o.takeProfit } : {}), ...(o.stopLoss !== undefined ? { stopLoss: o.stopLoss } : {}) }, m);
       if (bad) return bad;
       o.qty = next.qty;
-      if (change.limitPrice !== undefined) o.limitPrice = change.limitPrice;
+      if (change.limitPrice !== undefined) {
+        o.limitPrice = change.limitPrice;
+        unrest(o);
+      }
       if (change.stopPrice !== undefined) o.stopPrice = change.stopPrice;
       o.updatedAt = iso(req.clock());
       await judge(o, req.clock());

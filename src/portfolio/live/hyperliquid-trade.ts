@@ -84,7 +84,7 @@ import { thrownHttp } from "./exchange.ts";
 import { heldTo, HYPERLIQUID_RULE, type Locator } from "./location.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, preIpoOf } from "./preipo.ts";
 import { badOrder, CANDLE_INTERVALS, ceilTo, DONE, floorTo, inDollars, onStep, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
-import { bannedNo, bannedUntil, edgeRefused, edgeTitle, edgeWords, isStable, notTheApiWords, redact, REGION, type LiveBalance, type LiveSource, type MarginMode } from "./types.ts";
+import { bannedNo, bannedUntil, edgeRefused, edgeTitle, edgeWords, freePart, isStable, notTheApiWords, redact, REGION, type LiveBalance, type LiveSource, type MarginMode } from "./types.ts";
 
 type Dict = Record<string, unknown>;
 
@@ -645,7 +645,12 @@ async function balances(b: Book, name: string): Promise<LiveBalance[]> {
   const out: LiveBalance[] = [];
   if (!unified) {
     const v = fin(obj(obj(perps).marginSummary).accountValue) ?? 0;
-    if (v > 0) out.push({ asset: "USDC", amount: v, usd: v, where: `perps · ${(fin(obj(perps).withdrawable) ?? 0).toFixed(2)} withdrawable`, class: "stable" });
+    // of it, what Hyperliquid says can be withdrawn is free: the rest is margin the open positions use. The field as it came, for freePart
+    // to read: one left out is no word about it (all of it free), not none free — and the note names a withdrawable only where Hyperliquid
+    // gave one (`fin` reads the field as freePart does), never a 0.00 it did not say beside a line all free
+    const withdrawable = obj(perps).withdrawable;
+    const said = fin(withdrawable);
+    if (v > 0) out.push({ asset: "USDC", amount: v, usd: v, where: said !== undefined ? `perps · ${said.toFixed(2)} withdrawable` : "perps", class: "stable", ...freePart(withdrawable, v, "usd") });
   }
   // the markets name a spot token as the rest of the account does (UBTC is BTC, as the library maps it) and give its USDC pair for a price;
   // each HIP-3 DEX's perps account is found from them too. A list that cannot be loaded makes a read that is not whole — the DEXs' accounts
@@ -667,7 +672,9 @@ async function balances(b: Book, name: string): Promise<LiveBalance[]> {
     const asset = pair && pair.token ? pair.base : coin;
     const mid = pair ? pos(mids[pair.coin]) : undefined;
     const usd = isStable(coin) ? amount : mid !== undefined ? round(amount * mid, 8) : undefined;
-    out.push({ asset, amount, ...(usd !== undefined ? { usd } : {}), where: `${unified ? "spot and perps · unified account" : "spot"}${asset !== coin ? ` · ${coin} on ${name}` : ""}`, ...(isStable(coin) ? { class: "stable" as const } : {}) });
+    // what an open order holds, or under a unified account the perps margin too (Hyperliquid's `hold`), is not free
+    const hold = fin(x.hold);
+    out.push({ asset, amount, ...(usd !== undefined ? { usd } : {}), where: `${unified ? "spot and perps · unified account" : "spot"}${asset !== coin ? ` · ${coin} on ${name}` : ""}`, ...(isStable(coin) ? { class: "stable" as const } : {}), ...(hold !== undefined ? freePart(round(amount - hold, 8), amount, "amount") : {}) });
   }
   // each HIP-3 DEX keeps its own perps account; under a unified account its margin is in the spot balances already. One refused (a rate
   // limit, an edge's page) refuses the read: the account keeps the last whole one, rather than one with that DEX's money gone
@@ -678,7 +685,10 @@ async function balances(b: Book, name: string): Promise<LiveBalance[]> {
     [...dexes.entries()].forEach(([dex, collateral], i) => {
       const s = obj(states[i]);
       const v = fin(obj(s.marginSummary).accountValue) ?? 0;
-      if (v > 0) out.push({ asset: collateral, amount: v, ...(isStable(collateral) ? { usd: v, class: "stable" as const } : {}), where: `perps · ${b.dexName(dex)} (HIP-3) · ${(fin(s.withdrawable) ?? 0).toFixed(2)} withdrawable` });
+      // its withdrawable is free, in the collateral's own units: dollars where the collateral is one (one left out: all of it, and no
+      // withdrawable in the note, as above)
+      const said = fin(s.withdrawable);
+      if (v > 0) out.push({ asset: collateral, amount: v, ...(isStable(collateral) ? { usd: v, class: "stable" as const } : {}), where: `perps · ${b.dexName(dex)} (HIP-3)${said !== undefined ? ` · ${said.toFixed(2)} withdrawable` : ""}`, ...freePart(s.withdrawable, v, isStable(collateral) ? "usd" : "amount") });
     });
   }
   return out;

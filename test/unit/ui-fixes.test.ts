@@ -159,6 +159,23 @@ describe("fix round · the helpers the contract gained", () => {
 describe("fix round · what the panes draw", () => {
   const agentWallet = venue("agent-research", "research", { connector: "live:agent-wallet", trade: undefined, liveCan: { receive: true, withdraw: true, ledgers: [] }, holdings: [{ asset: "USDC", amount: 72.38, usd: 72.38, class: "stable", note: "Base" }, { asset: "ETH", amount: 0.002, usd: 9, class: "crypto", note: "Base" }] });
 
+  it("Under way names an agent's bracket exit as the exit of its entry, as its statement line does: it went through no limit and no card of its own", () => {
+    const p = page();
+    const AGENT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const at = new Date(NOW).toISOString();
+    const base = { at, updatedAt: at, venue: "paper-1", venueName: "Paper account", symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", qty: 0.01, filledQty: 0, authority: "agent", agent: AGENT, note: "" };
+    const entry = { ...base, id: "ord-0001", side: "buy", type: "limit", limitPrice: 59000, takeProfit: 62000, stopLoss: 58000, status: "open", ref: "p1", card: "card-1" };
+    const stop = { ...base, id: "ord-0003", side: "sell", type: "stop", stopPrice: 58000, status: "open", ref: "p3", exitOf: { order: "ord-0001", kind: "stop-loss" } };
+    p.set("A", account([venue("paper-1", "Paper account", { paper: true })], { orders: [stop, entry] }));
+    expect(p.out(`[byOf(${JSON.stringify(stop)}), byOf(${JSON.stringify({ ...stop, exitOf: { order: "ord-0001", kind: "take-profit" } })}), byOf(${JSON.stringify(entry)})]`)).toEqual(["Claude Code, stop-loss of ord-0001", "Claude Code, take-profit of ord-0001", "Claude Code, approved by you"]);
+    // the rows as Under way draws them: the exit's says whose exit it is, never "inside its limit"
+    p.run('var SEC = { innerHTML: "", addEventListener() {}, contains: () => false }; tkDrawOpen(SEC, false)');
+    const drawn = p.run<string>("SEC.innerHTML");
+    expect(drawn).toContain("by Claude Code, stop-loss of ord-0001");
+    expect(drawn).toContain("by Claude Code, approved by you");
+    expect(drawn).not.toContain("inside its limit");
+  });
+
   it("never offers Disconnect for an agent wallet: not under Accounts (no row-level Disconnect at all), not in its Details", () => {
     const p = page();
     p.run(OWNER);

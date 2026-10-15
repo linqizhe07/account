@@ -6,7 +6,8 @@ import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
 import type { LiveOrder } from "../../src/portfolio/account/live-orders.ts";
-import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
+import { orderLine } from "../../src/portfolio/account/statement.ts";
+import { seatOrderAction, signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import type { LiveTrader, Market, OrderRequest, OrderState } from "../../src/portfolio/live/trade.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
@@ -491,6 +492,37 @@ describe("orders: what the review found", () => {
     await Promise.all([x.svc.liveMarket("ex", "BTC/USDT"), x.svc.liveMarket("ex", "BTC/USDT"), x.svc.liveMarket("ex", "BTC/USDT")]);
     expect(x.venue.asked - before).toBe(1);
   });
+
+  it("a seat's order keeps every price and trail it was given: one its type does not carry is refused at the door, never dropped into a market order", async () => {
+    const x = await boot();
+    await x.letIn();
+    await x.own({ type: "setPolicy", change: "mode", value: "open" });
+    // a trail with the type left out: the action carries it, and the door says a market order has none — Beast places nothing
+    const trail = seatOrderAction({ venue: "ex", symbol: "BTC/USDT", side: "sell", qty: 0.0005, trailPercent: 3 });
+    if (typeof trail === "string") throw new Error(trail);
+    expect(trail).toMatchObject({ orderType: "market", trailPercent: "3" });
+    expect(refusal(await x.ag(trail)).message).toBe("a market order has no trail");
+    // a limit price with the type left out, the same
+    const limit = seatOrderAction({ venue: "ex", symbol: "BTC/USDT", side: "sell", qty: 0.0005, limitPrice: 70000 });
+    if (typeof limit === "string") throw new Error(limit);
+    expect(refusal(await x.ag(limit)).message).toBe("a market order has no limit price");
+    expect(x.venue.placed).toHaveLength(0);
+    // what a type needs and was not given is said before anything is signed
+    expect(seatOrderAction({ venue: "ex", symbol: "BTC/USDT", side: "sell", qty: 0.0005, orderType: "trailing_stop" })).toBe("a trailing_stop needs trailPercent or trailPrice (one of the two)");
+  });
+
+  it("a bracket's exit the venue shows already filled, trimmed to what was left, is followed at the size that filled, not the size it was placed at", async () => {
+    const x = await boot();
+    x.venue.markets["BTC/USDT"]!.brackets = true;
+    // the entry filled, and by the time the venue answers, its take-profit filled too — trimmed to the half of it left to sell
+    x.venue.onPlace = (o, ref) => (o.takeProfit === undefined ? undefined : { ref, status: "filled", filledQty: o.qty, avgPrice: 60_010, native: { id: ref, legs: [{ ref: `${ref}-tp`, type: "limit", side: "sell", qty: o.qty, limitPrice: 66_000, status: "filled", filledQty: o.qty / 2, avgPrice: 66_000 }, { ref: `${ref}-sl`, type: "stop", side: "sell", qty: o.qty, stopPrice: 57_000, status: "canceled", filledQty: 0 }] } });
+    const entry = placed(await x.order({ symbol: "BTC/USDT", side: "buy", orderType: "market", qty: "0.001", takeProfit: "66000", stopLoss: "57000" }));
+    const exit = (kind: string) => x.engine.orders.find((o) => o.exitOf?.order === entry.id && o.exitOf.kind === kind)!;
+    expect(exit("take-profit")).toMatchObject({ status: "filled", qty: 0.0005, filledQty: 0.0005, usd: 33 });
+    expect(orderLine(exit("take-profit"), () => "").description).toMatch(/^Sell 0\.0005 BTC · BTC\/USDT · limit 66000 · take-profit of ord-/);
+    // the other, canceled with nothing filled, keeps the size it was placed at
+    expect(exit("stop-loss")).toMatchObject({ status: "canceled", qty: 0.001, filledQty: 0 });
+  });
 });
 
 describe("the statement", () => {
@@ -509,6 +541,16 @@ describe("the statement", () => {
     // the ledger outlives the process: a new run on the same home reads the same statement back
     const again = await boot({ home: x.home, nonceFrom: 100 });
     expect(again.svc.statement().map((l) => l.key)).toEqual(lines.map((l) => l.key));
+  });
+
+  it("a bracket's exit is named as the exit of its entry: it counted on no limit and no card of its own", () => {
+    const at = new Date(START).toISOString();
+    const exit: LiveOrder = { id: "ord-0003", clientId: "c-sl", at, venue: "paper-1", venueName: "Paper account", symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", side: "sell", type: "stop", qty: 0.01, stopPrice: 57000, exitOf: { order: "ord-0001", kind: "stop-loss" }, price: 57000, usd: 570, status: "open", filledQty: 0, ref: "p3", signer: cc.address, authority: "agent", agent: cc.address, note: "", updatedAt: at, native: {}, paper: true };
+    const name = () => "Claude Code";
+    expect(orderLine(exit, name).by).toBe("Claude Code, stop-loss of ord-0001");
+    // the agent's own orders say how they went: on the owner's yes, or inside its limit
+    expect(orderLine({ ...exit, exitOf: undefined, card: "card-1" }, name).by).toBe("Claude Code, approved by you");
+    expect(orderLine({ ...exit, exitOf: undefined }, name).by).toBe("Claude Code, inside its limit");
   });
 });
 

@@ -115,6 +115,22 @@ describe("connecting and disconnecting are not profit", () => {
     expect(rows(file).filter((r) => r.event)).toHaveLength(2);
   });
 
+  it("marks no connection of a venue the log never counted: a paper account's, written here before paper accounts had a log of their own, even once nothing says it was one", () => {
+    const { clock, log: l } = log();
+    l.append(snap({ kraken: 1000 }));
+    clock.t += 10 * MIN;
+    // as the service wrote it then: the paper account's connection, its numbers kept out of the point
+    l.append(snap({ kraken: 1000 }, { event: { kind: "connect", venue: "alpaca-paper", name: "Alpaca · paper" } }));
+    clock.t += 10 * MIN;
+    l.append(snap({ kraken: 1000, alpaca: 500 }, { event: { kind: "connect", venue: "alpaca", name: "Alpaca" } }));
+    clock.t += 10 * MIN;
+    l.append(snap({ kraken: 1000 }, { event: { kind: "disconnect", venue: "alpaca", name: "Alpaca" } }));
+    // the paper account is disconnected since, so no `hide` names it: its connection is still not on the net worth curve
+    const h = ok(l.read("1d", clock.t));
+    expect(h.events.map((e) => [e.kind, e.venue])).toEqual([["connect", "alpaca"], ["disconnect", "alpaca"]]);
+    expect(ok(l.read("1d", clock.t, (v) => v === "alpaca")).events).toEqual([]);
+  });
+
   it("does not read a venue that is missing after a restart, or comes back, as a loss or a gain", () => {
     const { clock, log: l } = log();
     l.append(snap({ kraken: 1000, alpaca: 2000 }));
