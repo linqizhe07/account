@@ -50,9 +50,167 @@ export const ASK_TTL_MS = DAY;
 /** one agent's asks waiting at once: five, whatever the count of keys (the account holds MAX_ASKS in all, first come) */
 export const ASKS_PER_AGENT = 5;
 export const ASKS_PER_HOUR = 5;
-export const ASK_KINDS = ["letIn", "limit", "venue", "topup", "session", "leverage", "mode"] as const;
+export const ASK_KINDS = ["letIn", "limit", "venue", "topup", "session", "leverage", "mode", "token"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
 export const REPORT_STATUSES = ["taking", "done", "cannot", "note"] as const;
+
+// ---- spend tokens (account/tokens.ts runs them; this file keeps them) --------------------------------------------------------------
+
+/** how long a spend token may live, at most: shorter than an agent key (a token is one authorisation, not a standing one) */
+export const MAX_TOKEN_DAYS = 30;
+/** uses on one token, at most; 0 is "as many as the amount and the expiry allow", which only a venue or paper rail takes */
+export const MAX_TOKEN_USES = 20;
+/** the most a token may be for, in its currency: a bound on what one signature can hand an agent, whatever the rail holds */
+export const MAX_TOKEN_USD = 100_000;
+/** tokens standing (not ended) per agent key, at most */
+export const MAX_TOKENS_PER_AGENT = 20;
+/** the owner's words on a token: at most this long, plain text, no secret in them */
+export const TOKEN_PURPOSE = 200;
+/** the rails a token may be on in this version: the account's own paper account, a venue connected live, and paying an https payee over
+ * x402 from an agent wallet. Each is PROXY usage: the agent holds the token's id, the account runs the use with the owner's instrument */
+export const TOKEN_RAILS = ["paper", "venue", "chain:x402"] as const;
+export type TokenRailKind = (typeof TOKEN_RAILS)[number];
+export const TOKEN_STATUSES = ["issuing", "verify", "active", "used", "expired", "stopped", "revoking", "revoked"] as const;
+export type TokenStatus = (typeof TOKEN_STATUSES)[number];
+/** the states a token can leave: everything else is final */
+export const TOKEN_OPEN: ReadonlySet<TokenStatus> = new Set(["issuing", "verify", "active", "stopped", "revoking"]);
+export const USE_STATUSES = ["minting", "minted", "executed", "done", "settled", "not-used"] as const;
+export type UseStatus = (typeof USE_STATUSES)[number];
+export const USE_OPEN: ReadonlySet<UseStatus> = new Set(["minting", "minted", "executed"]);
+
+/** one use of a token: a sub-record under it. `minting` holds its amount from the moment it is written; `minted` (a credential handed
+ * over) or `executed` (a proxy use run) once the rail answered; `done` on the agent's word, `settled` on the rail's, `not-used` when
+ * nothing came of it (a card expired, a refusal after the hold) */
+export interface TokenUse {
+  /** `<token>/<n>`: tok-0003/1 */
+  id: string;
+  n: number;
+  status: UseStatus;
+  counterparty: string;
+  /** what was held for it while it ran, and what it came to */
+  amountMicro: number;
+  executedMicro?: number | undefined;
+  /** the hash of the agent's signed use: the idempotency key with the token's id */
+  action: Hex;
+  /** the card it waited on, the order or payment it became, the rail's reference */
+  card?: string | undefined;
+  ref?: string | undefined;
+  at: string;
+  updatedAt: string;
+  note?: string | undefined;
+}
+
+/** A SPEND TOKEN: one authorisation the owner signed for one agent on one rail, backed by one instrument of the owner's, for one
+ * counterparty, with its own lines and its own end. The signed fields are the owner's (sign.ts issueSpendToken); the rest is the
+ * account's: its status (the state machine in account/tokens.ts), what the rail answered, and the counters */
+export interface SpendToken {
+  /** `tok-0001` */
+  id: string;
+  agent: Hex;
+  /** `paper` · `venue:<id>` · `chain:x402` */
+  rail: string;
+  /** the owner's instrument on that rail: a venue's id on the account, an agent wallet's name */
+  instrument: string;
+  /** typed by the rail: a market list at a venue (or `*` on paper), an https origin on x402 */
+  counterparty: string;
+  maxMicro: number;
+  currency: string;
+  perUseMicro: number;
+  /** 0: no count, the amount and the expiry bound it */
+  uses: number;
+  validUntil: number;
+  atOnce: boolean;
+  purpose: string;
+  env: "test" | "live";
+  status: TokenStatus;
+  /** `proxy`: the agent holds the id, the account executes · `credential`: a credential is handed over (no rail of this version) */
+  usage: "proxy" | "credential";
+  /** what the rail answered when the token was issued (an instrument id here: these rails keep nothing of their own) */
+  providerRef?: string | undefined;
+  /** counted here: what uses came to, what open uses and waiting cards hold, how many uses were made */
+  mintedMicro: number;
+  reservedMicro: number;
+  usesMade: number;
+  /** what the rail itself says was spent, when it says, and when it was last read */
+  providerSpentMicro?: number | undefined;
+  readAt?: string | undefined;
+  revokedAt?: string | undefined;
+  revokeConfirmed?: string | undefined;
+  stoppedAt?: string | undefined;
+  /** why it ended, in the account's words */
+  reason?: string | undefined;
+  /** the owner's signed issue itself: checked again before every use */
+  envelope: Envelope;
+  at: string;
+  usesList: TokenUse[];
+}
+
+/** the token's rail kind (`venue:okx` → `venue`), or undefined for a rail this version does not run */
+export function railKindOf(rail: string): TokenRailKind | undefined {
+  if (rail === "paper" || rail === "chain:x402") return rail;
+  return /^venue:[a-z0-9][a-z0-9-]{0,39}$/.test(rail) ? "venue" : undefined;
+}
+
+/** the counterparty as a rail types it, or why not: a market list (plain symbols, comma-separated; `*` on paper alone) at a venue or
+ * paper, an https origin (no path, no credentials) on x402 */
+export function counterpartyProblem(rail: string, counterparty: string): string | null {
+  const kind = railKindOf(rail);
+  const c = counterparty.trim();
+  if (!kind) return `a token's rail is one of ${TOKEN_RAILS.join(", ")} (a venue's as "venue:<id>")`;
+  if (kind === "chain:x402") {
+    let u: URL;
+    try {
+      u = new URL(c);
+    } catch {
+      return "an x402 token's counterparty is the payee's https origin, like https://api.example.com";
+    }
+    if (u.protocol !== "https:" || u.username || u.password || u.origin !== c) return "an x402 token's counterparty is the payee's https origin alone: no path, no query, no credentials";
+    return null;
+  }
+  if (c === "*") return kind === "paper" ? null : 'a venue token names its markets: "*" (any market) is for the paper rail alone';
+  const list = c.split(",").map((x) => x.trim());
+  if (!list.length || list.some((x) => !x || charCount(x) > 80 || !isPlain(x) || /[\s,]/.test(x))) return "a venue or paper token's counterparty is a list of market symbols as the venue names them, comma-separated, each plain text";
+  return null;
+}
+
+/** the markets a venue or paper token covers (`*`: every market), as the use's order is held to them */
+export const tokenMarkets = (counterparty: string): string[] | "*" => (counterparty.trim() === "*" ? "*" : counterparty.split(",").map((x) => x.trim()).filter(Boolean));
+
+/** what is wrong with an issueSpendToken before anything is signed or kept, where it can be told without the venues; `null` when nothing */
+export function tokenProblem(a: { agent: string; rail: string; instrument: string; counterparty: string; maxAmount: string; currency: string; perUseMax: string; uses: number; validUntil: number; atOnce: string; purpose: string; env: string }, nowMs: number): string | null {
+  const kind = railKindOf(a.rail);
+  if (!kind) return `a token's rail is one of ${TOKEN_RAILS.join(", ")} (a venue's as "venue:<id>")`;
+  if (!isAddress(a.agent)) return "a token is for an agent key: its address";
+  if (!a.instrument.trim() || !/^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$/.test(a.instrument.trim())) return "a token names the owner's instrument: a venue's id on the account, or an agent wallet's name";
+  if (kind === "venue" && a.instrument.trim() !== a.rail.slice("venue:".length)) return "a venue token's instrument is the venue of its rail";
+  const cp = counterpartyProblem(a.rail, a.counterparty);
+  if (cp) return cp;
+  const max = micro(a.maxAmount);
+  const per = micro(a.perUseMax);
+  if (Number.isNaN(max) || !(max > 0)) return "a token's amount is a plain decimal, more than zero";
+  if (max > MAX_TOKEN_USD * 1_000_000) return `a token is for at most ${MAX_TOKEN_USD.toLocaleString("en-US")} of its currency`;
+  if (Number.isNaN(per) || !(per > 0) || per > max) return "the most one use may be is more than zero and no more than the token's amount";
+  const currency = a.currency.trim();
+  if (kind === "chain:x402" ? currency !== "USDC" : currency !== "USD") return kind === "chain:x402" ? "an x402 token is in USDC" : "a venue or paper token counts dollars (USD) of orders";
+  if (!Number.isInteger(a.uses) || a.uses < 0 || a.uses > MAX_TOKEN_USES) return `a token's uses are 1 to ${MAX_TOKEN_USES}, or 0 for as many as its amount allows`;
+  if (a.uses === 0 && kind === "chain:x402") return "an x402 token says how many payments it is for (1 to 20)";
+  if (a.atOnce !== "true" && a.atOnce !== "") return 'atOnce is "true" (a use goes without a card in Guard) or ""';
+  if (a.env !== "test" && a.env !== "live") return 'a token is for the "test" or the "live" environment';
+  if (kind === "paper" && a.env !== "test") return "a paper token is a test token: its money is not real";
+  if (kind === "chain:x402" && a.env !== "live") return "an x402 token pays real USDC: it is a live token";
+  const purpose = a.purpose.trim();
+  if (!purpose) return `a token says what it is for, in 1 to ${TOKEN_PURPOSE} characters`;
+  const words = wordsProblem(purpose, TOKEN_PURPOSE, "a token's purpose");
+  if (words) return words;
+  if (!(a.validUntil > nowMs)) return "a token ends in the future";
+  if (a.validUntil > nowMs + MAX_TOKEN_DAYS * DAY) return `a token lives at most ${MAX_TOKEN_DAYS} days`;
+  return null;
+}
+
+/** what a token has left for one more use, in its micro-units */
+export const tokenLeftMicro = (t: SpendToken): number => Math.max(0, t.maxMicro - t.mintedMicro - t.reservedMicro);
+/** tokens that are not ended, and tokens an agent key holds */
+export const openTokens = (s: AccountState): SpendToken[] => s.tokens.filter((t) => TOKEN_OPEN.has(t.status));
 
 export interface OwnerKey {
   /** a lower-case address for an EOA, `device:<kid>` for a device key */
@@ -195,11 +353,15 @@ export interface AccountState {
   /** the owner's watchlist and open intents: what agents read to know what the owner wants. Neither is authority */
   watch: Watch[];
   intents: OwnerIntent[];
+  /** the spend tokens the owner issued (account/tokens.ts): every one, ended ones included, so an id means one token */
+  tokens: SpendToken[];
   seq: number;
+  /** the last token id handed out: tok-NNNN, continued across restarts */
+  tokenSeq: number;
 }
 
 export function emptyState(): AccountState {
-  return { abstraction: "disabled", owners: [], threshold: 1, pendingDevices: [], agents: [], tombstones: [], requests: [], fees: [], spends: [], subAccounts: [], destinations: [], payees: [], watch: [], intents: [], seq: 0 };
+  return { abstraction: "disabled", owners: [], threshold: 1, pendingDevices: [], agents: [], tombstones: [], requests: [], fees: [], spends: [], subAccounts: [], destinations: [], payees: [], watch: [], intents: [], tokens: [], seq: 0, tokenSeq: 0 };
 }
 
 export type AgentStatus = "ok" | "unknown" | "expired" | "revoked";
@@ -285,12 +447,17 @@ export function nameHolder(s: AccountState, name: string, except?: string): Agen
 /** a report's refs, as the agent signed them: comma-separated ids */
 export const refsOf = (text: string): string[] => text.split(",").map((x) => x.trim()).filter(Boolean);
 
-/** what is wrong with an agent's ask, before anything is kept: its kind, the venue it names, its dollars, its words */
-export function askProblem(a: { kind: string; venue: string; usd: string; text: string }): string | null {
+/** what is wrong with an agent's ask, before anything is kept: its kind, the venue it names, its dollars, its words — and, for a token,
+ * the counterparty it proposes (an https origin or a market list, which `venue` cannot hold): the owner is shown it as proposed */
+export function askProblem(a: { kind: string; venue: string; usd: string; text: string; counterparty?: string | undefined }): string | null {
   if (!(ASK_KINDS as readonly string[]).includes(a.kind)) return `an ask is one of ${ASK_KINDS.join(", ")}`;
   if (a.venue !== "" && !VENUE_ID.test(a.venue)) return "an ask's venue is a venue id (lower-case letters, digits and dashes), or none";
   if (a.kind === "venue" && a.venue === "") return "an ask about a venue says which venue: `venue` is its id";
   if (a.usd !== "" && Number.isNaN(micro(a.usd))) return "an ask's dollars are a plain decimal, or none";
+  const cp = a.counterparty ?? "";
+  if (a.kind !== "token" && cp !== "") return "a counterparty goes with an ask for a token";
+  if (a.kind === "token" && cp === "") return "an ask for a token says its counterparty: an https origin to pay, or the markets to trade (`counterparty`), and the venue or paper account in `venue`";
+  if (cp !== "" && (charCount(cp) > 200 || !isPlain(cp))) return "an ask's counterparty is at most 200 characters of plain text";
   return wordsProblem(a.text, AGENT_TEXT, "an ask's text");
 }
 
@@ -338,10 +505,11 @@ export function applyOwner(state: AccountState, action: OwnerAction, envelope: E
       const address = action.agentAddress.toLowerCase() as Hex;
       const retire = (k: AgentKey) => ({ ...k, revokedAt: at });
       if (address === ZERO) {
-        // Hyperliquid's way to revoke: approve the zero address under the same name
+        // Hyperliquid's way to revoke: approve the zero address under the same name. Its spend tokens go with it: every one still
+        // standing is revoking from here (account/tokens.ts closes them at the rail)
         const victim = s.agents.find((k) => k.name === name && k.revokedAt === undefined);
         if (!victim) return bad(`no active agent key is named "${name}"`);
-        return { ...s, agents: s.agents.map((k) => (k === victim ? retire(k) : k)), tombstones: [...s.tombstones, victim.address] };
+        return { ...s, agents: s.agents.map((k) => (k === victim ? retire(k) : k)), tombstones: [...s.tombstones, victim.address], tokens: s.tokens.map((t) => (t.agent === victim.address && TOKEN_OPEN.has(t.status) ? { ...t, status: "revoking", revokedAt: at, reason: `its agent key "${name}" was revoked` } : t)) };
       }
       if (!isAddress(address)) return bad("an agent key is an address");
       if (s.tombstones.includes(address)) return limit("this key was revoked once: a revoked key is never authorised again, generate a new one", { address });
@@ -506,6 +674,28 @@ export function applyOwner(state: AccountState, action: OwnerAction, envelope: E
       if (open.length >= MAX_INTENTS) return limit(`at most ${MAX_INTENTS} intents open at a time: withdraw one first`, { max: MAX_INTENTS });
       const seq = s.seq + 1;
       return { ...s, seq, intents: [...open, { id: `intent-${String(seq).padStart(4, "0")}`, ...fields, reports: 0, byAgent: [] }] };
+    }
+    case "issueSpendToken": {
+      // a token is kept in the words the owner signed, judged by its own lines: no SpendApproval is read for it, and none is changed by it
+      const wrong = tokenProblem(action, nowMs);
+      if (wrong) return bad(wrong);
+      const agent = action.agent.toLowerCase() as Hex;
+      if (agentStatus(s, agent, nowMs) !== "ok") return bad("a token is for an agent key that is authorised now");
+      if (s.tokens.filter((t) => t.agent === agent && TOKEN_OPEN.has(t.status)).length >= MAX_TOKENS_PER_AGENT) return limit(`at most ${MAX_TOKENS_PER_AGENT} tokens standing for one agent: revoke one first`, { max: MAX_TOKENS_PER_AGENT });
+      const tokenSeq = s.tokenSeq + 1;
+      const token: SpendToken = { id: `tok-${String(tokenSeq).padStart(4, "0")}`, agent, rail: action.rail, instrument: action.instrument.trim(), counterparty: action.counterparty.trim(), maxMicro: micro(action.maxAmount), currency: action.currency.trim(), perUseMicro: micro(action.perUseMax), uses: action.uses, validUntil: action.validUntil, atOnce: action.atOnce === "true", purpose: action.purpose.trim(), env: action.env as SpendToken["env"], status: "issuing", usage: "proxy", mintedMicro: 0, reservedMicro: 0, usesMade: 0, envelope, at, usesList: [] };
+      return { ...s, tokenSeq, tokens: [...s.tokens, token] };
+    }
+    case "revokeSpendToken": {
+      const id = action.token.trim();
+      const t = s.tokens.find((x) => x.id === id);
+      if (!t) return bad(`there is no spend token "${id.slice(0, 40)}"`);
+      if (!TOKEN_OPEN.has(t.status)) return bad(`${t.id} is ${t.status} already: it ends only once`);
+      const reason = action.reason.trim();
+      const words = reason ? wordsProblem(reason, TOKEN_PURPOSE, "a revocation's reason") : null;
+      if (words) return bad(words);
+      // revoking: on the record before the rail is asked, so a crash between the two never leaves it active; the rail's answer makes it revoked
+      return { ...s, tokens: s.tokens.map((x) => (x === t ? { ...x, status: "revoking", revokedAt: at, ...(reason ? { reason } : {}) } : x)) };
     }
     default:
       return bad(`"${action.type}" does not change the account's settings`);

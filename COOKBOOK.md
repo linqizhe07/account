@@ -243,6 +243,43 @@ GET /api/account/desk/feed?since=0     房间里 seq 之后的新行（最多 20
 - 纸上自主只认这个 Desk 自己的房里交易席位（Sniper · Exit · Watch）、只在它的纸上账户、只在会话没结束时；Guard 模式表里多一行 "The desk's own seats at its paper account"。
 - MCP：`portfolio_desk` 的答复带 `autonomy` 和上一轮扫描的计数。
 
+## 3d · Spend token：给 agent 一张一次性授权
+
+额度（第 3 条）是常驻的：每个 agent 每种范围一份，新的顶旧的。**Spend token** 是另一种东西：owner 签给一个 agent 的**一次性授权**——一条通道、一个底层工具、一个对手方、一个总额、一个单次上限、几次、到什么时候，自己有编号（`tok-0001`）、自己有终态。agent 手里只有这个编号，用的时候把签名的意图交给账户，账户用你的工具去执行（proxy 用法）。用 token 的时候不看额度；用额度的老路也不看 token。两条路并存。
+
+这一版有三条通道，都是代执行，都由账户自己持有限额（页面上写 "The Account alone holds this limit"，真钱的用警示色）：
+
+| 通道（`rail`） | 底层工具（`instrument`） | 对手方（`counterparty`） | 一次 use 跑什么 | 环境 |
+|---|---|---|---|---|
+| `paper` | 一个纸上账户（`live:paper`、Hyperliquid 测试网、Kalshi demo） | 市场列表（逗号隔开），或 `*` 任何市场 | 一张单，走 `portfolio_live_order` 同一扇门 | test，行带 `paper: true` |
+| `venue:<id>` | 接上的一个真场所 | 市场列表（不能 `*`） | 一张单，同上；`--live-cap` 照样管 | live |
+| `chain:x402` | 一个 agent 钱包 | 收款方的 https origin（`https://api.example.com`） | 按 x402 / MPP charge 付 USDC（第 7b 条那条路），钱包的 float 数不再是上限，token 才是 | live |
+
+**发一张（页面）**：Agents 弹层里每个 agent 下面有它的 token 列表和 "Issue a spend token…"；Account › Venues 里每个账户下面也列着它上面的 token，也能从那里发。表单：给谁、在哪（纸上账户 / 真场所 / agent 钱包，这一项决定通道和环境）、对手方、In all、A use up to、Uses（1–20；0 是「金额用完为止」，只有场所和纸上通道收）、For、Purpose（你的话，过记忆那套密钥过滤）、"At once in Guard"（勾了 Guard 下也不出卡）。"What you sign" 里逐字段摆出来；纸上和测试环境签的链文字是 "Paper · no real money"，真钱是 "Live · real money"。
+
+**agent 要一张**：`portfolio_ask {kind: "token", venue: "paper-1", counterparty: "*", usd: 300, text: "rehearse a BTC buy"}`。Portfolio 的 Waiting for you 里那条写 "Asks for a spend token · $300.00 · at Paper account · for * (proposed)"，"Grant…" 打开发放表：它提的对手方只是**提示**（"Claude Code proposed * — Use it"），不预先填进去；勾 "Remember this purpose in the agent's memory" 才写一条记忆（来源标你）。签了，请求自己关掉。
+
+**agent 用一张**（MCP）：
+
+```
+portfolio_tokens                                  自己的 token：范围、还剩多少、还能用几次、状态、谁持有限额
+portfolio_token_use {token, counterparty, amount, request}
+                                                  counterparty 必须和 token 上的一字不差；amount 是这次最多多少；
+                                                  request 是要跑的东西：场所 / 纸上通道是一张单 {symbol, side, qty|usd, orderType?, …}，
+                                                  x402 通道是 {url, method?, body?}
+portfolio_token_done {use}                        用完了（use 的编号形如 tok-0001/2）
+```
+
+不走 MCP 的席位签 `agentUseToken` 送到 `POST /api/exchange`，`GET /api/account/tokens?agent=` 读自己的。
+
+- Guard 下一次 use 是一张卡（卡上是那张单或那笔付款，写着 "with spend token tok-0001"），token 签了 "At once" 的不出卡；Beast 下 token 范围内直接走。`--live-cap` 和模式照旧管每一次 use（这一版每张 token 的限额都只由账户持有）。
+- 检查的顺序，都在调通道之前：门口那几样（形状、签名、钥匙、重放、nonce、十分钟）→ token 是这个 agent 的（不是和不存在同一句话，`E_MANDATE_NONE`）→ 状态是 active（用完 `E_MANDATE_BUDGET`，到期 `E_MANDATE_EXPIRED`，停了或撤了 `E_MANDATE_NONE`）→ 用现在的 owner 重新验签、逐字段核对 → 会话没结束、场所没对 agent 关掉、工具还在、环境一致 → 对手方一字不差（`E_MANDATE_RECIPIENT`）→ 币种一致，金额在单次和剩余之内（`E_MANDATE_PER_ORDER_CAP` / `E_MANDATE_BUDGET`），还有次数 → 先写 `minting` 行把金额占住，再调通道。
+- 单据：用 token 下的单带 `token: "tok-0001"`，Statement 那一行 by 写 "Claude Code, with token tok-0001"，描述末尾 " · token tok-0001"；用 token 下的单不能原地改（撤了再用一次）。
+- **停和撤**：顶栏模式旁边 "Stop all tokens"（有 token 在用时才出现，先问一次），或每张 token 的 "Stop"——不用签名、只收紧（`POST /api/account/tokens/stop {token | "*"}`）；停了的 token 拒绝每一次 use，但没结束，要 "Revoke…"（签 `revokeSpendToken`）才终结。连带的：撤 agent 钥匙、断开场所，它名下的 token 跟着撤；到期和用完由账户的 watch 每半分钟收尾（状态只在门口和 watch 里变，读页面从不变它）。
+- **重启后**：发放和撤销是长期指令（和额度一样重放、重新验签），每张 token 的账本行（kind `token`）按顺序把状态和计数带回来——行只能把 token 收紧或结束，从不把停了、撤了的变回 active；等卡的那次 use 重启后是 not-used（卡本来就不恢复）。
+- Paper 镜头只列 test 和 paper 的 token，Real 只列 live 的。
+- 会被拒：`E_MANDATE_NONE`（不是你的、停了、撤了、没确认）· `E_MANDATE_EXPIRED` · `E_MANDATE_BUDGET`（剩的不够、次数用完）· `E_MANDATE_PER_ORDER_CAP` · `E_MANDATE_RECIPIENT`（对手方不一致）· `E_ACCOUNT_REQUOTE`（单子现在值的比 amount 多）· `E_ACCOUNT_LIMIT`（真场所上超 `--live-cap`）· `E_ACCOUNT_BAD_SIGNATURE`（token 被改过）。
+
 ## 4 · 选模式：Guard 还是 Beast
 
 Account 的头上（rail 最下面的 Account 打开的三页）：Guard | Beast 两个按钮，旁边的 ⓘ 打开 **Mode 弹层**；三页切换那一行的右边一句说这一档的意思（Guard："What agents ask for waits for you on a card."；Beast："Inside their limits, agents act at once."）。rail 最下面的 Account 按钮上也写着现在是哪一档。Settings 里没有模式。
@@ -557,7 +594,8 @@ portfolio_forget {id}                                   # 忘掉它学的一条
 | 以后每一单都先问你 | rail 上切到 "Guard"，不用签名 |
 | 这个场所不让 agent 碰 | Account › Venues 那一行关掉 "Open to agents"，不用签名（重新打开要签） |
 | 收紧或收回它的额度 | Agents 弹层里那一行 "Change limit"；只收回 earn 的用 "End earn limit" |
-| 停掉这把钥匙 | Agents 弹层里那一行 "Revoke" |
+| 停掉它的一张 spend token，或所有的 | 那张 token 的 "Stop"，或顶栏模式旁的 "Stop all tokens"，不用签名；终结它用 "Revoke…"（第 3d 条） |
+| 停掉这把钥匙 | Agents 弹层里那一行 "Revoke"（它的 spend token 跟着撤） |
 | 撤掉所有挂着的单 | Trade 屏 Open orders 右上 "Cancel all N" |
 
 钥匙撤销之后：

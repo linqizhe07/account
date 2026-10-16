@@ -14,7 +14,10 @@ import { register } from "../src/portfolio/live/index.ts";
 import type { LiveTrader, Market, OrderState, Position } from "../src/portfolio/live/trade.ts";
 import type { EarnProduct, LiveEarner } from "../src/portfolio/live/earn.ts";
 import { startPortfolioServer, type PortfolioServerHandle } from "../src/portfolio/server.ts";
-import { PortfolioService } from "../src/portfolio/service.ts";
+import { loadOpenness, PortfolioService } from "../src/portfolio/service.ts";
+
+/** the fixture's dial, its agents' session running through this test: the fixture's own session has ended, and these tests run on the real clock */
+const SESSION = { ...(loadOpenness() as object), sessionExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() };
 
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -96,7 +99,7 @@ const tool = async (name: string, args: Record<string, unknown> = {}) => {
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "portfolio-mcp-real-"));
   // no public market data is read from here: Markets shows the connected venue only
-  svc = await PortfolioService.create({ home, venues: "frontline", real: true, liveWrites: { capUsd: 5000, pairingCode: "K7QX-M2PA" }, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
+  svc = await PortfolioService.create({ home, venues: "frontline", real: true, openness: SESSION, liveWrites: { capUsd: 5000, pairingCode: "K7QX-M2PA" }, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] } });
   server = await startPortfolioServer({ port: 0, service: svc });
   await own({ type: "connectVenue", venue: "ex", connector: "live:standin-mcp-real", label: "Exchange", credentialRef: "" });
   await own({ type: "connectVenue", venue: "paper-ex", connector: "live:standin-mcp-paper", label: "Paper Exchange", credentialRef: "" });

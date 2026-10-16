@@ -239,6 +239,38 @@ Robinhood 的三条线都是它自己发布的接口（2026-10-05 读）：股�
 
 一个协议配一个模拟收款方是这个 demo 的安排（每个协议演一次），协议本身没有这个要求。卡支付（ACP、Visa 的 Trusted Agent Protocol）没搭：卡没有给个人的接口。只认真实账户的服务器上没有这些模拟收款方：`agentPay` 只从 agent 钱包付真钱（x402 V1/V2、MPP charge，USDC，见上面「随时能被 agent 调用」），MPP session 和 AP2 在真钱上不做。
 
+## Spend token：账户的授权原语（设计稿的 P0）
+
+设计稿《Agent 支付的 token 化：Account 授权原语设计稿》的第一阶段：把账户今天已经在做的「代执行」对象化。一张 **SpendToken** 是 owner 签给一个 agent 的一次性授权，**一个 agent、一条通道、一个底层工具、一个对手方**，自己的额度、自己的次数、自己的到期、自己的终态；agent 手里只有它的编号。和 `SpendApproval`（常驻额度，每个 agent 每种范围一份）并存：用 token 不读额度，用额度不读 token。
+
+**签名**（`account/sign.ts`）：owner 的 `issueSpendToken {agent, rail, instrument, counterparty, maxAmount, currency, perUseMax, uses, validUntil, atOnce, purpose, env}`（类型 `AccountToken:Issue`；`env: live` 的链文字是 "Live · real money"，test 的是 "Paper · no real money"）和 `revokeSpendToken {token, reason}`；agent 的 `agentUseToken {token, counterparty, amount, currency, request?}` 和 `agentTokenDone {use}`。四个都是资金指令（十分钟窗口）。`agentAsk` 多一个可选的 `counterparty`（`venue` 的正则放不下 URL）。
+
+**对象**（`account/state.ts` SpendToken）：签的字段之外是账户维护的 `id`（tok-NNNN，重启后接着排）、`status`、`providerRef`、`mintedMicro / reservedMicro / usesMade`、`usesList`（每次使用一条子记录）、撤销和停止的时间与原因、签名原文（每次使用前重新验）。边界常量：最长 30 天、至多 20 次（0 = 金额用完为止，只有场所和纸上通道收）、一张至多 100,000、一个 agent 至多 20 张在用、purpose 至多 200 字且过记忆那套密钥过滤。
+
+**通道**（`account/rails/`，接口 `TokenRail`：`issue / use / read / revoke` 加一组 `enforces` 常量，页面的诚实标签只从这组常量生成）：
+
+| rail | instrument | counterparty | use 跑什么 | 谁持有限额 |
+|---|---|---|---|---|
+| `paper` | 纸上账户（`live:paper`、Hyperliquid 测试网、Kalshi demo） | 市场列表或 `*` | 一张单，经 `live-orders.ts agent()`，token 站在交易额度的位置 | 账户 |
+| `venue:<id>` | 真场所 | 市场列表 | 同上，`--live-cap` 照管 | 账户 |
+| `chain:x402` | agent 钱包 | https origin | `pay-real.ts payWithToken`：x402 / MPP charge，EIP-3009 由账户用钱包钥匙签；钱包的 float 数不再是上限 | 账户（链只持有这一笔的 to / value / validBefore / nonce） |
+
+三条都是 proxy 用法，`enforces` 全空，所以每张 token 的标签都是 "The Account alone holds this limit"（真钱用警示色）；test token 另带一句（"Paper · Account paper book"）。链上委托、交易所子账户、卡是后面的阶段，接口留好了。
+
+**状态机**（`account/tokens.ts`）：`issuing → active → used | expired | stopped | revoking → revoked`，`verify` 留给要 owner 仪式的通道。每次使用是 token 下的子记录：`minting`（先占金额）→ `executed`（代执行跑了）→ `done`（agent 说）/ `settled`（通道读到）/ `not-used`（占了之后被拒、卡过期或被拒）。状态只在门口（发、撤、停、用）和 watch（`service.ts watchTokens`，服务器启动时开，每半分钟一次，在指令队列里跑）里迁移，读请求只显示（到了期还没被 watch 收尾的标 `lapsed`）。每次迁移写一行 kind `token`（outcome：issuing · active · minting · executed · done · settled · not-used · stopped · revoke-sent · revoke-confirmed · expired · used），行上带计数，从不带凭证。
+
+**使用时的检查顺序**（都在调通道之前）：门口的现有检查和 taken 行 → token 是这个 agent 的（不是和不存在同一句话，`E_MANDATE_NONE`）→ 状态 active（`E_MANDATE_BUDGET` 用完、`E_MANDATE_EXPIRED` 到期、`E_MANDATE_NONE` 停了撤了）→ 用现在的 owner 重新验签、逐字段核对 → 会话、场所对 agent 的开关、工具还在、环境一致 → 对手方一字不差（`E_MANDATE_RECIPIENT`）→ 币种、单次上限、剩余、次数（等卡的那次也算占着一次）→ 通道就绪 → 写 `minting` 行占住金额 → 调通道。Guard 下一张卡（`card.action` 是 `agentUseToken` 本身，`card.approval` 是 token 的编号；owner 的 yes 重跑所有检查后放行），token 签了 `atOnce` 的不出卡；Beast 直接走。通道里的单通过门的 `patchSpend` 记在 token 上（`tok-` 开头的编号由 `tokens.patchAsLimit` 接：spent 就是 minted、reserved 就是 held），所以成交少于最坏价时 token 的计数跟着回落。用 token 下的单带 `token`，不能原地改；Statement 的 by 是 "<agent>, with token tok-NNNN"。
+
+**撤销的三条路，都只收紧**：签名的 `revokeSpendToken`（先写 revoking 行，再问通道，通道答了才 revoked；通道没答由 watch 重试）；免签名的停（`POST /api/account/tokens/stop {token | "*"}`，页面上每张 token 的 "Stop" 和顶栏的 "Stop all tokens"），停了拒绝每一次 use、但不结束；连带的（撤 agent 钥匙、agent 钥匙到期、断开场所）。
+
+**重启**（`account/restore.ts`）：`issueSpendToken`、`revokeSpendToken` 进 STANDING（重放、重新验签）；token 行按账本顺序逐条应用——只能把状态往前推（stopped 在任何地方都收；active 只从 issuing / verify 来；停了撤了的从不回到 active），计数照最后一行（和额度的 spend 行一样），子记录只往前；等卡的那次 use 重启后是 not-used。
+
+**页面**：Agents 弹层每个 agent 下面一块（列表、"Issue a spend token…"、Stop、Revoke…）；Account › Venues 下面一节 "Spend tokens" 按账户分组；顶栏模式旁 "Stop all tokens"（有在用的才出现）；agent 的 token 请求在 Waiting for you 里，"Grant…" 打开发放表，它提的对手方标 "proposed"、不预填，勾 "Remember this purpose" 才写记忆；Paper 镜头只列 test 和 paper 的，Real 只列 live 的；Mode 弹层多一行 "Use a spend token at its counterparty"。`ui/spend-tokens.js`。
+
+**MCP**：`portfolio_tokens` · `portfolio_token_use {token, counterparty, amount, request?}` · `portfolio_token_done {use}` · `portfolio_ask {kind: "token", counterparty, venue, usd, text}`。不走 MCP 的席位签 `agentUseToken` 到 `POST /api/exchange`，`GET /api/account/tokens?agent=` 读自己的。
+
+**顺手补的三个标记缺口**：Kalshi `demo: "true"` 的钥匙是纸上账户（`paper: true`）；owner 在纸上账户上的单、改单、平仓、杠杆由页面准备成 `paper: "true"`（多一个签名字段），签的链文字是 "Paper · no real money"，真场所上签了 paper 的被拒，没带字段的照旧签 "Live · real money"（在纸上账户也成立）；agent 签名的 `source` 按账户类型写（`sim` 或 `real`，信封上的 `source` 字段说明它签的是哪一个，MCP 席位和 Desk 在真实账户上签 `real`），真实账户仍收为模拟签的，taken 行上写明。
+
 ## 页面和 agent 面
 
 公开介绍页在仓库的 `site/`（GitHub Pages：https://linqizhe07.github.io/buyer-agent-demo/ ），见 README「网站」；它的数字从仓库算出，行情由访客浏览器自己读。

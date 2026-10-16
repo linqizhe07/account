@@ -1549,6 +1549,7 @@ export class PortfolioService {
       intents: page.intents.filter((i) => i.agent === k.address || i.agent === "*"),
       asks: page.asks.filter((a) => a.agent === k.address),
       declinedAsks: page.declinedAsks.filter((a) => a.agent === k.address),
+      tokens: page.tokens.filter((t) => t.agent === k.address),
       memory: this.memory ? { notes: this.memory.notes(k.address).filter((n) => !n.waiting).length, waiting: this.memory.notes(k.address).filter((n) => n.waiting).length } : { notes: 0, waiting: 0 },
       flights: this.flights.filter((f) => f.agent.name === k.name && f.agent.code === k.code).slice(-10).reverse().map((f) => ({ no: f.no, at: f.at, request: f.request, legs: f.legs.map((l) => `${l.mark === "ok" ? "✓" : l.mark === "no" ? "✗" : l.mark === "wait" ? "▣" : "·"} ${l.text}`) })),
     }));
@@ -1834,6 +1835,26 @@ export class PortfolioService {
   /** the real server runs the desk's clock (never in tests, which tick it themselves) */
   watchDesk(): () => void {
     return this.desk ? this.desk.start() : () => undefined;
+  }
+
+  /** THE SPEND TOKENS' WATCH (account/tokens.ts tick): every half minute, in the door's serial line, what has ended ends — a token past its
+   * time, one used up, one whose agent key ended, a revocation the rail had not answered. Statuses move here and at the door, never in a
+   * read. The real server runs it (server.ts); tests tick it themselves (tickTokens) */
+  watchTokens(everyMs = TOKEN_WATCH_MS): () => void {
+    const every = setInterval(() => void this.tickTokens().catch(() => undefined), everyMs);
+    every.unref?.();
+    return () => clearInterval(every);
+  }
+  /** one tick of the tokens' watch, in the door's line */
+  tickTokens(): Promise<void> {
+    const engine = this.account;
+    return engine ? engine.serially(() => engine.tokens.tick()) : Promise.resolve();
+  }
+  /** the free stop of one spend token or every one (`*`): tightening only, no signature, in the door's line */
+  stopTokens(which: string, by = "the page"): Promise<Refusal | { ok: true; stopped: string[]; already: string[] }> {
+    const engine = this.account;
+    if (!engine) return Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" }));
+    return engine.serially(async () => engine.tokens.stop(which, by));
   }
 
   /** THE PAPER ACCOUNTS' OWN CLOCK: every few seconds each paper account the account keeps itself looks at its book (paper.ts settle) —
@@ -2201,7 +2222,7 @@ export class PortfolioService {
     engine.adopt(r.state, r.ids);
     this.seq = Math.max(this.seq, r.ids.card);
     if (r.dial) this.adoptDial(r.dial);
-    const report: RestoreReport = { runs: history.files.length, from: history.files[0] ?? "", owner: r.owner, agents: r.state.agents.filter((a) => a.revokedAt === undefined && a.validUntil > Date.parse(this.now())).length, limits: r.state.spends.filter((x) => x.revokedAt === undefined && x.validUntil > Date.parse(this.now())).length, mode: this.openness.mode === "open" ? "Beast" : "Guard", venues: r.connections.map((c) => ({ venue: c.venue, ok: false, why: "connecting again" })), orders: r.orders.length, payments: r.payments.length + r.authorisations.length + r.earns.length, skipped: [...r.skipped, ...(history.broken ? [`${history.broken.file}: its hash chain breaks${history.broken.at ? ` at row ${history.broken.at}` : ""}, so nothing after the break (and nothing older) was brought back`] : [])], state: "restoring" };
+    const report: RestoreReport = { runs: history.files.length, from: history.files[0] ?? "", owner: r.owner, agents: r.state.agents.filter((a) => a.revokedAt === undefined && a.validUntil > Date.parse(this.now())).length, limits: r.state.spends.filter((x) => x.revokedAt === undefined && x.validUntil > Date.parse(this.now())).length, tokens: r.state.tokens.filter((t) => t.status === "active" || t.status === "stopped" || t.status === "verify" || t.status === "issuing").length, mode: this.openness.mode === "open" ? "Beast" : "Guard", venues: r.connections.map((c) => ({ venue: c.venue, ok: false, why: "connecting again" })), orders: r.orders.length, payments: r.payments.length + r.authorisations.length + r.earns.length, skipped: [...r.skipped, ...(history.broken ? [`${history.broken.file}: its hash chain breaks${history.broken.at ? ` at row ${history.broken.at}` : ""}, so nothing after the break (and nothing older) was brought back`] : [])], state: "restoring" };
     this.restored = report;
     this.reconnecting = true;
     this.restoring = engine
@@ -3275,6 +3296,8 @@ export interface AgentView {
   asks: AgentAsk[];
   /** what the owner declined of its asks in the last day */
   declinedAsks: DeclinedAsk[];
+  /** its spend tokens (account/tokens.ts), newest first, ended ones included */
+  tokens: AccountPage["tokens"];
   flights: Array<{ no: string; at: string; request: string; legs: string[] }>;
   /** what it remembers about the owner (account/memory.ts): its notes kept, and the ones waiting for the owner */
   memory: { notes: number; waiting: number };
@@ -3421,6 +3444,8 @@ export interface RestoreReport {
   owner: boolean;
   agents: number;
   limits: number;
+  /** spend tokens brought back standing (active, stopped, or waiting for their rail) */
+  tokens: number;
   mode: "Guard" | "Beast";
   /** each connection brought back: connected again, or why not — `waiting` while it is asked again (the network did not let it just then) */
   venues: Array<{ venue: string; ok: boolean; why?: string; waiting?: boolean; said?: string }>;
@@ -3507,6 +3532,8 @@ const LISTED_QUOTE_UP_TO_MS = LISTING_KEEP_MS + PUBLIC_KEEP_MS;
 const MARKET_KEEP_MS = 3_000;
 /** the paper accounts' curve, and each market's bars it is told with, are kept a minute: the page asks every minute */
 const PAPER_CURVE_MS = 60_000;
+/** how often the spend tokens' watch runs on the real server (watchTokens) */
+const TOKEN_WATCH_MS = 30_000;
 /** how often the service looks at each paper account's book on its own (watchPaper) */
 const PAPER_LOOK_MS = 5_000;
 /** one market's bars for the paper accounts' curve: eight seconds to come, or the curve goes on with its last fill price */

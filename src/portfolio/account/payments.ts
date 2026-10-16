@@ -69,6 +69,8 @@ export interface Payment {
   action?: Hex | undefined;
   approval?: string | undefined;
   card?: string | undefined;
+  /** an agent's payment with a spend token (account/tokens.ts): the token's id (`token` above is the asset) */
+  spendToken?: string | undefined;
   protocol?: string | undefined;
   /** a payment session's deposit: what of it is still the user's while the session is open */
   heldUsd?: number | undefined;

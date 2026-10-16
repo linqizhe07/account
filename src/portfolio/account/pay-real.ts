@@ -39,8 +39,8 @@ import { agentIdOf, CARD_TTL_MS, slug, type AccountEngine, type CardLike, type C
 import type { Payment, PaymentLeg } from "./payments.ts";
 import * as X from "./protocols.ts";
 import { paymentLine } from "./statement.ts";
-import { micro, unmicro, type Envelope, type SimKey } from "./sign.ts";
-import { covers, spendFor, type AgentKey, type SubAccount } from "./state.ts";
+import { micro, unmicro, type AgentAction, type Envelope, type SimKey } from "./sign.ts";
+import { covers, spendFor, type AgentKey, type SpendToken, type SubAccount, type TokenUse } from "./state.ts";
 
 export interface RealPayDeps {
   http: PayHttp;
@@ -84,15 +84,22 @@ interface Ctx {
   body?: string | undefined;
   contentType?: string | undefined;
   max: number;
+  /** the limit this payment counts on: a payees approval's id, or a spend token's (tok-…, counted through the engine's patchSpend) */
   spendId: string;
   sub: SubAccount;
   key: SimKey;
   now: number;
   flight: string;
+  /** a payment with a SPEND TOKEN (account/tokens.ts, rails/x402.ts): the token, the use's record, whether it goes without a card, and the
+   * agent's signed use for the card */
+  token?: SpendToken | undefined;
+  use?: TokenUse | undefined;
+  atOnce?: boolean | undefined;
+  cardAction?: AgentAction | undefined;
 }
 
 /** what booking a payment needs of the request that made it */
-type Booking = Pick<Ctx, "who" | "released" | "host" | "spendId" | "sub" | "flight">;
+type Booking = Pick<Ctx, "who" | "released" | "host" | "spendId" | "sub" | "flight" | "token">;
 
 interface Outstanding {
   c: Booking;
@@ -208,15 +215,29 @@ export class RealPayer implements Payer {
     if (this.outstanding.some((h) => h.nonce === k.nonce)) return;
     const sub = e.state.subAccounts.find((x) => x.name === k.sub);
     const agent = e.state.agents.find((x) => x.address === k.agent);
-    if (!sub || !agent || !e.state.spends.some((x) => x.id === k.spendId)) {
+    // the limit it counted on: a payees approval, or a spend token (tok-…)
+    const limit = e.state.spends.some((x) => x.id === k.spendId) || e.state.tokens.some((t) => t.id === k.spendId);
+    if (!sub || !agent || !limit) {
       e.host.log({ kind: "note", venue: k.host, reason: `an authorisation for ${usd(k.offer.amountMicro)} ${k.host} held when the account stopped is not followed again: its agent wallet, agent or limit is not on the account now` });
       return;
     }
-    this.outstanding.push({ c: { who: { signer: k.signer, agent, hash: k.hash }, released: undefined, host: k.host, spendId: k.spendId, sub, flight: k.flight }, o: k.offer, nonce: k.nonce, validBefore: k.validBefore, from: k.from, native: { nonce: k.nonce, adopted: true } });
+    const token = e.state.tokens.find((t) => t.id === k.spendId);
+    this.outstanding.push({ c: { who: { signer: k.signer, agent, hash: k.hash }, released: undefined, host: k.host, spendId: k.spendId, sub, flight: k.flight, ...(token ? { token } : {}) }, o: k.offer, nonce: k.nonce, validBefore: k.validBefore, from: k.from, native: { nonce: k.nonce, adopted: true } });
     e.patchSpend(k.spendId, (x) => ({ ...x, reservedMicro: x.reservedMicro + k.offer.amountMicro }));
   }
 
   async pay(action: PayAction, who: Who, released?: CardLike): Promise<Outcome> {
+    return this.begin(action, who, released);
+  }
+
+  /** a payment with a SPEND TOKEN standing where the payees limit would (rails/x402.ts): the token's counterparty is the payee, its lines
+   * were judged by account/tokens.ts before this, and it is counted on the token (through the engine's patchSpend) as a limit would be.
+   * Guard: a card, unless the owner signed the token at once; Beast: at once — a first payment to the host included, the token names it */
+  async payWithToken(action: PayAction, who: Who, opts: { token: SpendToken; use: TokenUse; atOnce: boolean; cardAction: AgentAction }, released?: CardLike): Promise<Outcome> {
+    return this.begin(action, who, released, opts);
+  }
+
+  private async begin(action: PayAction, who: Who, released: CardLike | undefined, tk?: { token: SpendToken; use: TokenUse; atOnce: boolean; cardAction: AgentAction }): Promise<Outcome> {
     const e = this.engine;
     const now = this.deps.clock();
     let url: URL;
@@ -233,11 +254,19 @@ export class RealPayer implements Payer {
     const method = (action.method ?? "GET").toUpperCase();
     if (method !== "GET" && method !== "POST") return no("E_ACCOUNT_BAD_ACTION", { message: "a payment asks with GET or POST" });
     if (action.body !== undefined && (method !== "POST" || action.body.length > MAX_BODY)) return no("E_ACCOUNT_BAD_ACTION", { message: `a body goes with a POST, at most ${MAX_BODY / 1000} kB` });
-    // 1 · the approval. Nothing is sent to a host the owner did not name (or to any host, when the owner signed every one)
-    const spend = spendFor(e.state, who.signer, "payees", Date.parse(e.host.now()));
-    if (isRefusal(spend)) return spend;
-    if (!(await e.stillSigned(spend))) return no("E_ACCOUNT_BAD_SIGNATURE", { message: "the spending approval's own signature no longer checks out against the account's owners", detail: { approval: spend.id } });
-    if (!spend.allow.includes(url.host) && !spend.allow.includes("*")) return no("E_MANDATE_RECIPIENT", { venue: url.host, message: `"${url.host}" is not a payee the owner approved (${spend.allow.join(", ")}): nothing was sent to it`, detail: { approval: spend.id, allow: spend.allow, host: url.host } });
+    // 1 · the approval. Nothing is sent to a host the owner did not name (or to any host, when the owner signed every one) — or, with a
+    // token, to any origin but the token's own
+    let spendId: string;
+    if (tk) {
+      if (url.origin !== tk.token.counterparty) return no("E_MANDATE_RECIPIENT", { venue: url.host, message: `${tk.token.id} pays ${tk.token.counterparty}: nothing was sent to ${url.origin}`, detail: { token: tk.token.id, counterparty: tk.token.counterparty } });
+      spendId = tk.token.id;
+    } else {
+      const spend = spendFor(e.state, who.signer, "payees", Date.parse(e.host.now()));
+      if (isRefusal(spend)) return spend;
+      if (!(await e.stillSigned(spend))) return no("E_ACCOUNT_BAD_SIGNATURE", { message: "the spending approval's own signature no longer checks out against the account's owners", detail: { approval: spend.id } });
+      if (!spend.allow.includes(url.host) && !spend.allow.includes("*")) return no("E_MANDATE_RECIPIENT", { venue: url.host, message: `"${url.host}" is not a payee the owner approved (${spend.allow.join(", ")}): nothing was sent to it`, detail: { approval: spend.id, allow: spend.allow, host: url.host } });
+      spendId = spend.id;
+    }
     if (isExpired(e.host.now(), e.host.policy().sessionExpiresAt)) return no("E_WALLET_SESSION_EXPIRED", { message: "the agents' session has ended: every write stops, reads continue" });
     // 2 · the source: an agent wallet of this agent's
     const sub = e.sub(action.fromSubAccount);
@@ -247,8 +276,8 @@ export class RealPayer implements Payer {
     const key = this.deps.wallet(sub.name);
     if (isRefusal(key)) return key;
     if (!same(key.account.address, sub.address)) return no("E_ACCOUNT_CREDENTIAL", { message: `the key file of the agent wallet "${sub.name}" is not the key it was made with: nothing is signed` });
-    const flight = released?.flight ?? e.host.openFlight(agentIdOf(who.agent), `Pay ${url.host}${url.pathname} · real money`).no;
-    const c: Ctx = { action, who, released, url, host: url.host, method, ...(action.body !== undefined ? { body: action.body } : {}), ...(action.contentType ? { contentType: action.contentType } : {}), max, spendId: spend.id, sub, key, now, flight };
+    const flight = released?.flight ?? e.host.openFlight(agentIdOf(who.agent), `Pay ${url.host}${url.pathname} · real money${tk ? ` · ${tk.token.id}` : ""}`).no;
+    const c: Ctx = { action, who, released, url, host: url.host, method, ...(action.body !== undefined ? { body: action.body } : {}), ...(action.contentType ? { contentType: action.contentType } : {}), max, spendId, sub, key, now, flight, ...(tk ? { token: tk.token, use: tk.use, atOnce: tk.atOnce, cardAction: tk.cardAction } : {}) };
     try {
       return await this.ask(c);
     } catch (err) {
@@ -303,14 +332,15 @@ export class RealPayer implements Payer {
   /** `null`: go ahead and pay. Anything else is the answer: a refusal, or a card that now waits for the owner */
   private async gate(c: Ctx, o: Offer): Promise<Outcome | null> {
     const e = this.engine;
-    const spend = e.state.spends.find((s) => s.id === c.spendId)!;
+    // the limit it counts on: the payees approval, or none when a spend token stands in its place (judged by account/tokens.ts already)
+    const spend = c.token ? undefined : e.state.spends.find((s) => s.id === c.spendId)!;
     if (!Number.isInteger(o.amountMicro) || !(o.amountMicro > 0)) return no("E_PAYEE_UNVERIFIED", { venue: c.host, message: `${c.host} asks for an amount that is not a number of token units` });
     if (o.amountMicro > c.max) return no("E_PAYEE_OVERCHARGE", { venue: c.host, message: `${c.host} asks ${usd(o.amountMicro)}; the agent agreed to ${usd(c.max)} at most`, detail: { asked: unmicro(o.amountMicro), maxAmount: c.action.maxAmount } });
     if (o.amountMicro > micro(String(this.deps.capUsd()))) return no("E_ACCOUNT_LIMIT", { venue: c.host, message: `${usd(o.amountMicro)} is more than the most one payment may be on this server (${usd(micro(String(this.deps.capUsd())))}): --live-cap` });
-    const pinned = spend.payTo[c.host];
+    const pinned = spend?.payTo[c.host];
     if (pinned !== undefined && pinned !== o.payTo.toLowerCase()) return no("E_PAYEE_CHANGED", { venue: c.host, message: `${c.host} now asks to be paid at ${short(o.payTo)}; the owner approved ${short(pinned)} for it`, detail: { pinned, offered: o.payTo.toLowerCase() } });
     // the payee by its host, under an approval for every payee too: one payment per payee per window is per payee, not one in all
-    const limit = covers(spend, c.host, o.amountMicro, Date.parse(e.host.now()));
+    const limit = spend ? covers(spend, c.host, o.amountMicro, Date.parse(e.host.now())) : null;
     if (limit) return limit;
     // what the agent wallet holds of that token, on that chain, now
     const held = await this.deps.chain.tokens(c.key.account.address as Hex, [{ chain: o.chain, asset: "USDC", address: o.token }]);
@@ -326,12 +356,13 @@ export class RealPayer implements Payer {
     }
     const beast = e.host.policy().mode === "open";
     const first = pinned === undefined;
-    if (beast && (!first || spend.allow.includes("*"))) return null;
-    const offer: CardOffer = { payee: c.host, payTo: o.payTo.toLowerCase(), amount: `${unmicro(o.amountMicro)} USDC`, protocol: LABEL[o.protocol], network: o.chain };
-    const reason = `${c.who.agent.name} asks to pay ${c.host} ${usd(o.amountMicro)} in USDC on ${o.chain}, to ${short(o.payTo)}, over ${LABEL[o.protocol]}, from the agent wallet "${c.sub.name}"${first ? `. A first payment to ${c.host}: approving it pins that address for it` : ""}`;
-    const card = e.host.raiseCard(c.flight, { account: agentWalletVenue(c.sub.name), intent: { kind: "pay", merchant: c.host, mcc: "4816", amountUsd: o.amountMicro / 1e6 }, usd: o.amountMicro / 1e6, reason, why: "live", action: c.action, actionHash: hash, signer: c.who.signer, expiresAt: new Date(Date.parse(e.host.now()) + CARD_TTL_MS).toISOString(), offer, approval: spend.id });
-    e.patchSpend(spend.id, (x) => ({ ...x, reservedMicro: x.reservedMicro + o.amountMicro }));
-    e.host.log({ kind: "action", venue: c.host, tool: "agentPay", signer: c.who.signer, envelope: c.who.envelope, outcome: "card", notionalUsd: o.amountMicro / 1e6, reason: `${card.id} · ${reason}`, flight: c.flight, agent: slug(c.who.agent.name), intentId: card.id, detail: offer });
+    // a token names its payee: Beast pays at once, a first payment included; Guard waits on a card unless the owner signed the token at once
+    if (c.token ? beast || c.atOnce === true : beast && (!first || spend!.allow.includes("*"))) return null;
+    const offer: CardOffer = { payee: c.host, payTo: o.payTo.toLowerCase(), amount: `${unmicro(o.amountMicro)} USDC`, protocol: `${LABEL[o.protocol]}${c.token ? ` · with spend token ${c.token.id}` : ""}`, network: o.chain };
+    const reason = `${c.who.agent.name} asks to pay ${c.host} ${usd(o.amountMicro)} in USDC on ${o.chain}, to ${short(o.payTo)}, over ${LABEL[o.protocol]}, from the agent wallet "${c.sub.name}"${c.token ? ` with ${c.token.id}` : first ? `. A first payment to ${c.host}: approving it pins that address for it` : ""}`;
+    const card = e.host.raiseCard(c.flight, { account: agentWalletVenue(c.sub.name), intent: { kind: "pay", merchant: c.host, mcc: "4816", amountUsd: o.amountMicro / 1e6 }, usd: o.amountMicro / 1e6, reason, why: "live", action: c.cardAction ?? c.action, actionHash: hash, signer: c.who.signer, expiresAt: new Date(Date.parse(e.host.now()) + CARD_TTL_MS).toISOString(), offer, approval: c.spendId });
+    e.patchSpend(c.spendId, (x) => ({ ...x, reservedMicro: x.reservedMicro + o.amountMicro }));
+    e.host.log({ kind: "action", venue: c.host, tool: c.token ? "agentUseToken" : "agentPay", signer: c.who.signer, envelope: c.who.envelope, outcome: "card", notionalUsd: o.amountMicro / 1e6, reason: `${card.id} · ${reason}`, flight: c.flight, agent: slug(c.who.agent.name), intentId: card.id, detail: offer });
     return { ok: true, kind: "card", pending: true, card, flight: c.flight };
   }
 
@@ -447,13 +478,13 @@ export class RealPayer implements Payer {
     const at = new Date(this.deps.clock()).toISOString();
     const venue = agentWalletVenue(c.sub.name);
     const leg: PaymentLeg = { step: "out", venue, rail: o.protocol, protocol: LABEL[o.protocol], token: "USDC", chain: o.chain, feeUsd: 0, etaSec: 0, access: "agent", final: true, status: "settled", startedAt: at, settlesAt: at, ref: r.ref, native: r.native };
-    const p: Payment = { id: e.nextPaymentId(), kind: "pay", at, from: venue, to: c.host, external: { label: c.host, address: o.payTo.toLowerCase(), chain: o.chain }, sourceToken: "USDC", token: "USDC", amountUsd: o.amountMicro / 1e6, feeUsd: 0, receiveUsd: o.amountMicro / 1e6, legs: [leg], status: "settled", settlesAt: at, settledAt: at, signer: c.who.signer, authority: "agent", agent: c.who.agent.address, flight: c.flight, action: c.who.hash, approval: c.spendId, protocol: o.protocol, ...(c.released ? { card: c.released.id } : {}), live: { kind: "pay", toAddress: o.payTo as Hex, network: o.chain, ...(r.txHash ? { txHash: r.txHash } : {}) }, ...(r.note ? { note: r.note } : {}) };
+    const p: Payment = { id: e.nextPaymentId(), kind: "pay", at, from: venue, to: c.host, external: { label: c.host, address: o.payTo.toLowerCase(), chain: o.chain }, sourceToken: "USDC", token: "USDC", amountUsd: o.amountMicro / 1e6, feeUsd: 0, receiveUsd: o.amountMicro / 1e6, legs: [leg], status: "settled", settlesAt: at, settledAt: at, signer: c.who.signer, authority: "agent", agent: c.who.agent.address, flight: c.flight, action: c.who.hash, approval: c.spendId, protocol: o.protocol, ...(c.released ? { card: c.released.id } : {}), ...(c.token ? { spendToken: c.token.id } : {}), live: { kind: "pay", toAddress: o.payTo as Hex, network: o.chain, ...(r.txHash ? { txHash: r.txHash } : {}) }, ...(r.note ? { note: r.note } : {}) };
     e.payments.unshift(p);
     e.patchSpend(c.spendId, (x) => ({ ...x, spentMicro: x.spentMicro + o.amountMicro, last: { ...x.last, [c.host]: Date.parse(e.host.now()) } }));
     const m = this.paid.get(c.host) ?? { protocol: o.protocol, payTo: o.payTo.toLowerCase(), micro: 0, payments: 0, lastAt: at };
     this.paid.set(c.host, { protocol: o.protocol, payTo: o.payTo.toLowerCase(), micro: m.micro + o.amountMicro, payments: m.payments + 1, lastAt: at });
-    const words = `${usd(o.amountMicro)} to ${c.host} · ${LABEL[o.protocol]} · USDC on ${o.chain} · from the agent wallet "${c.sub.name}"`;
-    e.host.log({ kind: "action", venue: c.host, tool: "agentPay", signer: c.who.signer, ...(c.released ? { intentId: c.released.id } : c.who.envelope ? { envelope: c.who.envelope } : {}), outcome: "accepted", notionalUsd: p.amountUsd, reason: `${p.id} · real money · ${words}`, payment: p.id, flight: c.flight, agent: slug(c.who.agent.name), venueOrderId: r.ref, native: r.native, ...(r.resolved ? { detail: { resolved: r.resolved } } : {}) });
+    const words = `${usd(o.amountMicro)} to ${c.host} · ${LABEL[o.protocol]} · USDC on ${o.chain} · from the agent wallet "${c.sub.name}"${c.token ? ` · token ${c.token.id}` : ""}`;
+    e.host.log({ kind: "action", venue: c.host, tool: c.token ? "agentUseToken" : "agentPay", signer: c.who.signer, ...(c.released ? { intentId: c.released.id } : c.who.envelope ? { envelope: c.who.envelope } : {}), outcome: "accepted", notionalUsd: p.amountUsd, reason: `${p.id} · real money · ${words}`, payment: p.id, flight: c.flight, agent: slug(c.who.agent.name), venueOrderId: r.ref, native: r.native, ...(r.resolved ? { detail: { resolved: r.resolved } } : {}) });
     const line = paymentLine(p, this.run, (id) => (id === venue ? `Agent wallet · ${c.sub.name}` : id), (address) => e.state.agents.find((k) => k.address === address)?.name ?? address);
     e.host.log({ kind: "statement", venue, reason: `${line.id} · ${line.description} · ${line.status}`, detail: line, native: { payment: p, run: this.run } });
     e.host.say(c.flight, r.note ? `Paid ${words}, but ${r.note}` : `Paid ${words}`, r.note ? "no" : "ok", { usd: p.amountUsd, account: venue });

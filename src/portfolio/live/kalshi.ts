@@ -149,6 +149,8 @@ export async function kalshiSource(req: { venue: string; label: string; referenc
       read,
       readOnlyBecause: "Kalshi's API moves no money: deposits and withdrawals are made at Kalshi",
       trader,
+      // a key made for Kalshi's demo environment holds no real money: its balance is not money, its orders are rehearsals (LiveSource.paper)
+      ...(demo ? { paper: true as const } : {}),
     };
     return { source, first };
   } catch (err) {

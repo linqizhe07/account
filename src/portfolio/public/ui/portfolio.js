@@ -554,7 +554,7 @@ function pfWaitingHtml(l, owner) {
   // a venue asked for is connected from here, as the board offered it: its own connect form
   // round 7's keys (F3): a round icon for each answer, its word for the screen reader and on hover; Grant and Connect open the form signed
   const grant = (a) => (a.kind === "venue" ? pfBtn("grant", `${icon("plug")}<span class="sr">Connect</span>`, { cls: "rkey yes-k", data: { ask: a.id }, off, title: "Connect it: opens the form you sign" }) : pfBtn("grant", `${icon("check")}<span class="sr">Grant</span>`, { cls: "rkey yes-k", data: { ask: a.id }, off, title: "Grant: opens the form you sign" }));
-  const ask = (a) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>${esc(a.text || PF_ASK_WORDS[a.kind] || a.kind)}</b><span class="dim small">${esc([`Asks for ${PF_ASK_WORDS[a.kind] || a.kind}`, a.usd && (a.kind === "limit" || a.kind === "topup") ? money(Number(a.usd)) : "", a.venue ? `at ${pfVenueName(a.venue)}` : "", a.at ? `asked ${pfWhen(a.at)}` : ""].filter(Boolean).join(" · "))}</span>${pfGrantable(a) ? "" : `<span class="dim small">${esc(pfWhyNot(a))}</span>`}</div><div class="pf-btns pf-keys">${pfBtn("decline", `${icon("x")}<span class="sr">Decline</span>`, { cls: "rkey", data: { ask: a.id }, off, title: "Decline" })}${pfGrantable(a) ? grant(a) : ""}</div></div>`;
+  const ask = (a) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>${esc(a.text || PF_ASK_WORDS[a.kind] || a.kind)}</b><span class="dim small">${esc([`Asks for ${PF_ASK_WORDS[a.kind] || a.kind}`, a.usd && (a.kind === "limit" || a.kind === "topup" || a.kind === "token") ? money(Number(a.usd)) : "", a.venue ? `at ${pfVenueName(a.venue)}` : "", a.kind === "token" && a.counterparty ? `for ${a.counterparty} (proposed)` : "", a.at ? `asked ${pfWhen(a.at)}` : ""].filter(Boolean).join(" · "))}</span>${pfGrantable(a) ? "" : `<span class="dim small">${esc(pfWhyNot(a))}</span>`}</div><div class="pf-btns pf-keys">${pfBtn("decline", `${icon("x")}<span class="sr">Decline</span>`, { cls: "rkey", data: { ask: a.id }, off, title: "Decline" })}${pfGrantable(a) ? grant(a) : ""}</div></div>`;
   // a memory it learned, waiting: its words, its part and how it learned them; ✓ keeps it (its words signed as they are), ✗ forgets it
   const mem = (m) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>Wants to remember: “${esc(m.text)}”</b><span class="dim small">${esc([{ style: "Style", rules: "Rules", venues: "Venues and people" }[m.topic] || m.topic, m.how ? `it learned ${m.how}` : "it learned this", m.at ? pfWhen(m.at) : ""].filter(Boolean).join(" · "))}</span></div><div class="pf-btns pf-keys">${pfBtn("mem-forget", `${icon("x")}<span class="sr">Forget</span>`, { cls: "rkey", data: { agent: m.agent, note: m.id }, off, title: "Forget it" })}${pfBtn("mem-keep", `${icon("check")}<span class="sr">Keep</span>`, { cls: "rkey yes-k", data: { agent: m.agent, note: m.id }, off, title: "Keep it: a signature" })}</div></div>`;
   const knock = (r) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>${esc(r.name || "An agent")} asks to be let in</b><span class="dim small"><span class="mono">${esc(short(r.address))}</span> · ${esc(nyDay(r.at))} ${esc(nyTime(r.at))}</span></div><div class="pf-btns pf-keys">${pfBtn("letin", `${icon("check")}<span class="sr">Let in</span>`, { cls: "rkey yes-k", data: { agent: r.address }, off, title: "Let it in: opens the form you sign" })}</div></div>`;
@@ -571,7 +571,7 @@ function pfVenueName(id) {
 /* a time as it is read: today's by the clock, another day's with its day */
 const pfWhen = (iso) => (nyDay(iso) === nyDay(A.now) ? nyTime(iso) : `${nyDay(iso)} ${nyTime(iso)}`);
 /* what each kind of ask asks for, in words */
-const PF_ASK_WORDS = { letIn: "to be let in", limit: "a bigger limit", venue: "a venue connected", topup: "money in its wallet", session: "a new session", leverage: "more leverage", mode: "Beast mode" };
+const PF_ASK_WORDS = { letIn: "to be let in", limit: "a bigger limit", venue: "a venue connected", topup: "money in its wallet", session: "a new session", leverage: "more leverage", mode: "Beast mode", token: "a spend token" };
 /* an ask the owner can grant from here: the form it needs exists on this account */
 function pfGrantable(a) {
   if (a.kind === "venue") return !!A.connectLive;
@@ -579,6 +579,8 @@ function pfGrantable(a) {
   if (a.kind === "topup") return writesOn() && (connected().some((v) => canMove(v) && !v.id.startsWith("agent-")) || !A.subAccounts.some((s) => s.agent.toLowerCase() === String(a.agent).toLowerCase()));
   if (a.kind === "session" || a.kind === "leverage") return writesOn() && !!A.dial;
   if (a.kind === "mode") return modeOf(A.mode) !== "open";
+  // a spend token: the issue form (ui/spend-tokens.js), with what the agent proposed shown and nothing ticked
+  if (a.kind === "token") return writesOn() && typeof openIssueFromAsk === "function";
   return a.kind === "letIn";
 }
 const pfWhyNot = (a) => (!writesOn() && a.kind !== "venue" && a.kind !== "mode" && a.kind !== "letIn" ? "This server was started read-only." : a.kind === "mode" ? "Already Beast." : a.kind === "topup" ? "None of your accounts can send money from here." : "Nothing here can grant it.");
@@ -786,7 +788,18 @@ function renderVenues({ el, owner }) {
     : held.length
       ? `${[W ? `${plural(W, "connection")} ${waits}: nothing is read from ${W === 1 ? "it until it answers" : "them until they answer"} this network` : "", X ? `${refused}: ${X === 1 ? "connect it again, or disconnect it" : "connect them again, or disconnect them"}` : ""].filter(Boolean).join(" · ")}.`
       : "Connect an exchange, a broker, a wallet or a prediction market: each is read through its own interface, and nothing moves without your signature.";
-  pfPut(el, "venues", `<div class="sec-head"><div class="pf-venues-t"><h2 class="h2" id="pf-venues-h">Venues</h2><span class="dim small">${esc(sub)}</span></div><span class="tools">${tools}</span></div>${pfAccountsHtml(venueIn, owner)}`);
+  pfPut(el, "venues", `<div class="sec-head"><div class="pf-venues-t"><h2 class="h2" id="pf-venues-h">Venues</h2><span class="dim small">${esc(sub)}</span></div><span class="tools">${tools}</span></div>${pfAccountsHtml(venueIn, owner)}${pfTokensHtml(L, owner)}`);
+}
+
+/* the spend tokens under each account (ui/spend-tokens.js): the ones the lens shows (Paper: test tokens; Real: live ones), grouped by the
+   instrument they are on — an account that trades, a paper account, an agent wallet — each group with the way to issue one there */
+function pfTokensHtml(L, owner) {
+  if (typeof tokensIn !== "function") return "";
+  const list = tokensIn(lensNow());
+  const of = (v) => list.filter((t) => t.instrument === v.id || (t.railKind === "chain:x402" && `agent-${slug(t.instrument)}` === v.id));
+  const groups = L.filter((v) => of(v).length || canTrade(v) || (v.paper && v.trade && v.trade.can !== false) || isAgentWallet(v)).map((v) => `<div class="pf-tok-v" data-k="${esc(v.id)}"><div class="who">${avatar(v.name, "sm")}<div><b>${esc(v.name)}</b>${v.paper ? ' <span class="tag paper">Paper</span>' : ""}</div></div>${tokensBlock(of(v), owner, { issueFor: { instrument: isAgentWallet(v) ? String(v.name).replace(/^Agent wallet · /, "") : v.id }, who: true, empty: "No spend token at this account." })}</div>`);
+  if (!groups.length) return "";
+  return `<section class="sec pf-tokens-sec" data-pf-part="tokens" aria-labelledby="pf-tokens-h"><div class="sec-head"><h2 class="h2" id="pf-tokens-h">Spend tokens</h2><span class="dim small">${esc(`${plural(list.length, "token")} here · one authorisation each, for one agent at one account, beside its limits · every one is held by the Account alone`)}</span></div><div class="pf-tokens">${groups.join("")}</div></section>`;
 }
 
 // ---- what the buttons do ---------------------------------------------------------------------------------------------------------
@@ -796,6 +809,9 @@ function pfWire(el) {
   if (el.dataset.pfWired) return;
   el.dataset.pfWired = "1";
   el.addEventListener("click", (e) => {
+    // a spend token's button (ui/spend-tokens.js), drawn under an account on Venues
+    const tk = e.target.closest && e.target.closest("button[data-tok-act]");
+    if (tk && el.contains(tk) && !tk.disabled && typeof tokenAct === "function") return void tokenAct(tk);
     const t = e.target.closest && e.target.closest("[data-pf-act], [data-pf-range], [data-pf-tab]");
     if (!t || !el.contains(t) || t.disabled) return;
     if (t.dataset.pfRange) {
@@ -1116,6 +1132,7 @@ function pfShowCard(el, id) {
 async function pfGrant(a) {
   if (!a || !pfGrantable(a)) return;
   if (a.kind === "limit") return pfLimitForm({ agent: a.agent, venue: a.venue, usd: a.usd, ask: a });
+  if (a.kind === "token") return openIssueFromAsk(a);
   if (a.kind === "letIn") return pfLetIn({ address: a.agent, name: a.agentName });
   if (a.kind === "venue") return pfConnectVenue(a.venue);
   if (a.kind === "topup") {

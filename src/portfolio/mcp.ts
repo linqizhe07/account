@@ -13,7 +13,9 @@
  * portfolio_approval · portfolio_wait. Writes, signed with this seat's key and inside the limits the owner signed for it (Guard asks
  * the owner on a card, Beast places at once): portfolio_live_order · portfolio_live_batch · portfolio_live_amend · portfolio_live_cancel ·
  * portfolio_live_close · portfolio_live_leverage · portfolio_live_move · portfolio_live_earn · portfolio_pay. Words to the owner, granting
- * nothing: portfolio_report · portfolio_ask. A venue portfolio_account marks `paper: true` is a PAPER account — the account's own paper
+ * nothing: portfolio_report · portfolio_ask. SPEND TOKENS (account/tokens.ts), one authorisation the owner signed for this seat on one rail,
+ * used by its id: portfolio_tokens (its own) · portfolio_token_use · portfolio_token_done, and portfolio_ask kind token to ask for one. A
+ * venue portfolio_account marks `paper: true` is a PAPER account — the account's own paper
  * account (live:paper: nothing to connect, paper money, the public markets — US stocks at real-time public quotes, coins, perpetuals with
  * leverage, tokenised shares, Kalshi and Polymarket event contracts — fills by the account's own rule, contracts paid out when their venue
  * settles; several can be open at once) or
@@ -147,9 +149,10 @@ function earnView(e: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(pick.filter((k) => e[k] !== undefined && e[k] !== null && e[k] !== "").map((k) => [k === "usd" ? "worthUsd" : k, e[k]]));
 }
 
-/** sign one instruction with the seat's key and hand it in at the door. A key the account does not know knocks once (see `knock`) */
+/** sign one instruction with the seat's key and hand it in at the door. A key the account does not know knocks once (see `knock`). The
+ * signature says what it signs for: the owner's real account, or the simulation (account/sign.ts AgentSource) */
 async function sign(action: Unsigned): Promise<DoorAnswer> {
-  const envelope = await signAgent(seatKey(), { ...action, nonce: await nonce() } as AgentAction);
+  const envelope = await signAgent(seatKey(), { ...action, nonce: await nonce() } as AgentAction, (await real()) ? "real" : "sim");
   const r = (await call("POST", "/api/exchange", envelope)) as DoorAnswer;
   if (r.body.refusal?.code === "E_ACCOUNT_UNKNOWN_SIGNER") await knock();
   return r;
@@ -1004,12 +1007,69 @@ server.registerTool(
 server.registerTool(
   "portfolio_ask",
   {
-    description: "Ask the owner for something only the owner signs, signed with this seat's key: a `limit` (or a bigger one), a `topup` of an agent wallet, a `venue` connected, a new `session`, a higher `leverage` cap, a `mode`, or to be let in (`letIn`). The owner sees it on the account page for a day; asking again for the same kind and venue replaces it, under a new id; a few at a time, five an hour. An ask GRANTS NOTHING: nothing changes until the owner signs it, and the owner may not. Do not wait on it in a loop: carry on inside what you have, or tell the user.",
-    inputSchema: { kind: z.enum(ASK_KINDS), venue: z.string().max(40).optional().describe("the venue it is about, e.g. okx (needed for kind venue)"), usd: z.number().nonnegative().optional().describe("the dollars it is about: a limit, a top-up"), text: z.string().max(280).optional().describe("why, in plain words, one line") },
+    description: "Ask the owner for something only the owner signs, signed with this seat's key: a `limit` (or a bigger one), a `topup` of an agent wallet, a `venue` connected, a new `session`, a higher `leverage` cap, a `mode`, a spend `token` (see portfolio_tokens: `counterparty` is what it would be for — the markets to trade, comma-separated, or `*` for any at a paper account, or the https origin to pay — with the venue or paper account in `venue`, the dollars in `usd` and the purpose in `text`; the owner sees your counterparty as proposed, not pre-ticked, and may change every line before signing), or to be let in (`letIn`). The owner sees it on the account page for a day; asking again for the same kind and venue replaces it, under a new id; a few at a time, five an hour. An ask GRANTS NOTHING: nothing changes until the owner signs it, and the owner may not. Do not wait on it in a loop: carry on inside what you have, or tell the user.",
+    inputSchema: { kind: z.enum(ASK_KINDS), venue: z.string().max(40).optional().describe("the venue it is about, e.g. okx (needed for kind venue; for kind token, the venue or paper account the token would trade at)"), usd: z.number().nonnegative().optional().describe("the dollars it is about: a limit, a top-up, a token's amount"), text: z.string().max(280).optional().describe("why, in plain words, one line (a token's purpose)"), counterparty: z.string().max(200).optional().describe("kind token: the markets (comma-separated symbols, or * at a paper account) or the https origin the token would be for") },
   },
-  async ({ kind, venue, usd, text: words }) => {
+  async ({ kind, venue, usd, text: words, counterparty }) => {
     if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
-    return answer(await sign({ type: "agentAsk", kind, venue: venue ?? "", usd: usd !== undefined ? String(usd) : "", text: words ?? "" }));
+    return answer(await sign({ type: "agentAsk", kind, venue: venue ?? "", usd: usd !== undefined ? String(usd) : "", text: words ?? "", ...(counterparty ? { counterparty } : {}) }));
+  },
+);
+
+// ---- spend tokens (account/tokens.ts): one authorisation the owner signed for this seat, used by its id -----------------------------
+
+/** a token as a seat reads it: its lines, what is left, its standing, who holds its lines */
+function tokenView(t: Record<string, unknown>): Record<string, unknown> {
+  const pick = ["id", "rail", "instrument", "instrumentName", "counterparty", "currency", "maxUsd", "perUseUsd", "leftUsd", "uses", "usesMade", "usesOpen", "validUntil", "atOnce", "purpose", "env", "status", "lapsed", "usage", "testLabel", "paper", "reason"];
+  const h = t.honesty as { text?: string } | undefined;
+  return { ...Object.fromEntries(pick.filter((k) => t[k] !== undefined && t[k] !== null && t[k] !== "").map((k) => [k, t[k]])), ...(h?.text ? { honesty: h.text } : {}), usable: t.status === "active" && t.lapsed !== true };
+}
+
+server.registerTool(
+  "portfolio_tokens",
+  {
+    description:
+      "SPEND TOKENS the owner issued for this seat: each one an authorisation of its own — on one rail (`paper`: the owner's paper account; `venue:<id>`: a venue connected live; `chain:x402`: paying an https payee in USDC from one of your agent wallets), backed by one instrument of the owner's (`instrument`), for one counterparty exactly as the token names it (`counterparty`: a list of markets, or `*` for any at a paper account; an https origin), up to `perUseUsd` a use and `leftUsd` in all, `uses` times (0: as many as the amount allows), until `validUntil`; `atOnce`: a use goes without a card even in Guard; `purpose`: the owner's words; `env` test or live, and `testLabel` where its money is not real (`paper: true`). `status`: active is usable (`usable`); used, expired, stopped, revoking, revoked are not. `honesty` says who holds the token's lines: on every rail of this version, the Account alone — so every use is still inside the server's cap and the owner's mode. Every rail here is proxy usage: you hold the id, the account runs the use with the owner's instrument; you never hold a key, a card or an API key. A read.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const r = await call("GET", `/api/account/tokens?${new URLSearchParams({ agent: seatKey().address })}`);
+    const b = r.body as { tokens?: Array<Record<string, unknown>>; refusal?: { code: string; message: string }; error?: string };
+    if (r.status >= 400 || b.refusal || !Array.isArray(b.tokens)) return text({ ok: false, ...(b.refusal ? { code: b.refusal.code, message: b.refusal.message } : { error: b.error ?? `HTTP ${r.status}` }) }, true);
+    return text({ ok: true, tokens: b.tokens.map(tokenView), note: "a token's lines are its own: no trading or payees limit is read for a use. None of these rails holds a line itself: the Account does, and the server's cap still bounds each use. Ask for one with portfolio_ask kind token" });
+  },
+);
+
+server.registerTool(
+  "portfolio_token_use",
+  {
+    description:
+      "USE a spend token once, signed with this seat's key: `token` (its id, from portfolio_tokens), `counterparty` EXACTLY as the token names it (its market list, or its https origin — anything else is E_MANDATE_RECIPIENT), `amount` (the most this use may be, in the token's `currency`: inside its per-use line and what is left, E_MANDATE_PER_ORDER_CAP / E_MANDATE_BUDGET), and `request`, what the rail runs: on a venue or paper token an ORDER ({symbol, side, qty or usd, orderType?, limitPrice?, stopPrice?, tif?, …} — the symbol one of the token's markets; the order may be worth at most `amount`, and goes through the same door as portfolio_live_order: the venue's rules, the server's cap at a real venue); on an x402 token what is paid for ({url at the token's origin, method?, body?, contentType?}). Guard: the use waits on a card the owner signs ({pending: true, card}; portfolio_wait on it) unless the owner signed the token at once; Beast: at once inside the token. The answer carries `use` (its id, tok-0003/2, and what it came to), `token` (what is left), and the order or payment. A token not yours, not active, stopped or revoked: E_MANDATE_NONE; past its time: E_MANDATE_EXPIRED; used up: E_MANDATE_BUDGET. A refusal is not to be retried as is.",
+    inputSchema: { token: z.string().max(12).describe("tok-0003"), counterparty: z.string().max(200).describe("exactly the token's counterparty"), amount: z.number().positive().describe("the most this use may be, in the token's currency"), request: z.object({}).passthrough().optional().describe("what the rail runs: an order's fields, or {url, method?, body?, contentType?}") },
+  },
+  async ({ token: id, counterparty, amount, request }) => {
+    if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    const r = await call("GET", `/api/account/tokens?${new URLSearchParams({ agent: seatKey().address })}`);
+    const mine = ((r.body as { tokens?: Array<{ id: string; currency: string }> }).tokens ?? []).find((t) => t.id === id);
+    const currency = mine?.currency ?? "USD";
+    const out = await sign({ type: "agentUseToken", token: id, counterparty, amount: String(amount), currency, ...(request ? { request: JSON.stringify(request) } : {}) });
+    if (out.body.refusal || out.body.kind !== "result") return answer(out);
+    const res = out.body.result as { use?: Record<string, unknown>; token?: Record<string, unknown>; order?: Record<string, unknown>; payment?: Record<string, unknown>; data?: unknown } | undefined;
+    return text({ ok: true, use: res?.use, token: res?.token, ...(res?.order ? { order: orderView(res.order) } : {}), ...(res?.payment ? { payment: res.payment } : {}), ...(res?.data !== undefined ? { data: res.data } : {}), ...(out.body.flight ? { flight: out.body.flight } : {}), next: "when you are done with what this use bought or placed, portfolio_token_done closes its record" });
+  },
+);
+
+server.registerTool(
+  "portfolio_token_done",
+  {
+    description: "Say a use of a spend token is finished (`use`: its id, tok-0003/2, from portfolio_token_use), signed with this seat's key: its record closes as done. Words only: it moves nothing and gives nothing back.",
+    inputSchema: { use: z.string().max(20).describe("tok-0003/2") },
+  },
+  async ({ use }) => {
+    if (!(await layer())) return text({ ok: false, error: "this service runs without the account layer (--classic)" }, true);
+    return answer(await sign({ type: "agentTokenDone", use }));
   },
 );
 

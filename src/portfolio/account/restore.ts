@@ -37,8 +37,9 @@ import type { LiveEarn } from "./live-earn.ts";
 import type { LiveOrder } from "./live-orders.ts";
 import type { KeptAuthorisation } from "./pay-real.ts";
 import type { Payment } from "./payments.ts";
-import { actionHash, isAgentAction, isOwnerAction, isJwk, kidOf, malformed, signerOf, type AgentAction, type Envelope, type OwnerAction } from "./sign.ts";
+import { actionHash, isAgentAction, isOwnerAction, isJwk, kidOf, malformed, signerOf, sourceOf, type AgentAction, type Envelope, type OwnerAction } from "./sign.ts";
 import { applyOwner, applyReport, deviceKeys, isOwner, type AccountState, type ApplyOptions, type SpendApproval } from "./state.ts";
+import { applyTokenSnapshot, tokenSnapshotOf } from "./tokens.ts";
 
 /** the first row of every run that continues the account */
 export interface RunMark {
@@ -178,8 +179,9 @@ const namedIn = (signers: string): string[] => {
   }
 };
 
-/** a standing instruction the owner signs, which the restore applies again */
-const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "createSubAccount", "setWatch", "setIntent"]);
+/** a standing instruction the owner signs, which the restore applies again: a spend token issued or revoked among them (account/tokens.ts;
+ * the token's own rows then bring its status and counters back, in their order) */
+const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "createSubAccount", "setWatch", "setIntent", "issueSpendToken", "revokeSpendToken"]);
 const num = (id: unknown, prefix: string): number => {
   const m = typeof id === "string" ? new RegExp(`^${prefix}-(\\d+)$`).exec(id) : null;
   return m ? Number(m[1]) : 0;
@@ -250,7 +252,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
           skipped.push(`agentReport of ${row.ts}: the same signed report a second time, which is taken once`);
           continue;
         }
-        const who = malformed(report) ? null : await signerOf(report, env.signature).catch(() => null);
+        const who = malformed(report) ? null : await signerOf(report, env.signature, new Map(), sourceOf(env)).catch(() => null);
         if (!who || who !== row.signer) {
           skipped.push(`agentReport of ${row.ts}: its signature does not check out against the key the row names`);
           continue;
@@ -298,6 +300,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
           // it took an id when it was first taken (its row says it went through): the ids after it stay the ones they were given, so the
           // limits, and what was spent and placed under them, keep their names
           if (action.type === "approveSpend" || action.type === "createSubAccount" || (action.type === "setIntent" && action.id === "" && action.validUntil !== 0)) s = { ...s, seq: s.seq + 1 };
+          if (action.type === "issueSpendToken") s = { ...s, tokenSeq: s.tokenSeq + 1 };
         } else s = next;
       } else if (action.type === "setPolicy") {
         if (action.change === "mode" && action.value === "open") openedAt = i;
@@ -322,6 +325,12 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
     if (row.kind === "spend" && row.intentId && row.detail) {
       const d = row.detail as Partial<SpendApproval>;
       if (typeof d.spentMicro === "number" && d.spentMicro >= 0) used.set(row.intentId, { spentMicro: d.spentMicro, last: d.last ?? {}, payTo: d.payTo ?? {} });
+      continue;
+    }
+    // a spend token's row: its status and counters, applied where the row stands — a row may stop or end a token, never widen one
+    if (row.kind === "token" && row.intentId) {
+      const snap = tokenSnapshotOf(row.detail);
+      if (snap && snap.id === row.intentId) s = applyTokenSnapshot(s, snap);
       continue;
     }
     if (row.kind === "card") {
@@ -350,6 +359,8 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
 
   // what each limit had used: its spending, the last time each destination was refilled, the address each payee was pinned at
   s = { ...s, spends: s.spends.map((x) => (used.has(x.id) ? { ...x, ...used.get(x.id)! } : x)) };
+  // a token's use that was still waiting on a card when the run stopped: cards are not brought back, so it came to nothing
+  s = { ...s, tokens: s.tokens.map((t) => (t.usesList.some((u) => u.status === "minting") ? { ...t, usesList: t.usesList.map((u) => (u.status === "minting" ? { ...u, status: "not-used", note: "the account restarted before its card was answered" } : u)) } : t)) };
   if (dial?.maxLeverage !== undefined && dial.maxLeverage > signedLeverage) {
     skipped.push(`the agents' leverage cap was ${dial.maxLeverage}x, and the owner's signature for more than ${signedLeverage}x is not in the chain: it is ${signedLeverage}x`);
     dial = { ...dial, maxLeverage: signedLeverage };

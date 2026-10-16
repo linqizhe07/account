@@ -157,7 +157,8 @@ describe("the chrome around the mode", () => {
 
   it("the top bar is the lens and the Statement, with the Account's header on its tabs (the mode, What changes, Settings) and the search on Markets' and Trade's; the Settings sheet is Trading · the agents' session and leverage · Background · Devices, with no Mode; the Agents sheet has the setup command and no Devices", () => {
     const top = html.slice(html.indexOf('<header class="topbar">'), html.indexOf("</header>"));
-    expect([...top.matchAll(/<button\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1])).toEqual(["lens", "mode-more", "open-settings", "open-statement"]);
+    // Stop all tokens (ui/spend-tokens.js) stands beside the mode: free, tightening only, hidden until a spend token stands
+    expect([...top.matchAll(/<button\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1])).toEqual(["lens", "mode-more", "stop-tokens", "open-settings", "open-statement"]);
     expect(top).toMatch(/<div class="acct-tools" data-only="account">/);
     expect(top).toMatch(/id="search-form"[^>]*data-only="trading"/);
     const p = page();

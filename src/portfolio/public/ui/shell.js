@@ -47,6 +47,11 @@ function renderChrome(L, owner) {
     b.disabled = !owner;
   }
   $("mode-note").textContent = modeNote();
+  // the free stop of every spend token, shown while one stands (ui/spend-tokens.js); only a browser that signs may press it
+  const standing = typeof tokenStands === "function" ? (A.tokens || []).filter(tokenStands).length : 0;
+  $("stop-tokens").hidden = !standing;
+  $("stop-tokens").disabled = !owner;
+  $("stop-tokens").textContent = `Stop all tokens${standing ? ` · ${standing}` : ""}`;
   count("count-portfolio", waiting, `${plural(waiting, "thing")} waiting for you`);
   // agents knocking to be let in, which the Agents sheet answers
   count("count-agents", A.requests.length, `${plural(A.requests.length, "agent")} asking to be let in`);
@@ -340,6 +345,8 @@ function setTheme(t) {
 setTheme(document.documentElement.dataset.theme);
 /* the Mode sheet: what each mode does, door by door — opened from here and nowhere else */
 $("mode-more").addEventListener("click", () => A && openMode());
+/* every spend token stopped at once (ui/spend-tokens.js): asked first, free, tightening only */
+$("stop-tokens").addEventListener("click", () => A && typeof stopToken === "function" && stopToken("*"));
 /* Agents: the desk pane (ui/desk.js), where every agent is reached from — the sheet (openAgents, agents-mount.js) opens from there */
 $("open-agents").addEventListener("click", () => go("desk"));
 $("open-settings").addEventListener("click", () => A && openSettings());

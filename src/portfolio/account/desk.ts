@@ -1798,7 +1798,8 @@ export class Desk {
     const action = eh
       ? { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "limit", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: eh.limit, tif: "day", extendedHours: "true", nonce: this.world.nonce() }
       : { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "market", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: "", nonce: this.world.nonce() };
-    const out = await this.world.exchange(await signAgent(key, action));
+    // the desk is the real account's: its seats sign for it, and say so
+    const out = await this.world.exchange(await signAgent(key, action, "real"));
     const now = this.world.now();
     lead.updatedAt = now;
     if (isRefusal(out)) {
@@ -2021,7 +2022,7 @@ export class Desk {
       : eh
         ? { type: "agentLiveOrder", venue: venue.id, symbol: lead.symbol, side, orderType: "limit", qty: String(e.qty), usd: "", limitPrice: eh.limit, tif: "day", extendedHours: "true", nonce: this.world.nonce() }
         : { type: "agentLiveOrder", venue: venue.id, symbol: lead.symbol, side, orderType: "market", qty: String(e.qty), usd: "", limitPrice: "", nonce: this.world.nonce() };
-    const out = await this.world.exchange(await signAgent(key, action));
+    const out = await this.world.exchange(await signAgent(key, action, "real"));
     lead.exitWhy = why;
     lead.updatedAt = this.world.now();
     if (isRefusal(out)) {

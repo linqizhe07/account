@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-15",
+  "generatedAt": "2026-10-16",
   "mcpTools": {
-    "real": 35,
+    "real": 38,
     "simulationOnly": 7,
     "names": [
       "portfolio_overview",
@@ -32,6 +32,9 @@
       "portfolio_watchlist",
       "portfolio_report",
       "portfolio_ask",
+      "portfolio_tokens",
+      "portfolio_token_use",
+      "portfolio_token_done",
       "portfolio_memory",
       "portfolio_remember",
       "portfolio_forget",
@@ -81,7 +84,7 @@
   "capUsd": 100,
   "cardMinutes": 30,
   "tests": {
-    "files": 151,
+    "files": 153,
     "attackFiles": 30
   },
   "strip": [

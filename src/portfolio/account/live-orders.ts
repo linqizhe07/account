@@ -132,6 +132,9 @@ export interface LiveOrder {
   walletTxs?: OrderState["walletTxs"];
   /** at a PAPER account (the venue's own test environment): a rehearsal, no real money in it */
   paper?: true | undefined;
+  /** an agent's order with a spend token (account/tokens.ts): the token's id. It counts on the token (`approval` names it too), on no
+   * trading limit */
+  token?: string | undefined;
 }
 
 /** THE DESK'S AUTONOMY ON PAPER (account/desk.ts, the superagent): the one question this door asks beyond the dial. In Guard every order an
@@ -532,7 +535,8 @@ export class LiveOrders {
     // a buy signs the most it may cost; a sell signs what it is worth now, and a market sell may then fetch at most 2% less
     const worth = (p.side === "buy" ? cents(p.maxUsd) : Math.floor(p.notional * 100 + 1e-6) / 100).toFixed(2);
     return {
-      action: { type: "liveOrder", venue: p.v.id, symbol: p.m.symbol, side: p.side, orderType: p.type, qty: plain(p.qty), limitPrice: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stopPrice: p.stopPrice !== undefined ? plain(p.stopPrice) : "", tif: p.tif ?? "", postOnly: p.postOnly ? "true" : "", reduceOnly: p.reduceOnly ? "true" : "", extendedHours: p.extendedHours ? "true" : "", trailPercent: p.trailPercent !== undefined ? plain(p.trailPercent) : "", trailPrice: p.trailPrice !== undefined ? plain(p.trailPrice) : "", takeProfit: p.takeProfit !== undefined ? plain(p.takeProfit) : "", stopLoss: p.stopLoss !== undefined ? plain(p.stopLoss) : "", maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS },
+      // at a paper account the order signs as paper: its signed text says no real money (sign.ts PAPER_CHAIN)
+      action: { type: "liveOrder", venue: p.v.id, symbol: p.m.symbol, side: p.side, orderType: p.type, qty: plain(p.qty), limitPrice: p.limitPrice !== undefined ? plain(p.limitPrice) : "", stopPrice: p.stopPrice !== undefined ? plain(p.stopPrice) : "", tif: p.tif ?? "", postOnly: p.postOnly ? "true" : "", reduceOnly: p.reduceOnly ? "true" : "", extendedHours: p.extendedHours ? "true" : "", trailPercent: p.trailPercent !== undefined ? plain(p.trailPercent) : "", trailPrice: p.trailPrice !== undefined ? plain(p.trailPrice) : "", takeProfit: p.takeProfit !== undefined ? plain(p.takeProfit) : "", stopLoss: p.stopLoss !== undefined ? plain(p.stopLoss) : "", maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS, ...(p.v.paper ? { paper: "true" } : {}) },
       quote: { words: this.words(p), name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), ...(p.m.note ? { note: p.m.note } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) },
     };
   }
@@ -541,6 +545,8 @@ export class LiveOrders {
   async owner(a: LiveOrderAction, who: { signer: string; envelope: Envelope; hash: Hex }): Promise<Outcome> {
     const planned = await this.plan({ ...fieldsOf(a), usd: "" });
     if (isRefusal(planned)) return planned;
+    const mis = paperMismatch(a, planned.v);
+    if (mis) return mis;
     if (this.money()!.realNow() > a.deadline) return no("E_ACCOUNT_EXPIRED", { message: "this order was good for ten minutes after it was prepared: prepare it again" });
     const p = this.hold(planned, a.symbol, Number(a.maxNotional), "signed for");
     if (isRefusal(p)) return p;
@@ -557,51 +563,69 @@ export class LiveOrders {
 
   /** An agent's order. Its trading limit and the dial first; then Guard: a card the owner signs; Beast: placed at once — and, in Guard, the
    * desk's own seat at its paper account under the autonomy the owner signed (AutonomyHook): placed at once as Beast places it, inside the
-   * same limit, the ledger's row saying so */
-  async agent(a: AgentLiveOrderAction, who: { signer: string; envelope: Envelope; hash: Hex; agent: AgentKey }): Promise<Outcome> {
+   * same limit, the ledger's row saying so. With a SPEND TOKEN (opts.token, account/tokens.ts): the token stands where the limit would
+   * (`opts.limit`, its own lines and counters), no trading limit is read, the dial is still asked, the order may be worth at most what the
+   * use is for (`opts.worthMicro`), and it goes without a card when the owner signed the token at once (`opts.atOnce`) — the card it
+   * otherwise raises holds the agent's signed use (`opts.cardAction`), and counts on the token */
+  async agent(a: AgentLiveOrderAction, who: { signer: string; envelope: Envelope; hash: Hex; agent: AgentKey }, opts: AgentOrderOpts = {}): Promise<Outcome> {
     const now = Date.parse(this.e.host.now());
-    const spend = await this.limit(who.signer, text(a.venue));
+    const spend = opts.limit ?? (await this.limit(who.signer, text(a.venue)));
     if (isRefusal(spend)) return spend;
+    if (opts.limit) {
+      const d = this.dial(text(a.venue));
+      if (d) return d;
+    }
     const p = await this.plan(fieldsOf(a));
     if (isRefusal(p)) return p;
     // an order the venue's place rule refuses from here raises no card and holds nothing of the limit
     const line = await this.placeRule(p.v, p.side, p.reduceOnly, p.m.symbol);
     if (line) return line;
-    const flight = this.e.host.openFlight({ id: slug(who.agent.name), name: who.agent.name, code: who.agent.code }, `${this.words(p)} · ${p.v.paper ? "paper" : "real money"}`);
+    // a token's use is for at most so much: an order worth more now is not placed under it
+    if (opts.worthMicro !== undefined && micro(p.maxUsd.toFixed(6)) > opts.worthMicro) return no("E_ACCOUNT_REQUOTE", { venue: p.v.id, message: `the order would be worth ${usd(p.maxUsd)} now, more than the ${usd(opts.worthMicro / 1e6)} the use is for: nothing was placed`, detail: { maxUsd: p.maxUsd, useUsd: opts.worthMicro / 1e6 } });
+    const tool = opts.token ? "agentUseToken" : a.type;
+    const under = opts.token ? `token ${opts.token}` : "the trading limit";
+    const flight = this.e.host.openFlight({ id: slug(who.agent.name), name: who.agent.name, code: who.agent.code }, `${this.words(p)} · ${p.v.paper ? "paper" : "real money"}${opts.token ? ` · ${opts.token}` : ""}`);
     const superagent = this.superagent(who.signer, p.v);
-    if (this.e.host.policy().mode === "open" || superagent !== undefined) {
+    const beast = this.e.host.policy().mode === "open";
+    if (beast || superagent !== undefined || opts.atOnce === true) {
       const c = covers(spend, p.v.id, micro(p.maxUsd.toFixed(6)), now);
       if (c) return c;
-      const out = await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent.address, action: who.hash, approval: spend.id });
+      const out = await this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent.address, action: who.hash, approval: spend.id, ...(opts.token ? { token: opts.token } : {}) });
       if (isRefusal(out)) return out;
-      this.e.host.log({ kind: "action", venue: p.v.id, tool: a.type, signer: who.signer, envelope: who.envelope, outcome: "accepted", notionalUsd: p.maxUsd, reason: `${superagent ?? "Beast"}: ${this.words(p)}, inside the trading limit`, flight: flight.no });
-      this.e.host.say(flight.no, superagent ? `${who.agent.name} ${this.words(p)}: the desk's own seat at its paper account, with the autonomy the owner signed, inside its limit, so it went without a card` : `${who.agent.name} ${this.words(p)}: inside its limit, so it went without a card (Beast)`, "ok");
+      const how = superagent ?? (beast ? "Beast" : `Token ${opts.token}, at once`);
+      this.e.host.log({ kind: "action", venue: p.v.id, tool, signer: who.signer, envelope: who.envelope, outcome: "accepted", notionalUsd: p.maxUsd, reason: `${how}: ${this.words(p)}, inside ${under}`, flight: flight.no });
+      this.e.host.say(flight.no, superagent ? `${who.agent.name} ${this.words(p)}: the desk's own seat at its paper account, with the autonomy the owner signed, inside its limit, so it went without a card` : beast ? `${who.agent.name} ${this.words(p)}: inside ${under}, so it went without a card (Beast)` : `${who.agent.name} ${this.words(p)}: inside ${under}, which you signed at once, so it went without a card`, "ok");
       return { ...out, flight: flight.no } as Outcome;
     }
     // the card holds what it shows, to the cent: answering it frees exactly that
     const worth = cents(p.maxUsd);
     const c = covers(spend, p.v.id, micro(worth.toFixed(2)), now);
     if (c) return c;
-    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `${p.v.paper ? "paper order (no real money)" : "real order"} · ${p.type}${p.limitPrice !== undefined ? ` at ${plain(p.limitPrice)}` : ` near ${plain(p.price)}`}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)}` };
+    const offer = { payee: p.v.name, payTo: p.m.symbol, amount: `${p.side} ${qtyText(p.qty)} ${p.m.base}`, protocol: `${p.v.paper ? "paper order (no real money)" : "real order"} · ${p.type}${p.limitPrice !== undefined ? ` at ${plain(p.limitPrice)}` : ` near ${plain(p.price)}`}${opts.token ? ` · with spend token ${opts.token}` : ""}`, network: `${p.side === "buy" ? "costs at most" : "worth about"} ${usd(worth)}` };
     // the owner's answer signs the card's hash: it covers the agent's request AND the market, size, price and worth the owner is shown
     const actionHash = keccak256(stringToHex(canonical({ action: who.hash, offer, symbol: p.m.symbol, qty: plain(p.qty), price: plain(p.price), worth: worth.toFixed(2) })));
     const intent: Intent = { kind: "trade", symbol: p.m.symbol, side: p.side, qty: p.qty };
-    const card = this.e.host.raiseCard(flight.no, { account: p.v.id, intent, usd: worth, reason: `${who.agent.name} asks to ${this.words(p)}`, why: "live", action: a, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, approval: spend.id });
+    const card = this.e.host.raiseCard(flight.no, { account: p.v.id, intent, usd: worth, reason: `${who.agent.name} asks to ${this.words(p)}${opts.token ? ` with ${opts.token}` : ""}`, why: "live", action: opts.cardAction ?? a, actionHash, signer: who.signer, expiresAt: new Date(now + CARD_TTL_MS).toISOString(), offer, approval: spend.id });
     this.shown.set(card.id, { symbol: p.m.symbol, qty: p.qty, price: p.price, notional: p.notional, maxUsd: worth });
     this.e.patchSpend(spend.id, (x) => ({ ...x, reservedMicro: x.reservedMicro + micro(String(worth)) }));
-    this.e.host.log({ kind: "action", venue: p.v.id, tool: a.type, signer: who.signer, envelope: who.envelope, outcome: "card", notionalUsd: worth, reason: `${card.id} · ${this.words(p)}`, flight: flight.no, intentId: card.id });
+    this.e.host.log({ kind: "action", venue: p.v.id, tool, signer: who.signer, envelope: who.envelope, outcome: "card", notionalUsd: worth, reason: `${card.id} · ${this.words(p)}${opts.token ? ` · ${opts.token}` : ""}`, flight: flight.no, intentId: card.id });
     return { ok: true, kind: "card", pending: true, card, flight: flight.no };
   }
 
   /** The owner approved an agent's order: exactly what the card showed — its market, its size, its worth — judged again against the agent's
-   * trading limit as it stands now (answering the card has already freed what the card held), the limit's signature and the dial */
-  async release(card: CardLike, who: { signer: string; agent: AgentKey }): Promise<Outcome> {
-    const a = card.action as AgentLiveOrderAction;
+   * trading limit as it stands now (answering the card has already freed what the card held), the limit's signature and the dial. With a
+   * spend token: against the token (`opts.limit`), the order read from the use (`opts.order`) */
+  async release(card: CardLike, who: { signer: string; agent: AgentKey }, opts: AgentOrderOpts = {}): Promise<Outcome> {
+    const a = (opts.order ?? card.action) as AgentLiveOrderAction;
     const shown = this.shown.get(card.id);
     this.shown.delete(card.id);
     if (!shown) return no("E_ACCOUNT_REQUOTE", { message: "this card's order is not known to this run of the account: the agent asks again" });
-    const spend = await this.limit(who.signer, text(a.venue));
+    const spend = opts.limit ?? (await this.limit(who.signer, text(a.venue)));
     if (isRefusal(spend)) return spend;
+    if (opts.limit) {
+      const d = this.dial(text(a.venue));
+      if (d) return d;
+    }
     const planned = await this.plan({ ...fieldsOf(a), qty: plain(shown.qty), usd: "" });
     if (isRefusal(planned)) return planned;
     // a buy may cost at most what the card showed; a sell is held to what it was worth when the card was shown
@@ -609,7 +633,7 @@ export class LiveOrders {
     if (isRefusal(p)) return p;
     const c = covers(spend, p.v.id, micro(p.maxUsd.toFixed(6)), Date.parse(this.e.host.now()));
     if (c) return c;
-    return this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent.address, card: card.id, action: card.actionHash, approval: spend.id });
+    return this.charged(spend.id, p, { signer: who.signer, authority: "agent", agent: who.agent.address, card: card.id, action: card.actionHash, approval: spend.id, ...(opts.token ? { token: opts.token } : {}) });
   }
 
   /** Counted against the limit first, so an order that fills at once settles its count when it is placed — and the venue's turn in the
@@ -836,6 +860,7 @@ export class LiveOrders {
       ...(who.card ? { card: who.card } : {}),
       ...(who.approval ? { approval: who.approval } : {}),
       ...(who.action ? { action: who.action } : {}),
+      ...(who.token ? { token: who.token } : {}),
       note: "",
       updatedAt: at,
       native: r.native,
@@ -846,7 +871,7 @@ export class LiveOrders {
     this.e.orders.unshift(order);
     this.polled.set(id, this.money()!.realNow());
     // the owner's envelope goes on the ledger with the order: a later run of the account then knows this instruction was taken
-    this.e.host.log({ kind: "order", venue: p.v.id, tool: "live order", outcome: lost ? "unconfirmed" : order.status, venueOrderId: r.ref, notionalUsd: p.notional, reason: `${id} · ${p.v.paper ? "paper" : "real money"} · ${this.words(p)}${lost ? ` · ${order.note}` : ""}`, native: r.native, signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}) });
+    this.e.host.log({ kind: "order", venue: p.v.id, tool: "live order", outcome: lost ? "unconfirmed" : order.status, venueOrderId: r.ref, notionalUsd: p.notional, reason: `${id} · ${p.v.paper ? "paper" : "real money"} · ${this.words(p)}${who.token ? ` · token ${who.token}` : ""}${lost ? ` · ${order.note}` : ""}`, native: r.native, signer: who.signer, ...(who.envelope ? { envelope: who.envelope } : {}) });
     if (DONE.has(order.status)) this.giveBack(order);
     this.line(order);
     this.adoptExits(order, r.native);
@@ -1036,6 +1061,8 @@ export class LiveOrders {
     const mine = o && (who.authority === "owner" || (o.authority === "agent" && o.agent === who.agent?.address));
     if (!o || !mine) return no("E_ACCOUNT_ORDER_UNKNOWN", { venue: a.venue, message: who.authority === "agent" && o ? `${a.order} was not placed by this agent: an agent changes only its own orders` : `there is no order ${a.order} at ${a.venue} on the account`, detail: { order: a.order } });
     if (DONE.has(o.status) || (o.walletTxs && !o.ref)) return no("E_ACCOUNT_BAD_ACTION", { venue: o.venue, message: `${o.id} is ${o.walletTxs && !o.ref ? "waiting for a wallet" : o.status}: there is nothing to change at the venue`, detail: { order: o.id } });
+    // an order counted on a spend token is not grown onto a trading limit, nor shrunk off the token: it is canceled, and the token used again
+    if (o.token) return no("E_ACCOUNT_BAD_ACTION", { venue: o.venue, message: `${o.id} was placed with spend token ${o.token}: it is not changed in place. Cancel it, and use the token again`, detail: { order: o.id, token: o.token } });
     if (o.unfollowed) return no("E_ACCOUNT_BAD_ACTION", { venue: o.venue, message: `${o.id} is not followed: it is canceled, here once ${o.venueName} answers for it again or at the venue, not changed`, detail: { order: o.id } });
     if (o.unconfirmed && !o.ref) return no("E_ACCOUNT_BAD_ACTION", { venue: o.venue, message: `${o.venueName} has not confirmed ${o.id}: it is looked for under the account's id, and nothing is changed until it is found`, detail: { order: o.id } });
     if (o.changing) return no("E_ACCOUNT_BAD_ACTION", { venue: o.venue, message: `${o.venueName} has not confirmed the last change to ${o.id}: it is asked how the order stands now. Change it again once it says`, detail: { order: o.id } });
@@ -1060,7 +1087,7 @@ export class LiveOrders {
     if (isRefusal(r)) return r;
     const p = r.p;
     const worth = (p.side === "buy" ? cents(p.maxUsd) : Math.floor(p.notional * 100 + 1e-6) / 100).toFixed(2);
-    return { action: { type: "liveAmend", ...a, maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS }, quote: { words: `${o.id}: ${this.words(p)}`, name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) } };
+    return { action: { type: "liveAmend", ...a, maxNotional: worth, deadline: this.money()!.realNow() + TTL_MS, ...(p.v.paper ? { paper: "true" } : {}) }, quote: { words: `${o.id}: ${this.words(p)}`, name: p.m.name, kind: p.m.kind, base: p.m.base, quote: p.m.quote, price: p.price, notionalUsd: Number(p.notional.toFixed(2)), maxUsd: Number(worth), ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), capUsd: this.money()!.writes().capUsd, ...(p.v.paper ? { paper: true as const } : {}) } };
   }
 
   /** Change an open order in place. The owner: held to what was signed. An agent: only its own order; what the order becomes worth MORE is
@@ -1072,6 +1099,8 @@ export class LiveOrders {
     if (isRefusal(r)) return r;
     if (who.authority === "owner") {
       const signed = a as LiveAmendAction;
+      const mis = paperMismatch(signed, r.p.v);
+      if (mis) return mis;
       if (this.money()!.realNow() > signed.deadline) return no("E_ACCOUNT_EXPIRED", { message: "this change was good for ten minutes after it was prepared: prepare it again" });
       const held = this.hold(r.p, o.symbol, Number(signed.maxNotional), "signed for");
       if (isRefusal(held)) return held;
@@ -1195,6 +1224,10 @@ export class LiveOrders {
     const v = this.money()?.venue(text(a.venue));
     if (!v) return this.notYet(text(a.venue)) ?? no("E_WALLET_ACCOUNT_UNKNOWN", { venue: a.venue, message: `"${a.venue}" is not a venue connected live` });
     if (!v.trader?.positions) return no("E_VENUE_RAIL_CLOSED", { venue: v.id, message: `${v.name} lists no positions to the account: sell what is held as an order` });
+    if (who.authority === "owner") {
+      const mis = paperMismatch(a as { paper?: string | undefined }, v);
+      if (mis) return mis;
+    }
     let spend: SpendApproval | undefined;
     if (who.authority === "agent") {
       const s = await this.limit(who.signer, v.id);
@@ -1335,7 +1368,7 @@ export class LiveOrders {
     const worthUsd = cents(p.maxUsd);
     const overCap = !v.paper && p.maxUsd > capUsd + 1e-9;
     return {
-      action: { type: "liveClose", venue: v.id, symbol: p.m.symbol, qty: f.qty === "" ? "" : plain(qty) },
+      action: { type: "liveClose", venue: v.id, symbol: p.m.symbol, qty: f.qty === "" ? "" : plain(qty), ...(v.paper ? { paper: "true" } : {}) },
       quote: { words: `close ${qtyText(qty)} ${p.m.base} of ${p.m.name} at ${v.name}: ${this.words(p)}${this.exitsWords(v.id, pos, qty)}`, venue: v.id, venueName: v.name, symbol: p.m.symbol, name: p.m.name, side: p.side, qty, ...(p.worstPrice !== undefined ? { worstPrice: p.worstPrice } : {}), price: p.price, worthUsd, capUsd, overCap, ...(v.paper ? { paper: true as const } : {}), ...(overCap ? { why: `${usd(worthUsd)} is more than the most one order may be on this server (${usd(capUsd)}): close part of it, or start the server with a higher --live-cap` } : {}) },
     };
   }
@@ -1376,6 +1409,10 @@ export class LiveOrders {
     const v = this.money()?.venue(text(a.venue));
     if (!v) return this.notYet(text(a.venue)) ?? no("E_WALLET_ACCOUNT_UNKNOWN", { venue: a.venue, message: `"${a.venue}" is not a venue connected live` });
     if (!v.trader?.setLeverage) return no("E_VENUE_RAIL_CLOSED", { venue: v.id, message: `${v.name} sets no leverage from the account` });
+    if (who.authority === "owner") {
+      const mis = paperMismatch(a as { paper?: string | undefined }, v);
+      if (mis) return mis;
+    }
     const lev = Number(a.leverage);
     if (!/^\d{1,3}$/.test(text(a.leverage)) || !(lev >= 1)) return no("E_ACCOUNT_BAD_ACTION", { message: "leverage is a whole number, 1 or more" });
     if (text(a.marginMode) !== "" && a.marginMode !== "cross" && a.marginMode !== "isolated") return no("E_ACCOUNT_BAD_ACTION", { message: 'a margin mode is "cross" or "isolated"' });
@@ -1632,6 +1669,27 @@ interface Who {
   action?: Hex | undefined;
   approval?: string | undefined;
   envelope?: Envelope | undefined;
+  /** the spend token the order counts on (account/tokens.ts), when it is a token's use */
+  token?: string | undefined;
+}
+
+/** an agent's order under a SPEND TOKEN (account/tokens.ts, rails/venue.ts): the token as a limit, its id, whether the owner signed it at
+ * once, the most the use is for, the agent's signed use for the card, and — on a release — the order read from that use */
+export interface AgentOrderOpts {
+  limit?: SpendApproval | undefined;
+  token?: string | undefined;
+  atOnce?: boolean | undefined;
+  worthMicro?: number | undefined;
+  cardAction?: AgentAction | undefined;
+  order?: AgentLiveOrderAction | undefined;
+}
+
+/** an owner's instruction prepared for a PAPER account says `paper: "true"`, and its signed text says no real money (sign.ts): at a real
+ * venue that is refused — the money there is real. One that says nothing signs the stronger text, which holds at a paper account too */
+function paperMismatch(a: { paper?: string | undefined }, v: LiveVenue): Refusal | null {
+  if (a.paper === undefined || a.paper === "") return null;
+  if (a.paper !== "true") return no("E_ACCOUNT_BAD_ACTION", { message: '"paper" is "true" at a paper account, or left out' });
+  return v.paper === true ? null : no("E_ACCOUNT_BAD_ACTION", { venue: v.id, message: `${v.name} is real money, and this was signed as paper (no real money): nothing was sent. Prepare it again` });
 }
 
 /** A venue call that throws answers as a refusal, never as an exception through the door. A READ may also be given a time limit; a call that

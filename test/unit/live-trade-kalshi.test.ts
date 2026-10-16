@@ -1170,3 +1170,19 @@ describe("what the account reads at Kalshi: a position is worth its market's pri
     expect([total(held), adapter.account.stale]).toEqual([total(opened.first), refused.message]);
   });
 });
+
+describe("a Kalshi key made for its demo environment", () => {
+  it("is a PAPER account: its balance is not money, its orders are rehearsals, and its name says demo", async () => {
+    const k = fakeKalshi();
+    const opened = await kalshiSource({ venue: "kalshi-demo", label: "Kalshi", reference: "credentials/kalshi-demo/api-key.json", key: { keyId: KEY_ID, privateKey: k.pem, demo: "true" }, home: tmpdir(), http: k.http, clock: () => k.now });
+    if (isRefusal(opened)) throw new Error(opened.message);
+    expect(opened.source.paper).toBe(true);
+    expect(opened.source.name).toBe("Kalshi · demo");
+    expect(opened.source.via).toBe("Kalshi trade API · demo");
+    expect(k.sent.every((s) => s.url.startsWith("https://external-api.demo.kalshi.co/"))).toBe(true);
+    // a production key holds real money: no paper flag
+    const prod = await kalshiSource({ venue: "kalshi", label: "Kalshi", reference: "credentials/kalshi/api-key.json", key: { keyId: KEY_ID, privateKey: k.pem }, home: tmpdir(), http: k.http, clock: () => k.now });
+    if (isRefusal(prod)) throw new Error(prod.message);
+    expect(prod.source.paper).toBeUndefined();
+  });
+});
