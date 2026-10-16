@@ -18,7 +18,10 @@ import { no } from "../../src/portfolio/refuse.ts";
 import { register } from "../../src/portfolio/live/index.ts";
 import type { LiveTrader, Market, OrderState } from "../../src/portfolio/live/trade.ts";
 import { startPortfolioServer, type PortfolioServerHandle } from "../../src/portfolio/server.ts";
-import { PortfolioService } from "../../src/portfolio/service.ts";
+import { loadOpenness, PortfolioService } from "../../src/portfolio/service.ts";
+
+/** the fixture's dial, its agents' session running through this test: the fixture's own session has ended, and these tests run on the real clock */
+const SESSION = { ...(loadOpenness() as object), sessionExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() };
 
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -72,7 +75,7 @@ const tool = async (c: Client, name: string, args: Record<string, unknown> = {})
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "seat-reads-"));
-  svc = await PortfolioService.create({ home, venues: "frontline", real: true, liveWrites: { capUsd: 5000, pairingCode: "K7QX-M2PA" }, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
+  svc = await PortfolioService.create({ home, venues: "frontline", real: true, openness: SESSION, liveWrites: { capUsd: 5000, pairingCode: "K7QX-M2PA" }, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
   server = await startPortfolioServer({ port: 0, service: svc, snapshotMs: 0 });
   await own({ type: "connectVenue", venue: "ex", connector: "live:standin-seat-reads", label: "Exchange", credentialRef: "" });
   a = await seat("Seat A");

@@ -96,6 +96,8 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
         <div class="acct-tools" data-only="account">
           <div class="seg" role="group" aria-label="Mode" id="mode"><button type="button" data-set-mode="guard" aria-pressed="false">Guard</button><button type="button" data-set-mode="open" aria-pressed="false">Beast</button></div>
           <button type="button" class="icon-btn" id="mode-more" aria-label="What changes between Guard and Beast" title="What changes between Guard and Beast"><svg class="ico" aria-hidden="true"><use href="#i-info"></use></svg></button>
+          <!-- the free stop of every spend token (ui/spend-tokens.js): tightening only, so no signature, as Guard is one click -->
+          <button type="button" class="btn btn-sm" id="stop-tokens" title="Stop every spend token now: every use is refused from then on. No signature; a stopped token is revoked or runs out" hidden>Stop all tokens</button>
           <div id="writes"></div>
           <button type="button" class="btn btn-sm" id="open-settings">Settings</button>
         </div>
@@ -150,6 +152,7 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <script defer src="/ui/floor.js"></script>
 <script defer src="/ui/superagent.js"></script>
 <script defer src="/ui/statement.js"></script>
+<script defer src="/ui/spend-tokens.js"></script>
 <script defer src="/ui/agents-mount.js"></script>
 <script defer src="/ui/shell.js"></script>
 </body>

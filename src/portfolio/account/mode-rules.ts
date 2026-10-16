@@ -19,6 +19,8 @@
  *                                                                              closes of the desk's own trading seats at its paper account go as
  *                                                                              Beast's do, inside each seat's limit; any other agent or venue as
  *                                                                              the mode says
+ *   a spend token's use            tokens.ts use()                          · Guard a card, unless the owner signed the token `atOnce`; Beast at
+ *                                                                              once inside the token's own lines (no SpendApproval is read for it)
  * In both modes anything over a limit is refused before a card is raised, and the owner's own actions are the owner's to sign. */
 
 /** how long a card waits for the owner before it closes unanswered (account/exchange.ts expireCards gives back what it held) */
@@ -47,6 +49,7 @@ export const MODE_RULES: readonly ModeRule[] = [
   { door: "Cancel its own order", guard: "At once, never a card", beast: "At once, never a card" },
   { door: "Set leverage with no position open", guard: "At once", beast: "At once" },
   { door: "The desk's own seats at its paper account", guard: "At once inside each seat's trading limit once you sign the desk's autonomy on paper; until then, waits on a card", beast: "At once" },
+  { door: "Use a spend token at its counterparty", guard: "Waits on a card, unless the token you signed says at once", beast: "At once inside the token" },
 ];
 
 /** the rules as the account page carries them (AccountPage.modeRules) */

@@ -13,13 +13,16 @@ import type { Listing, PublicSource } from "../../src/portfolio/live/public-mark
 import type { LiveTrader, Market } from "../../src/portfolio/live/trade.ts";
 import { bannedNo, type LiveSource } from "../../src/portfolio/live/types.ts";
 import { no } from "../../src/portfolio/refuse.ts";
-import { PortfolioService } from "../../src/portfolio/service.ts";
+import { loadOpenness, PortfolioService } from "../../src/portfolio/service.ts";
 
 /** The IP audit's findings on the service's own keeping (2026-10-09): how a venue's hold is kept — the later of its refusals, reads that
  * waited their turn, a ban of this address across the keyless source and the keyed connection, another party's refusal apart from the
  * venue's, a write that never reached the venue — what a re-check of the network the user is on now learns again, a restart that asks
  * again for a venue that did not answer at login, and a balance read that waits out the venue's hold. Nothing leaves the process; every
  * venue is a stand-in. Addresses are from the documentation ranges (RFC 5737, RFC 3849) */
+/** the fixture's dial, its agents' session running through this test: the fixture's own session has ended, and these tests run on the real clock */
+const SESSION = { ...(loadOpenness() as object), sessionExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() };
+
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const homes: string[] = [];
 afterAll(() => homes.forEach((h) => rmSync(h, { recursive: true, force: true })));
@@ -87,7 +90,7 @@ register({
 async function account(o: { publicMarkets?: PublicSource[]; liveDeps?: Partial<LiveDeps>; at?: string } = {}) {
 
   const h = o.at ?? home();
-  const svc = await PortfolioService.create({ home: h, venues: "frontline", real: true, publicMarkets: o.publicMarkets ?? [], liveDeps: { http: async () => ({ status: 404, body: undefined, text: "" }), price: async () => undefined, mm: (async () => ({ authenticated: true })) as unknown as RunMm, ...o.liveDeps }, liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
+  const svc = await PortfolioService.create({ home: h, venues: "frontline", real: true, openness: SESSION, publicMarkets: o.publicMarkets ?? [], liveDeps: { http: async () => ({ status: 404, body: undefined, text: "" }), price: async () => undefined, mm: (async () => ({ authenticated: true })) as unknown as RunMm, ...o.liveDeps }, liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
   await svc.restoring;
   const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: Date.now() + ++seq } as OwnerAction));
   const ag = async (a: NoNonce<AgentAction>) => svc.exchange(await signAgent(cc, { ...a, nonce: Date.now() + ++seq } as AgentAction));

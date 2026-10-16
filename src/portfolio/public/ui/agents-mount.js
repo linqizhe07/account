@@ -139,7 +139,10 @@ function renderAgents(L, owner) {
     // a limit given with the owner's words to the agent names them (spend[].intent): it ends with them
     const limit = s ? `${fine(s.spentUsd)} of ${fine(s.budgetUsd)} used · up to ${fine(s.perPaymentUsd)} ${t ? "an order" : m ? "a move" : y ? "a payment" : "each time"}<span class="why">${esc(where)}${s.intent ? ` · for ${esc(s.intent)}` : ""}${s.reservedUsd ? ` · ${fine(s.reservedUsd)} waiting` : ""}${s.expired ? " · limit expired" : ` · until ${nyDay(s.validUntil)}`}</span>` : '<span class="dim">No limit yet: it can do nothing</span>';
     const endEarn = n && owner && k.status === "ok" ? ` · <button type="button" class="link dim" data-end-earn="${esc(k.address)}">End earn limit</button>` : "";
-    return `<tr><td>${esc(k.name)}<span class="why"><span class="mono">${esc(short(k.address))}</span>${k.status === "expired" ? " · expired" : ` · until ${nyDay(k.validUntil)}`}</span></td><td>${limit}</td><td class="r"><button type="button" class="link dim" data-memory="${esc(k.address)}">Memory</button>${owner && k.status === "ok" ? ` · <button type="button" class="link dim" data-limit="${esc(k.address)}">Change limit</button>${endEarn} · <button type="button" class="link dim" data-revoke="${esc(k.name)}">Revoke</button>` : ""}</td></tr>`;
+    // its spend tokens (ui/spend-tokens.js), under the key: the ones the lens shows (Paper: test tokens; Real: live ones), each with its
+    // own lines, and the way to issue one for this key
+    const tokens = typeof tokensBlock === "function" ? `<tr class="tok-row"><td colspan="3">${tokensBlock(tokensIn().filter((t) => String(t.agent).toLowerCase() === k.address.toLowerCase()), owner && k.status === "ok", { issueFor: { agent: k.address }, who: false, empty: "No spend token: a token is one authorisation of its own, for one counterparty, beside its limits." })}</td></tr>` : "";
+    return `<tr><td>${esc(k.name)}<span class="why"><span class="mono">${esc(short(k.address))}</span>${k.status === "expired" ? " · expired" : ` · until ${nyDay(k.validUntil)}`}</span></td><td>${limit}</td><td class="r"><button type="button" class="link dim" data-memory="${esc(k.address)}">Memory</button>${owner && k.status === "ok" ? ` · <button type="button" class="link dim" data-limit="${esc(k.address)}">Change limit</button>${endEarn} · <button type="button" class="link dim" data-revoke="${esc(k.name)}">Revoke</button>` : ""}</td></tr>${tokens}`;
   }).join("");
   const T = L.filter(canTrade);
   const M = L.filter(canMove);
@@ -147,6 +150,8 @@ function renderAgents(L, owner) {
   $("agents").innerHTML = `${keys.length || asking ? `<table><tbody>${asking}${rows}</tbody></table>` : '<p class="empty">No agents yet.</p>'}${form}`;
   // what an agent remembers (account/memory.ts): the Account's Memory page, on that agent — any browser may look
   for (const b of $("agents").querySelectorAll("button[data-memory]")) b.addEventListener("click", () => { closeSheet(); go("memory", { agent: b.dataset.memory }); });
+  // the tokens' own buttons: stop, revoke, issue (ui/spend-tokens.js)
+  if (typeof wireTokens === "function") wireTokens($("agents"));
   const f = $("agent-form");
   if (!f) return;
   const isNew = () => !f.elements.agent.value;

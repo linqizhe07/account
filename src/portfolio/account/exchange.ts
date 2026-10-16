@@ -45,14 +45,15 @@ import { parseIntent, parseOrder } from "../intents.ts";
 import { achArrival, etDate, whenLabel } from "./calendar.ts";
 import { doorOf, plan, type Door, type Leg, type Rail, type Route, type RouteRequest, type VenueView, whyWatchOnly } from "./doors.ts";
 import { heldUsd, inFlightUsd, launch, newPayment, settleDue, type Advance, type Authority, type Money, type Payment, type PaymentKind } from "./payments.ts";
-import { actionHash, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
+import { actionHash, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownerTypedData, shownFields, signerOf, sourceOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
 import { LiveEarns, type EarnDesk, type EarnQuote, type LiveEarn } from "./live-earn.ts";
 import type { KeptAuthorisation } from "./pay-real.ts";
 import { CARD_TTL_MS, modeRules, type ModeRule } from "./mode-rules.ts";
 import { TOPIC_WORDS, type MemoryStore } from "./memory.ts";
-import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, isOwner, MAX_ASKS, nameHolder, refsOf, spendFor, type AccountState, type AgentKey, type AgentReport, type AskKind, type OwnerKey, type SpendApproval, type SubAccount } from "./state.ts";
+import { SpendTokens, type TokenView } from "./tokens.ts";
+import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, isOwner, MAX_ASKS, nameHolder, refsOf, spendFor, type AccountState, type AgentKey, type AgentReport, type AskKind, type OwnerKey, type SpendApproval, type SpendToken, type SubAccount, type TokenUse } from "./state.ts";
 
 const HUB = "metamask";
 /** devices that have asked to sign and wait for an owner, at most, at one time */
@@ -258,6 +259,8 @@ export interface AgentAsk {
   /** the dollars it is about (a limit, a top-up), or "" */
   usd: string;
   text: string;
+  /** a `token` ask: the counterparty the agent proposes (an https origin, a market list) — shown as proposed, never pre-ticked */
+  counterparty?: string | undefined;
   at: string;
   expiresAt: string;
 }
@@ -276,6 +279,8 @@ export type PayAction = Extract<AgentAction, { type: "agentPay" }>;
 /** the payment protocols the account answers on an agent's behalf, and the payees it has met (payees.ts mounts one) */
 export interface Payer {
   pay(action: PayAction, who: { signer: string; agent: AgentKey; envelope: Envelope; hash: Hex }, released?: CardLike): Promise<Outcome>;
+  /** a payment with a SPEND TOKEN standing where the payees limit would (account/tokens.ts, rails/x402.ts): the real payer has it */
+  payWithToken?(action: PayAction, who: { signer: string; agent: AgentKey; envelope: Envelope; hash: Hex }, opts: { token: SpendToken; use: TokenUse; atOnce: boolean; cardAction: AgentAction }, released?: CardLike): Promise<Outcome>;
   /** land what time has made due: a session's deposit coming back after its grace period */
   tick(nowMs: number): void;
   /** the owner ends a payment session itself (by its channel id, or its payee's host) */
@@ -347,6 +352,8 @@ export class AccountEngine {
   readonly trade: LiveOrders;
   /** the door for EARN at venues connected live (account/live-earn.ts) */
   readonly earn: LiveEarns;
+  /** the spend tokens (account/tokens.ts): issued, used, stopped, revoked, watched */
+  readonly tokens: SpendTokens;
   /** money put into earn products, or taken out, newest first */
   earns: LiveEarn[] = [];
   private earnSeq = 0;
@@ -371,6 +378,12 @@ export class AccountEngine {
     this.live = new LiveMoves(this as never);
     this.trade = new LiveOrders(this as never);
     this.earn = new LiveEarns(this as never);
+    this.tokens = new SpendTokens(this);
+  }
+
+  /** the payer that pays real money, for the x402 rail (rails/x402.ts); undefined when none is mounted */
+  tokenPayer(): Payer | undefined {
+    return this.payer;
   }
 
   /** everything but the nonce books goes back to the start: an old signed envelope must not come back to life with the account */
@@ -510,7 +523,10 @@ export class AccountEngine {
     const wrong = malformed(action);
     if (wrong || envelope.nonce !== action.nonce) return this.refused(no("E_ACCOUNT_BAD_ACTION", { message: wrong ?? "the envelope's nonce is the action's nonce" }), envelope);
     const now = this.nowMs();
-    const signer = await signerOf(action, envelope.signature, deviceKeys(this.state));
+    // an agent's signature is recovered under the source its envelope says it was made for (the simulation unless said): a real account
+    // takes one made for the simulation, and its row says so
+    const signedFor = sourceOf(envelope);
+    const signer = await signerOf(action, envelope.signature, deviceKeys(this.state), signedFor);
     if (!signer) return this.refused(no("E_ACCOUNT_BAD_SIGNATURE", { detail: { type: action.type } }), envelope);
     const hash = actionHash(action);
 
@@ -566,7 +582,9 @@ export class AccountEngine {
     for (const who of signers) this.nonces.use(who, action.nonce);
     // taken, on the record before anything runs: a later run of the account reads this row and does not take the same instruction again,
     // whatever became of it (a money instruction is good for ten minutes, and a restart can come inside them)
-    this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope: wordless(envelope), outcome: "taken", reason: `${action.type} taken: it is not taken again, by this run of the account or a later one`, ...(agent ? { agent: slug(agent.name) } : {}) });
+    const ownSource = this.host.real ? "real" : "sim";
+    const mislabelled = isAgentAction(action) && signedFor !== ownSource;
+    this.host.log({ kind: "action", venue: "*", tool: action.type, signer, envelope: wordless(envelope), outcome: "taken", reason: `${action.type} taken: it is not taken again, by this run of the account or a later one${mislabelled ? ` · signed for the ${signedFor === "real" ? "real account" : "simulation"}, and this account is the ${ownSource === "real" ? "real one" : "simulation"}` : ""}`, ...(agent ? { agent: slug(agent.name) } : {}), ...(mislabelled ? { detail: { signedFor } } : {}) });
 
     // an order or a cancel is not kept waiting while the account asks other venues how their orders stand
     await this.settle(["liveCancel", "agentLiveCancel", "liveOrder", "agentLiveOrder"].includes(action.type));
@@ -598,6 +616,7 @@ export class AccountEngine {
       case "setIntent": {
         // "every venue" is the venues on the account when the owner signs: one plugged in later is not covered until it is named
         const here = action.type === "approveSpend" ? [...this.host.accounts().map((a) => a.id), ...this.state.subAccounts.map((x) => `sub:${x.name}`)] : [];
+        const before = this.state.tokens;
         const next = applyOwner(this.state, action, envelope, now, here, this.applyOptions());
         if (isRefusal(next)) return next;
         this.state = next;
@@ -610,8 +629,14 @@ export class AccountEngine {
           const sub = next.subAccounts.find((x) => x.name === action.name.trim());
           if (sub) await this.host.agentWalletUp?.(sub);
         }
+        // a key revoked takes its spend tokens with it (state.ts): their rows, and the rail's side of each
+        if (action.type === "approveAgent") await this.tokens.afterKeys(before);
         return { ok: true, kind: "account", summary };
       }
+      case "issueSpendToken":
+        return this.tokens.issue(action, envelope, signer);
+      case "revokeSpendToken":
+        return this.tokens.revoke(action, envelope, signer);
       case "setPolicy": {
         // a session's deposit is the owner's: the owner can end the session whether or not the agent that opened it still can
         const r = action.change === "close-session" ? ((await this.payer?.closeByOwner(action.value)) ?? no("E_PAYEE_UNSUPPORTED", { message: "this account has no payment protocol mounted" })) : await this.host.widen(action.change, action.value);
@@ -629,9 +654,12 @@ export class AccountEngine {
         if (busy) return no("E_ACCOUNT_BAD_ACTION", { venue: action.venue, message: `${this.name(action.venue)} has a payment in flight (${busy.id}): it can be ${action.type === "connectVenue" ? "connected live" : "unplugged"} when that has landed`, detail: { payment: busy.id } });
         const open = connected ? this.trade.openAt(action.venue) : undefined;
         if (open) return no("E_ACCOUNT_BAD_ACTION", { venue: action.venue, message: `${this.name(action.venue)} has an open order (${open.id}): cancel it, or let it fill, before ${action.type === "connectVenue" ? "connecting it again" : "disconnecting it"}`, detail: { order: open.id } });
+        const name = this.name(action.venue);
         const r = action.type === "connectVenue" ? await this.host.connect(action.venue, action.connector, action.label, action.credentialRef) : this.host.disconnect(action.venue);
         if (isRefusal(r)) return r;
         this.host.log({ kind: "action", venue: action.venue, tool: action.type, signer, envelope, outcome: "ok", reason: r.summary, ...("native" in r && r.native !== undefined ? { native: r.native } : {}) });
+        // the spend tokens on an instrument that left the account end with it (account/tokens.ts)
+        if (action.type === "disconnectVenue") await this.tokens.instrumentGone(action.venue, `${name} was disconnected`);
         return { ok: true, kind: "account", summary: r.summary };
       }
       case "approveCard":
@@ -690,6 +718,10 @@ export class AccountEngine {
         return this.report(action, envelope, signer, agent!);
       case "agentAsk":
         return this.ask(action, agent!);
+      case "agentUseToken":
+        return this.tokens.use(action, { signer, agent: agent!, envelope, hash });
+      case "agentTokenDone":
+        return this.tokens.done(action, { signer, agent: agent!, envelope });
       case "agentRemember":
       case "agentForget":
         return this.agentMemory(action, signer, agent!);
@@ -866,14 +898,14 @@ export class AccountEngine {
     if (!same && waiting.length >= MAX_ASKS) return no("E_ACCOUNT_LIMIT", { message: `${MAX_ASKS} asks are waiting for the owner already`, detail: { max: MAX_ASKS } });
     this.askTimes.set(agent.address, [...times, now]);
     // asked again: new words, so a new id — an answer the owner signed for the old words is not taken for these
-    const entry: AgentAsk = { id: `ask-${String(++this.askSeq).padStart(4, "0")}`, agent: agent.address, agentName: agent.name, kind: a.kind as AskKind, venue: a.venue, usd: a.usd, text: a.text.trim(), at: new Date(now).toISOString(), expiresAt: new Date(now + ASK_TTL_MS).toISOString() };
+    const entry: AgentAsk = { id: `ask-${String(++this.askSeq).padStart(4, "0")}`, agent: agent.address, agentName: agent.name, kind: a.kind as AskKind, venue: a.venue, usd: a.usd, text: a.text.trim(), ...(a.counterparty ? { counterparty: a.counterparty.trim() } : {}), at: new Date(now).toISOString(), expiresAt: new Date(now + ASK_TTL_MS).toISOString() };
     this.asks = same ? waiting.map((x) => (x === same ? entry : x)) : [...waiting, entry];
     if (same) {
       this.askReplaced.set(same.id, entry.id);
       // a bounded memory, oldest out first: a day's askings again at most, and one older than a day has nothing waiting behind it
       if (this.askReplaced.size > MAX_ASKS * 24) this.askReplaced.delete(this.askReplaced.keys().next().value!);
     }
-    this.host.log({ kind: "action", venue: a.venue || "*", tool: a.type, signer: agent.address, outcome: "asked", reason: `${agent.name} asks the owner: ${a.kind}${a.venue ? ` at ${a.venue}` : ""}${a.usd ? ` · $${a.usd}` : ""}${entry.text ? ` · ${entry.text}` : ""}`, agent: slug(agent.name) });
+    this.host.log({ kind: "action", venue: a.venue || "*", tool: a.type, signer: agent.address, outcome: "asked", reason: `${agent.name} asks the owner: ${a.kind}${a.venue ? ` at ${a.venue}` : ""}${entry.counterparty ? ` · ${entry.counterparty}` : ""}${a.usd ? ` · $${a.usd}` : ""}${entry.text ? ` · ${entry.text}` : ""}`, agent: slug(agent.name) });
     return { ok: true, kind: "result", result: { ask: entry, replaced: !!same } };
   }
 
@@ -926,6 +958,8 @@ export class AccountEngine {
       const made = this.state.spends.find((x) => x.envelope === envelope);
       close("limit", a.agent.toLowerCase(), made?.allow ?? a.allow.split(",").map((x) => x.trim()).filter(Boolean));
     } else if (a.type === "createSubAccount") close("topup", a.agent.toLowerCase());
+    // a token issued answers the agent's asks for one (the owner may have changed the counterparty: the ask is answered all the same)
+    else if (a.type === "issueSpendToken") close("token", a.agent.toLowerCase());
     else if (a.type === "connectVenue") close("venue", undefined, [a.venue]);
     else if (a.type === "setPolicy" && (a.change === "session" || a.change === "maxLeverage" || a.change === "mode")) close(a.change === "maxLeverage" ? "leverage" : a.change);
     else if (a.type === "liveMove") {
@@ -1084,6 +1118,8 @@ export class AccountEngine {
   }
 
   patchSpend(id: string, f: (s: SpendApproval) => SpendApproval): void {
+    // a spend token (tok-…) counts an order or a payment as a limit does: its minted and held (account/tokens.ts)
+    if (id.startsWith("tok-")) return this.tokens.patchAsLimit(id, f);
     const before = this.state.spends.find((s) => s.id === id);
     this.state = { ...this.state, spends: this.state.spends.map((s) => (s.id === id ? f(s) : s)) };
     const after = this.state.spends.find((s) => s.id === id);
@@ -1210,6 +1246,7 @@ export class AccountEngine {
     if (action.decision !== "approve") {
       if (!card.action) return { ok: true, kind: "result", result: await this.host.decide(card.id, "reject"), flight: card.flight };
       release();
+      this.tokens.cardClosed(card, "rejected");
       this.host.closeCard(card.id, "rejected", "You rejected it; nothing moved");
       return { ok: true, kind: "result", result: no("E_CARD_REJECTED", { venue: card.account, detail: { card: card.id } }), flight: card.flight };
     }
@@ -1227,7 +1264,11 @@ export class AccountEngine {
     const status = agentStatus(this.state, card.signer ?? "", now);
     let again: Outcome;
     if (!key || status !== "ok") again = no(status === "expired" ? "E_ACCOUNT_AGENT_EXPIRED" : "E_ACCOUNT_AGENT_REVOKED", { detail: { signer: card.signer } });
-    else if (card.action.type === "agentLiveMove") {
+    else if (card.action.type === "agentUseToken") {
+      // a spend token's use: judged again against the token as it stands, then run by its rail (account/tokens.ts)
+      release();
+      again = await this.tokens.release(card, { signer: key.address, agent: key });
+    } else if (card.action.type === "agentLiveMove") {
       release();
       again = await this.live.release(card, { signer: key.address, agent: key });
     } else if (card.action.type === "agentLiveOrder") {
@@ -1270,6 +1311,7 @@ export class AccountEngine {
       if (card.action !== undefined && card.approval) this.patchSpend(card.approval, (x) => ({ ...x, reservedMicro: Math.max(0, x.reservedMicro - micro(String(card.usd))) }));
       this.trade.forget(card.id);
       this.earn.forget(card.id);
+      this.tokens.cardClosed(card, "expired");
       this.expired.add(card.id);
       if (this.expired.size > 500) this.expired.delete(this.expired.values().next().value!);
       this.host.closeCard(card.id, "rejected", "The card expired before it was answered; nothing moved");
@@ -1407,6 +1449,7 @@ export class AccountEngine {
       asks: this.waitingAsks(now).map((x) => ({ ...x })),
       declinedAsks: this.declinedAsks(now).map((x) => ({ ...x })),
       modeRules: modeRules(),
+      tokens: this.tokens.view(now),
       ...(this.host.real ? { real: true as const } : {}),
     };
   }
@@ -1475,6 +1518,23 @@ export class AccountEngine {
       if (action.type === "approveSpend" && typeof action.intent === "string" && action.intent.trim() === "") delete action.intent;
       // an earn limit over "every account" is refused here, before it is shown and signed, as the door would refuse it
       if (action.type === "approveSpend" && action.scope === "earn" && String(action.allow).split(",").some((x) => x.trim() === "*")) return no("E_ACCOUNT_BAD_ACTION", { message: EARN_NAMES });
+      // a leverage change at a paper account signs as paper, as an order there does
+      if (action.type === "liveLeverage") {
+        const paper = this.host.liveMoney?.().venue(action.venue)?.paper === true;
+        if (paper) action.paper = "true";
+        else delete action.paper;
+      }
+      // a spend token: its own shape, its agent's standing and its rail's readiness, refused here before it is shown and signed — the
+      // door refuses the same (account/tokens.ts draftProblem); the words the owner reads go with it
+      if (action.type === "issueSpendToken") {
+        if (typeof action.uses === "string") action.uses = Number(action.uses);
+        if (typeof action.validUntil === "string") action.validUntil = Number(action.validUntil);
+        const stop = this.tokens.draftProblem(action);
+        if (stop) return stop;
+        const rail = this.tokens.rail(action);
+        const venue = rail && rail.kind !== "chain:x402" ? this.host.liveMoney?.().venue(action.instrument.trim()) : undefined;
+        quote = { words: `${action.env === "test" ? "a test token" : "a live token"} for ${this.agentName(action.agent)}: ${rail?.kind === "chain:x402" ? `pay ${action.counterparty.trim()} from the agent wallet "${action.instrument.trim()}"` : `trade ${action.counterparty.trim() === "*" ? "any market" : action.counterparty.trim()} at ${venue?.name ?? action.instrument.trim()}`}`, feeUsd: 0, receiveUsd: Number(action.maxAmount), lands: "at once", access: "owner", final: true, legs: [], token: { honesty: action.env === "live" ? "Live · the Account alone holds this limit" : "Test · no network holds this limit; only the Account does", ...(venue?.paper ? { paper: true as const } : {}), capUsd: this.host.liveMoney?.().writes().capUsd ?? 0 } };
+      }
     } else return no("E_ACCOUNT_BAD_ACTION", { message: `"${type}" is not something the owner signs` });
     const wrong = malformed(action);
     if (wrong) return no("E_ACCOUNT_BAD_ACTION", { message: wrong });
@@ -1491,7 +1551,7 @@ export interface Prepared {
   domain: { name: string; version: string; chainId: number };
   accountChain: string;
   shown: Array<{ name: string; value: string }>;
-  quote?: { words: string; feeUsd: number; receiveUsd: number; lands: string; access: string; signAt?: string; live?: { toAddress: string; network: string; capUsd: number }; order?: OrderQuote; close?: CloseQuote; earn?: EarnQuote; final: boolean; legs: Array<{ step: string; venue: string; protocol: string; feeUsd: number }> } | undefined;
+  quote?: { words: string; feeUsd: number; receiveUsd: number; lands: string; access: string; signAt?: string; live?: { toAddress: string; network: string; capUsd: number }; order?: OrderQuote; close?: CloseQuote; earn?: EarnQuote; /** a spend token: its honesty label (who holds its lines), whether it is paper, the server's cap that still bounds each use */ token?: { honesty: string; paper?: true; capUsd: number }; final: boolean; legs: Array<{ step: string; venue: string; protocol: string; feeUsd: number }> } | undefined;
 }
 
 /** one rail of a venue as the Runways tab shows it */
@@ -1566,6 +1626,9 @@ export interface AccountPage {
   /** what Guard and Beast do with an agent's request, door by door, and how long a card waits (minutes), as the doors themselves have it
    * (account/mode-rules.ts): the Mode sheet draws its table from here */
   modeRules: { rows: ModeRule[]; cardMinutes: number };
+  /** the spend tokens (account/tokens.ts), newest first, ended ones included: the Agents sheet lists each agent's, the Venues page each
+   * instrument's */
+  tokens: TokenView[];
 }
 
 /** money in a venue's earn product, as a holding on the account page: the product, what goes in and comes out, its yield */

@@ -28,7 +28,11 @@ export type LedgerKind =
   /** one line of the account's statement: a transaction as it stands now (account/statement.ts) */
   | "statement"
   /** what a spending or trading limit has used, after it changed: a restarted account reads the last one (account/restore.ts) */
-  | "spend";
+  | "spend"
+  /** a spend token's life (account/tokens.ts): issuing · verify · active · minting · minted · executed · done · settled · not-used ·
+   * stopped · revoke-sent · revoke-confirmed · expired · foreign, as `outcome`; the token's counters ride on `detail`, and a restarted
+   * account reads the last row of each token (account/restore.ts). Never a credential */
+  | "token";
 
 export interface LedgerRowInput {
   kind: LedgerKind;

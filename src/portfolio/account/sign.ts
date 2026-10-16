@@ -112,15 +112,15 @@ export type OwnerAction =
   /** An ORDER at a venue connected live, on the owner's signature: the market, the side, the exact size in the market's own units, the limit
    * price ("" for a market order), the most the order may be worth in dollars when it is placed (a price that has moved past it is a new
    * signature), and the moment after which it is void */
-  | { type: "liveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; limitPrice: string; /** a stop or stop-limit order's trigger; "" otherwise */ stopPrice: string; /** "gtc" · "ioc" · "fok" · "day", or "" for the venue's own default */ tif: string; /** "true" or "" */ postOnly: string; reduceOnly: string; /** "true" or "": a limit order for the extended session that is on (pre-market, after-hours, overnight) */ extendedHours: string; /** a trailing stop's trail, one of the two: a percent or a price; "" otherwise */ trailPercent: string; trailPrice: string; /** a bracket's exits, placed once it fills: a take-profit limit price and a stop-loss stop price; "" otherwise */ takeProfit: string; stopLoss: string; maxNotional: string; deadline: number; nonce: number }
+  | { type: "liveOrder"; venue: string; symbol: string; side: string; orderType: string; qty: string; limitPrice: string; /** a stop or stop-limit order's trigger; "" otherwise */ stopPrice: string; /** "gtc" · "ioc" · "fok" · "day", or "" for the venue's own default */ tif: string; /** "true" or "" */ postOnly: string; reduceOnly: string; /** "true" or "": a limit order for the extended session that is on (pre-market, after-hours, overnight) */ extendedHours: string; /** a trailing stop's trail, one of the two: a percent or a price; "" otherwise */ trailPercent: string; trailPrice: string; /** a bracket's exits, placed once it fills: a take-profit limit price and a stop-loss stop price; "" otherwise */ takeProfit: string; stopLoss: string; maxNotional: string; deadline: number; /** "true" at a PAPER account (the page prepares it so): the signed text then says no real money; absent, it signs as it always has */ paper?: string | undefined; nonce: number }
   /** cancel an order the account placed (its id on the account, `ord-0001`) */
   | { type: "liveCancel"; venue: string; order: string; nonce: number }
   /** change an open order in place: its new size, limit and stop ("" keeps what it was), the most it may then be worth, and ten minutes */
-  | { type: "liveAmend"; venue: string; order: string; qty: string; limitPrice: string; stopPrice: string; maxNotional: string; deadline: number; nonce: number }
+  | { type: "liveAmend"; venue: string; order: string; qty: string; limitPrice: string; stopPrice: string; maxNotional: string; deadline: number; paper?: string | undefined; nonce: number }
   /** close a position at a venue: all of it ("" ), or this much of it */
-  | { type: "liveClose"; venue: string; symbol: string; qty: string; nonce: number }
+  | { type: "liveClose"; venue: string; symbol: string; qty: string; paper?: string | undefined; nonce: number }
   /** a perpetual's leverage, and its margin mode ("cross" · "isolated" · "" to keep it) */
-  | { type: "liveLeverage"; venue: string; symbol: string; leverage: string; marginMode: string; nonce: number }
+  | { type: "liveLeverage"; venue: string; symbol: string; leverage: string; marginMode: string; paper?: string | undefined; nonce: number }
   /** a market the owner keeps an eye on — at a venue on the account or one that is not — which agents read: `on` "true" watches it, "" stops */
   | { type: "setWatch"; venue: string; symbol: string; on: string; nonce: number }
   /** The owner's words to an agent (`agent`: its address) or to every agent ("*"): what the owner would like done, where, which way and about
@@ -147,7 +147,15 @@ export type OwnerAction =
   /** THE DESK (account/desk.ts): the owner hires, steers, pauses, resumes and ends the account's own agents. `desk` names the desk
    * ("desk"), `change` what is changed (hire · objective · charter · pause · resume · end · cycle · report · seat), `value` the change
    * itself as JSON text. Words and settings: the authority of each role is still its key and the limit the owner signed for it */
-  | { type: "setDesk"; desk: string; change: string; value: string; nonce: number };
+  | { type: "setDesk"; desk: string; change: string; value: string; nonce: number }
+  /** A SPEND TOKEN (account/tokens.ts): one authorisation the owner signs for one agent, on one rail (`paper` · `venue:<id>` ·
+   * `chain:x402` in this version), backed by one of the owner's own instruments (a venue on the account, an agent wallet), good for one
+   * counterparty as the rail types it (a market list at a venue, an https origin), up to `maxAmount` in `currency` in all and `perUseMax` a
+   * use, `uses` times (0: as many as the amount and the expiry allow, on a venue or paper rail only), until `validUntil`; `atOnce` "true"
+   * lets a use go without a card in Guard; `purpose` the owner's own words; `env` test or live — a live token's signed text says real money */
+  | { type: "issueSpendToken"; agent: Hex; rail: string; instrument: string; counterparty: string; maxAmount: string; currency: string; perUseMax: string; uses: number; validUntil: number; atOnce: string; purpose: string; env: string; nonce: number }
+  /** the owner ends a spend token (`token`: its id, tok-0003): the account stops it at once, and asks the rail to close it too */
+  | { type: "revokeSpendToken"; token: string; reason: string; nonce: number };
 
 export type AgentAction =
   | { type: "agentSendAsset"; destination: string; sourceDex: string; destinationDex: string; token: string; amount: string; fromSubAccount: string; maxFee: string; nonce: number }
@@ -180,7 +188,14 @@ export type AgentAction =
   | { type: "agentReport"; intent: string; status: string; note: string; refs: string; nonce: number }
   /** An agent asks the owner for what only the owner signs: `kind` letIn (its key let in) · limit · venue (one connected) · topup (its wallet) ·
    * session · leverage · mode. Asking grants nothing: the owner's own signed action is the answer, and it closes the ask */
-  | { type: "agentAsk"; kind: string; venue: string; usd: string; text: string; nonce: number }
+  | { type: "agentAsk"; kind: string; venue: string; usd: string; text: string; /** a `token` ask: the counterparty it would be for (an https origin, a market list) — `venue` cannot hold a URL */ counterparty?: string | undefined; nonce: number }
+  /** an agent USES a spend token (account/tokens.ts): the token's id, the counterparty exactly as the token names it, the most this use may
+   * be (`amount` in the token's `currency`), and `request` — what the rail runs for a proxy token, as JSON text: an order's fields at a
+   * venue or paper rail, what is paid for on the x402 rail ({url, method?, body?}). The account runs it with the owner's instrument; the
+   * agent holds nothing but the token's id */
+  | { type: "agentUseToken"; token: string; counterparty: string; amount: string; currency: string; request?: string | undefined; nonce: number }
+  /** the agent says a use is finished (`use`: its id, tok-0003/1): the account closes the record */
+  | { type: "agentTokenDone"; use: string; nonce: number }
   /** an agent puts money into a venue's earn product (`kind` supply) or takes it back out (withdraw: `amount` "all" is all of it), inside
    * the earn limit the owner signed for it. It names no destination: what comes out lands where it came from. Guard: a card;
    * Beast: inside its limit, at once */
@@ -197,11 +212,11 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk"] as const;
-export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "issueSpendToken", "revokeSpendToken"] as const;
+export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay", "agentUseToken", "agentTokenDone"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
- * not for the two days of the nonce window */
-export const MONEY_TYPES: ReadonlySet<string> = new Set(["sendAsset", "swap", "approveCard", "agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "liveMove", "agentLiveMove", "liveOrder", "agentLiveOrder", "liveAmend", "agentLiveAmend", "liveClose", "agentLiveClose", "liveLeverage", "agentLiveLeverage", "liveEarn", "agentLiveEarn"]);
+ * not for the two days of the nonce window. A spend token's four (issued, revoked, used, done) are money instructions too */
+export const MONEY_TYPES: ReadonlySet<string> = new Set(["sendAsset", "swap", "approveCard", "agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "liveMove", "agentLiveMove", "liveOrder", "agentLiveOrder", "liveAmend", "agentLiveAmend", "liveClose", "agentLiveClose", "liveLeverage", "agentLiveLeverage", "liveEarn", "agentLiveEarn", "issueSpendToken", "revokeSpendToken", "agentUseToken", "agentTokenDone"]);
 /** how the owner steers and the agents answer: a watchlist, intents, reports, asks. None moves money and none is read by a limit (state.ts
  * covers, spendFor): they are words between the owner and the agents, and authority still comes only from limits, cards and the cap */
 export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setIntent", "answerAsk", "agentReport", "agentAsk", "setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget", "setDesk", "agentDeskSay"]);
@@ -223,6 +238,9 @@ export interface Envelope {
   signature: AnySig;
   /** further owner signatures over the same action, when the account needs more than one */
   cosignatures?: AnySig[] | undefined;
+  /** an agent's signature made for the owner's real account says so (`real`); absent, it was made for the simulation (`sim`), which a
+   * real account still takes and records as such */
+  source?: AgentSource | undefined;
 }
 
 // ---- typed data ---------------------------------------------------------------
@@ -267,24 +285,48 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   forgetMemory: { primary: "AccountMemory:Forget", fields: [{ name: "scope", type: "string" }, { name: "what", type: "string" }, NONCE] },
   setMemoryRules: { primary: "AccountMemory:Rules", fields: [{ name: "scope", type: "string" }, { name: "learn", type: "string" }, { name: "ask", type: "string" }, { name: "share", type: "string" }, NONCE] },
   setDesk: { primary: "AccountDesk:Set", fields: [{ name: "desk", type: "string" }, { name: "change", type: "string" }, { name: "value", type: "string" }, NONCE] },
+  issueSpendToken: { primary: "AccountToken:Issue", fields: [{ name: "agent", type: "address" }, { name: "rail", type: "string" }, { name: "instrument", type: "string" }, { name: "counterparty", type: "string" }, { name: "maxAmount", type: "string" }, { name: "currency", type: "string" }, { name: "perUseMax", type: "string" }, { name: "uses", type: "uint64" }, { name: "validUntil", type: "uint64" }, { name: "atOnce", type: "string" }, { name: "purpose", type: "string" }, { name: "env", type: "string" }, NONCE] },
+  revokeSpendToken: { primary: "AccountToken:Revoke", fields: [{ name: "token", type: "string" }, { name: "reason", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };
+/** an owner's order, change, close or leverage at a PAPER account may say so: one more signed field, before the nonce, and then the
+ * signed text says "Paper · no real money" instead of "Live · real money" (the page prepares it so at a paper venue; the door refuses it
+ * at a real one). One that does not say so signs as it always has: the stronger text, which still holds at a paper account */
+const PAPER_FIELD: Field = { name: "paper", type: "string" };
+const PAPER_TYPES: ReadonlySet<string> = new Set(["liveOrder", "liveAmend", "liveClose", "liveLeverage"]);
 
 /** the fields an owner action signs: its type's — and, on a spending approval that names the intent it answers, the intent's id before the
- * nonce. An approval that names none signs as it always has, so every limit signed before there was an `intent` field still verifies */
+ * nonce; on an order at a paper account that says so, `paper` before the nonce. One that names neither signs as it always has, so every
+ * instruction signed before there was such a field still verifies */
 function fieldsOf(action: OwnerAction): Field[] {
   const fields = OWNER_FIELDS[action.type].fields;
-  return action.type === "approveSpend" && action.intent !== undefined ? [...fields.slice(0, -1), INTENT_FIELD, NONCE] : fields;
+  if (action.type === "approveSpend" && action.intent !== undefined) return [...fields.slice(0, -1), INTENT_FIELD, NONCE];
+  if (PAPER_TYPES.has(action.type) && (action as { paper?: unknown }).paper !== undefined) return [...fields.slice(0, -1), PAPER_FIELD, NONCE];
+  return fields;
 }
 
 /** what reaches a real venue: its signed text says "real money" */
 const LIVE_TYPES: ReadonlySet<string> = new Set(["liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "liveEarn"]);
 /** what the owner's signature says about the money: a live move is real money, and the signed text says so */
 export const LIVE_CHAIN = "Live · real money";
+/** the signed text of an owner's order at a paper account that says so, and of a test-environment spend token: no real money */
+export const PAPER_CHAIN = "Paper · no real money";
+/** the text an owner's signature carries about the money, by the action: real money at a live venue (a paper account's order that says so
+ * excepted), a live spend token; otherwise the account's own simulation */
+export function chainOf(action: OwnerAction): string {
+  if (LIVE_TYPES.has(action.type)) return PAPER_TYPES.has(action.type) && (action as { paper?: unknown }).paper === "true" ? PAPER_CHAIN : LIVE_CHAIN;
+  if (action.type === "issueSpendToken") return action.env === "live" ? LIVE_CHAIN : PAPER_CHAIN;
+  return ACCOUNT_CHAIN;
+}
 
 const AGENT_TYPE = { Agent: [{ name: "source", type: "string" }, { name: "actionHash", type: "bytes32" }, { name: "nonce", type: "uint64" }] } as const;
-const AGENT_SOURCE = "sim";
+/** what an agent's signature says it signs for: the simulation (`sim`) or the owner's real account (`real`). A seat signs with the one its
+ * account is (mcp.ts reads it from /api/account; the desk's seats are the real account's); the real account recovers a signature made
+ * for the simulation too, and its ledger row says which it was */
+export type AgentSource = "sim" | "real";
+export const AGENT_SOURCES: readonly AgentSource[] = ["sim", "real"];
+const AGENT_SOURCE: AgentSource = "sim";
 
 export interface TypedData {
   domain: TypedDataDomain;
@@ -319,10 +361,14 @@ const AGENT_TEXT: Partial<Record<AgentAction["type"], string[]>> = {
   agentRemember: ["id", "topic", "text", "how"],
   agentForget: ["id"],
   agentDeskSay: ["lead", "kind", "text"],
+  agentUseToken: ["token", "counterparty", "amount", "currency"],
+  agentTokenDone: ["use"],
 };
 /** text fields an agent request MAY carry (when it does, they are text too, and signed like the rest) */
 const AGENT_OPTIONAL: Partial<Record<AgentAction["type"], string[]>> = {
   agentLiveOrder: ["stopPrice", "tif", "postOnly", "reduceOnly", "extendedHours", "trailPercent", "trailPrice", "takeProfit", "stopLoss"],
+  agentAsk: ["counterparty"],
+  agentUseToken: ["request"],
 };
 
 export function malformed(action: Action): string | null {
@@ -387,7 +433,7 @@ export function seatOrderAction(o: SeatOrder): Omit<Extract<AgentAction, { type:
 export function ownerTypedData(action: OwnerAction): TypedData {
   const def = OWNER_FIELDS[action.type];
   const fields = [CHAIN_FIELD, ...fieldsOf(action)];
-  return { domain: ACCOUNT_DOMAIN, types: { [def.primary]: fields }, primaryType: def.primary, message: messageOf(fields, { ...action, accountChain: LIVE_TYPES.has(action.type) ? LIVE_CHAIN : ACCOUNT_CHAIN }) };
+  return { domain: ACCOUNT_DOMAIN, types: { [def.primary]: fields }, primaryType: def.primary, message: messageOf(fields, { ...action, accountChain: chainOf(action) }) };
 }
 
 /** the fields of an owner action in signing order, as text: what the approval surface renders */
@@ -401,11 +447,12 @@ export function agentActionHash(action: AgentAction): Hex {
   return keccak256(stringToHex(canonical(action)));
 }
 
-function agentTypedData(action: AgentAction): { domain: TypedDataDomain; types: typeof AGENT_TYPE; primaryType: "Agent"; message: { source: string; actionHash: Hex; nonce: bigint } } {
-  return { domain: AGENT_DOMAIN, types: AGENT_TYPE, primaryType: "Agent", message: { source: AGENT_SOURCE, actionHash: agentActionHash(action), nonce: BigInt(action.nonce) } };
+function agentTypedData(action: AgentAction, source: AgentSource = AGENT_SOURCE): { domain: TypedDataDomain; types: typeof AGENT_TYPE; primaryType: "Agent"; message: { source: string; actionHash: Hex; nonce: bigint } } {
+  return { domain: AGENT_DOMAIN, types: AGENT_TYPE, primaryType: "Agent", message: { source, actionHash: agentActionHash(action), nonce: BigInt(action.nonce) } };
 }
 
-/** one id for one instruction: the EIP-712 digest. The idempotency key, the thing an approval names, the ledger's reference */
+/** one id for one instruction: the EIP-712 digest. The idempotency key, the thing an approval names, the ledger's reference. An agent's
+ * instruction has one digest whichever source its signature was made for: the same request is the same request */
 export function actionHash(action: Action): Hex {
   // viem's typed-data generics want literal types; these are built at run time
   return isOwnerAction(action) ? hashTypedData(ownerTypedData(action) as never) : hashTypedData(agentTypedData(action) as never);
@@ -428,9 +475,13 @@ export async function cosign(key: SimKey, action: OwnerAction): Promise<Sig> {
   return toSig(await key.account.signTypedData(ownerTypedData(action) as never));
 }
 
-export async function signAgent(key: SimKey, action: AgentAction): Promise<Envelope> {
-  return { action, nonce: action.nonce, signature: toSig(await key.account.signTypedData(agentTypedData(action) as never)) };
+/** an agent's signature, made for the simulation unless its seat says it signs for the real account (`source`), which the envelope then says */
+export async function signAgent(key: SimKey, action: AgentAction, source: AgentSource = AGENT_SOURCE): Promise<Envelope> {
+  return { action, nonce: action.nonce, signature: toSig(await key.account.signTypedData(agentTypedData(action, source) as never)), ...(source !== AGENT_SOURCE ? { source } : {}) };
 }
+
+/** the source an envelope's agent signature was made for: what it says, or the simulation's */
+export const sourceOf = (e: Pick<Envelope, "source">): AgentSource => (e.source === "real" ? "real" : AGENT_SOURCE);
 
 /** what a device key signs: the typed data as canonical JSON (bigints as decimal strings). The browser builds the same string from the fields it shows */
 export function deviceSigningInput(action: OwnerAction): string {
@@ -443,20 +494,22 @@ export function signDevice(key: SimKey, action: OwnerAction): DeviceSig {
   return { kid: key.kid, es256: es256Sign(key.p256, deviceSigningInput(action)) };
 }
 
-/** who signed: a lower-case address for an EOA, `device:<kid>` for a device key. `null` when the signature does not check out */
-export async function signerOf(action: Action, sig: AnySig, devices: ReadonlyMap<string, Jwk> = new Map()): Promise<string | null> {
+/** who signed: a lower-case address for an EOA, `device:<kid>` for a device key. `null` when the signature does not check out. An agent's
+ * signature is recovered under `source` (the simulation's label unless said) */
+export async function signerOf(action: Action, sig: AnySig, devices: ReadonlyMap<string, Jwk> = new Map(), source: AgentSource = AGENT_SOURCE): Promise<string | null> {
   try {
     if (isDeviceSig(sig)) {
       if (!isOwnerAction(action)) return null;
       const jwk = devices.get(sig.kid);
       return jwk && es256Verify(jwk, deviceSigningInput(action), sig.es256) ? `device:${sig.kid}` : null;
     }
-    const data = isOwnerAction(action) ? ownerTypedData(action) : agentTypedData(action);
+    const data = isOwnerAction(action) ? ownerTypedData(action) : agentTypedData(action, source);
     return (await recoverTypedDataAddress({ ...(data as never as Parameters<typeof recoverTypedDataAddress>[0]), signature: toHex(sig) })).toLowerCase();
   } catch {
     return null;
   }
 }
+
 
 // ---- nonces ---------------------------------------------------------------------
 

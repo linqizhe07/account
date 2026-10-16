@@ -42,9 +42,13 @@ export interface StatementLine {
   ref?: string | undefined;
   /** at a PAPER account (the venue's own test environment): a rehearsal, no real money in it */
   paper?: true | undefined;
+  /** an agent's use of a spend token (account/tokens.ts): the token's id */
+  token?: string | undefined;
 }
 
 const qty = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 8 });
+/** how a line says an agent did it: on the owner's yes, with a spend token, or inside its limit */
+const agentBy = (name: string, o: { card?: string | undefined; token?: string | undefined; exitOf?: { kind: string; order: string } | undefined }): string => `${name}, ${o.exitOf ? `${o.exitOf.kind} of ${o.exitOf.order}` : o.token ? `with token ${o.token}` : o.card ? "approved by you" : "inside its limit"}`;
 
 /** A price (or a trail, a take-profit, a stop) as a person reads it in a sentence the server writes: grouped the en-US way, at the figure's
  * own places (at most ten), trailing zeros dropped — 63226.6 is "63,226.6", 0.00001234 is "0.00001234", 66000 is "66,000". Only for words:
@@ -75,7 +79,7 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     kind: o.side,
     account: o.venue,
     accountName: o.venueName,
-    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${figure(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${figure(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${figure(o.stopPrice ?? 0)}, limit ${figure(o.limitPrice ?? 0)}` : o.type === "trailing_stop" ? `trailing stop ${o.trailPercent !== undefined ? `${figure(o.trailPercent)}%` : figure(o.trailPrice ?? 0)}` : "market"}${o.exitOf ? ` · ${o.exitOf.kind} of ${o.exitOf.order}` : ""}${o.takeProfit !== undefined || o.stopLoss !== undefined ? ` · exits ${[o.takeProfit !== undefined ? `take-profit ${figure(o.takeProfit)}` : "", o.stopLoss !== undefined ? `stop-loss ${figure(o.stopLoss)}` : ""].filter(Boolean).join(", ")}` : ""}${o.avgPrice ? ` · at ${figure(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}`,
+    description: `${cap(o.side)} ${qty(o.qty)} ${o.base}${o.name && o.name !== o.base ? ` · ${o.name}` : ""} · ${o.type === "limit" ? `limit ${figure(o.limitPrice ?? 0)}` : o.type === "stop" ? `stop at ${figure(o.stopPrice ?? 0)}` : o.type === "stop_limit" ? `stop at ${figure(o.stopPrice ?? 0)}, limit ${figure(o.limitPrice ?? 0)}` : o.type === "trailing_stop" ? `trailing stop ${o.trailPercent !== undefined ? `${figure(o.trailPercent)}%` : figure(o.trailPrice ?? 0)}` : "market"}${o.exitOf ? ` · ${o.exitOf.kind} of ${o.exitOf.order}` : ""}${o.takeProfit !== undefined || o.stopLoss !== undefined ? ` · exits ${[o.takeProfit !== undefined ? `take-profit ${figure(o.takeProfit)}` : "", o.stopLoss !== undefined ? `stop-loss ${figure(o.stopLoss)}` : ""].filter(Boolean).join(", ")}` : ""}${o.avgPrice ? ` · at ${figure(Number(o.avgPrice.toPrecision(10)))}` : ""}${done}${o.token ? ` · token ${o.token}` : ""}`,
     amountUsd: Number((sign * filled).toFixed(2)) || 0,
     worthUsd: Number(notionalOf(o, o.qty, o.limitPrice ?? o.price).toFixed(2)),
     ...(o.feeUsd !== undefined ? { feeUsd: o.feeUsd } : {}),
@@ -84,10 +88,11 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     status: o.unfollowed ? (!o.note || o.note.startsWith("not followed since a restart") ? "not followed since a restart" : "not followed") : o.walletTxs && !o.ref && o.status === "pending" ? "waiting for wallet" : o.status,
     // a bracket's exit was placed by the venue when its entry filled: it went through no limit and no card of its own, so it is named as the
     // exit of the entry it closes (that entry's line says how the agent placed it)
-    by: o.authority === "agent" ? `${agentName(o.agent ?? "")}, ${o.exitOf ? `${o.exitOf.kind} of ${o.exitOf.order}` : o.card ? "approved by you" : "inside its limit"}` : "You",
+    by: o.authority === "agent" ? agentBy(agentName(o.agent ?? ""), o) : "You",
     ...(o.authority === "agent" && o.agent ? { agent: o.agent, agentName: agentName(o.agent) } : {}),
     ...(o.ref ? { ref: o.ref } : {}),
     ...(o.paper ? { paper: true as const } : {}),
+    ...(o.token ? { token: o.token } : {}),
   };
 }
 
@@ -107,14 +112,15 @@ export function paymentLine(p: Payment, run: string, name: (venue: string) => st
     account: p.from,
     accountName: name(p.from),
     ...(p.to !== p.from ? { to: p.to, toName: name(p.to) } : {}),
-    description: `${cap(kind)} ${p.amountUsd} ${p.sourceToken}${p.token !== p.sourceToken ? ` → ${p.token}` : ""}${where}${p.live?.network ? ` · ${p.live.network}${p.live.toNetwork ? ` → ${p.live.toNetwork}` : ""}` : ""}${p.live?.tool ? ` · via ${p.live.tool}` : ""}`,
+    description: `${cap(kind)} ${p.amountUsd} ${p.sourceToken}${p.token !== p.sourceToken ? ` → ${p.token}` : ""}${where}${p.live?.network ? ` · ${p.live.network}${p.live.toNetwork ? ` → ${p.live.toNetwork}` : ""}` : ""}${p.live?.tool ? ` · via ${p.live.tool}` : ""}${p.spendToken ? ` · token ${p.spendToken}` : ""}`,
     amountUsd: Number(p.amountUsd.toFixed(2)),
     // a fee only once the money has moved; a bridge's is what it really cost: what did not arrive, or its quoted fee if that was more
     ...(p.status === "settled" && p.feeUsd ? { feeUsd: p.live?.kind === "bridge" ? Number(Math.max(p.feeUsd, p.amountUsd - p.receiveUsd).toFixed(2)) : p.feeUsd } : {}),
     status: p.status === "authorized" ? "waiting for wallet" : p.status,
-    by: p.authority === "agent" ? `${agentName(p.agent ?? "")}, ${p.card ? "approved by you" : "inside its limit"}` : "You",
+    by: p.authority === "agent" ? agentBy(agentName(p.agent ?? ""), { card: p.card, token: p.spendToken }) : "You",
     ...(p.authority === "agent" && p.agent ? { agent: p.agent, agentName: agentName(p.agent) } : {}),
     ...(p.live?.txHash ? { ref: p.live.txHash } : leg?.ref ? { ref: leg.ref } : {}),
+    ...(p.spendToken ? { token: p.spendToken } : {}),
   };
 }
 

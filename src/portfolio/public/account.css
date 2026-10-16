@@ -66,6 +66,24 @@
 .old details.pay .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
 .old #everything { margin-right: 10px; }
 
+/* spend tokens (ui/spend-tokens.js), under an agent in the Agents sheet and under an account on Venues: one line each, its standing a chip,
+   who holds its lines said plainly — a live token's in the warning colour, since the Account alone holds it */
+.tok-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tok { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: var(--radius-s); background: var(--surface); font-size: 13px; }
+.tok-t { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tok-l { color: var(--dim); overflow-wrap: anywhere; }
+.tok-l i { color: var(--text); }
+.tok-h { display: inline-block; margin-left: 4px; }
+.tok-h.warn { color: var(--warn-text); font-weight: 600; }
+.tok-acts { display: flex; gap: 4px; align-items: center; }
+.tok-over summary { cursor: pointer; }
+.tok-over .tok { opacity: 0.75; margin-top: 6px; }
+.old tr.tok-row td { padding-top: 0; }
+.tok-proposed { margin: -4px 0 0; }
+.tok-proposed .link { margin-left: 4px; }
+.pf-tokens { display: flex; flex-direction: column; gap: 12px; }
+.pf-tokens .pf-tok-v { display: flex; flex-direction: column; gap: 6px; }
+
 /* the statement's lines */
 .old table.stmt th { font-size: 12px; font-weight: 600; color: var(--dim); text-align: left; padding-bottom: 8px; }
 .old table.stmt th.r { text-align: right; }

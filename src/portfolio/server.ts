@@ -60,6 +60,8 @@
  *   GET  /api/account/quotes?pairs=okx|BTC/USDT,…        fresh prices for up to twelve markets
  *   GET  /api/account/sellable                           everything held that is not a dollar, and what selling it would sign
  *   GET  /api/account/agents                             the agents one by one: keys, limits, cards, orders, payments, wallets, intents
+ *   GET  /api/account/tokens?agent=                      the spend tokens (account/tokens.ts): every one, or one agent key's
+ *   POST /api/account/tokens/stop {token | "*"}          the free stop of a spend token, or of every one: tightening only, no signature
  *   GET  /api/account/desk                               THE DESK (account/desk.ts): the account's own agents, as the page draws them — the
  *                                                        objective, the seats and their standing at the door, the session, the equity
  *                                                        and its curve, the leads, the tape, the room
@@ -602,6 +604,24 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     answerOf(res, await svc.agents());
   }));
 
+  // SPEND TOKENS (account/tokens.ts): every token, or one agent key's (`agent`: its address) — what a seat reads without the MCP
+  // (portfolio_tokens reads this). A read: nothing moves
+  app.get("/api/account/tokens", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { agent: 42 });
+    if (!q) return;
+    res.json({ ok: true, tokens: svc.account!.tokens.view(Date.parse(svc.now()), q.agent || undefined) });
+  }));
+  // the free stop: one token (`token`: its id) or every one ("*"), stopped at once — tightening only, so no signature, as POST /api/mode
+  // guard needs none. A signed revokeSpendToken then closes the rail's side
+  app.post("/api/account/tokens/stop", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const { token } = req.body as { token?: unknown };
+    if (typeof token !== "string" || !(token === "*" || /^tok-\d{1,6}$/.test(token))) return void bad(res, 'need {token: "tok-0003"} or {token: "*"}');
+    const r = await svc.stopTokens(token, "the page");
+    res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : r);
+  }));
+
   // THE DESK (account/desk.ts): the account's own agents — the view the page draws (the objective, the seats and their standing, the
   // session, the equity, the leads, the tape, the room), what hiring offers (the roles and their charters, the house seats' keys, the
   // brain's standing), and a seat's own read of it (its charter, the objective, the room's last lines: portfolio_desk)
@@ -895,7 +915,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1);
   });
   const r = service.restored;
-  if (r) console.log(`restored from ${r.runs} earlier run${r.runs === 1 ? "" : "s"} (since ${r.from}): ${r.owner ? "your browser is still the owner" : "no owner yet"} · ${r.agents} agent${r.agents === 1 ? "" : "s"} · ${r.limits} limit${r.limits === 1 ? "" : "s"} · ${r.venues.length} venue${r.venues.length === 1 ? "" : "s"} connecting again · ${r.orders + r.payments} in flight followed again · ${r.mode}${r.skipped.length ? `\n  not brought back: ${r.skipped.join("; ")}` : ""}\n  (--fresh starts the account from nothing)`);
+  if (r) console.log(`restored from ${r.runs} earlier run${r.runs === 1 ? "" : "s"} (since ${r.from}): ${r.owner ? "your browser is still the owner" : "no owner yet"} · ${r.agents} agent${r.agents === 1 ? "" : "s"} · ${r.limits} limit${r.limits === 1 ? "" : "s"} · ${r.tokens} spend token${r.tokens === 1 ? "" : "s"} · ${r.venues.length} venue${r.venues.length === 1 ? "" : "s"} connecting again · ${r.orders + r.payments} in flight followed again · ${r.mode}${r.skipped.length ? `\n  not brought back: ${r.skipped.join("; ")}` : ""}\n  (--fresh starts the account from nothing)`);
   const owned = (service.account?.state.owners.length ?? 0) > 0;
   if (liveWrites) console.log(`TRADING IS ON · real orders and movements at the accounts you connect · at most $${liveWrites.capUsd} an order or a movement (--live-cap; --read-only turns it off) · every one is signed by you, or inside a limit you signed for an agent · money leaves a venue only for a place shown to be yours${owned ? "" : `\n  pairing code: ${liveWrites.pairingCode} — the first browser becomes the owner only with this code, typed on the page`}`);
   else if (!classic) console.log(`read-only: nothing is traded or moved from this server (started with --read-only)${owned ? "" : `\n  pairing code: ${code} — the first browser becomes the owner only with this code, typed on the page`}`);
@@ -907,6 +927,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!classic && service.account) service.watchPaper();
   // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
   if (!classic && service.account) service.watchDesk();
+  // the spend tokens' watch (account/tokens.ts): what has ended ends, in the door's line — only here, never in a read
+  if (!classic && service.account) service.watchTokens();
   const stop = () => srv.close().then(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);

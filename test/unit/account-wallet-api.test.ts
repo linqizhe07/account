@@ -17,7 +17,10 @@ import type { PublicSource } from "../../src/portfolio/live/public-markets.ts";
 import type { Candle, LiveTrader, Market, MarketStats, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import type { LiveWriter } from "../../src/portfolio/live/writes.ts";
 import { startPortfolioServer, type PortfolioServerHandle } from "../../src/portfolio/server.ts";
-import { PortfolioService } from "../../src/portfolio/service.ts";
+import { loadOpenness, PortfolioService } from "../../src/portfolio/service.ts";
+
+/** the fixture's dial, its agents' session running through this test: the fixture's own session has ended, and these tests run on the real clock */
+const SESSION = { ...(loadOpenness() as object), sessionExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() };
 
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const DAY = 86_400_000;
@@ -180,7 +183,7 @@ beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "account-wallet-api-"));
   const proofs = new WalletProofs();
   proofs.keep({ address: PROVEN, wallet: "Rabby", at: Date.now(), message: "the account's sentence", signature: "0x00" });
-  svc = await PortfolioService.create({ home, venues: "frontline", real: true, liveWrites: { capUsd: 5_000, pairingCode: "K7QX-M2PA" }, publicMarkets, liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined, proofs }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
+  svc = await PortfolioService.create({ home, venues: "frontline", real: true, openness: SESSION, liveWrites: { capUsd: 5_000, pairingCode: "K7QX-M2PA" }, publicMarkets, liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined, proofs }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
   server = await startPortfolioServer({ port: 0, service: svc, snapshotMs: 3_600_000 });
   ok(await own({ type: "connectVenue", venue: "ex", connector: "live:standin-wallet-ex", label: "Ex", credentialRef: "" }));
   ok(await own({ type: "connectVenue", venue: "brk", connector: "live:standin-wallet-broker", label: "Broker", credentialRef: "" }));
@@ -349,7 +352,7 @@ describe("the net worth curve", () => {
   it("takes points on the timer and stops at close; 0 takes none, not even on a connection", async () => {
     const h = mkdtempSync(join(tmpdir(), "account-wallet-api-timer-"));
     try {
-      const s = await PortfolioService.create({ home: h, venues: "frontline", real: true, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
+      const s = await PortfolioService.create({ home: h, venues: "frontline", real: true, openness: SESSION, publicMarkets: [], liveDeps: { http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } });
       const off = await startPortfolioServer({ port: 0, service: s, snapshotMs: 0 });
       await s.exchange(await signOwner(owner, { type: "connectVenue", venue: "ex", connector: "live:standin-wallet-ex", label: "Ex", credentialRef: "", nonce: nonce() }));
       await off.close();
