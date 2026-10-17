@@ -72,6 +72,17 @@ const Owner = (() => {
 
   const prepare = (draft) => post("/api/account/prepare", { draft });
   const submit = async (prepared) => post("/api/exchange", { action: prepared.action, nonce: prepared.action.nonce, signature: await sign(prepared) });
+  /** a prepared action signed exactly as submit() signs it, sent to another of the account's own paths with something beside it that is
+      never part of what is signed — the one use today: a brain's API key, typed by the owner, sent once with the setBrainKey signature to
+      POST /api/account/brain-key as { envelope, apiKey }. The envelope is what /api/exchange gets ({ action, nonce, signature }), so the
+      account runs it through the same door; the extra fields ride beside it, never inside it, so /prepare never saw them and the ledger,
+      which keeps envelopes, never holds them. Only a path of this account (one starting "/api/account/") is accepted: a page script cannot
+      send what rides here anywhere else */
+  async function submitTo(path, prepared, extra = {}) {
+    if (!/^\/api\/account\/[a-z0-9/-]+$/.test(String(path))) return { status: 0, body: { ok: false, error: "Not a path of this account." } };
+    const envelope = { action: prepared.action, nonce: prepared.action.nonce, signature: await sign(prepared) };
+    return post(path, { ...extra, envelope });
+  }
   /** prepare, sign, send: what one button on the page does. Only a prepared action — fields to sign — is signed; a refusal in any shape is
       handed back as it came */
   async function act(draft) {
@@ -81,5 +92,5 @@ const Owner = (() => {
   /** a refusal as one sentence */
   const why = (r) => (r.body && r.body.refusal && r.body.refusal.message) || (r.body && r.body.error) || (r.body && r.body.result && r.body.result.message) || "";
 
-  return { ready, prepare, submit, act, why, get role() { return role; }, get kid() { return kid; } };
+  return { ready, prepare, submit, submitTo, act, why, get role() { return role; }, get kid() { return kid; } };
 })();

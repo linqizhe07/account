@@ -23,12 +23,54 @@
 .lv-tp span { color: var(--up); }
 .lv-sl::before { background: var(--down); }
 .lv-sl span { color: var(--down); }
-/* a mark at the very edge keeps its words inside the card */
-.lv-mark[style*="left:0"] span, .lv-mark[style*="left:0."] span, .lv-mark[style*="left:1."] span, .lv-mark[style*="left:2."] span { transform: none; }
-.lv-mark[style*="left:100"] span, .lv-mark[style*="left:9"] span { transform: translateX(-100%); }
+/* a mark at the very edge keeps its words inside the card. live.js writes each mark's place as exactly "left:<0.0–100.0>%", so these
+   match the START of that attribute: a substring match ("left:9" anywhere) also caught 9.0–9.9 %, a mark near the LEFT end, and pushed
+   its words out past the card's left edge */
+.lv-mark[style^="left:0"] span, .lv-mark[style^="left:1."] span, .lv-mark[style^="left:2."] span { transform: none; }
+.lv-mark[style^="left:9"]:not([style^="left:9."]) span, .lv-mark[style^="left:100"] span { transform: translateX(-100%); }
+/* THE MARKS' WORDS NEVER RUN INTO EACH OTHER. On one line, under their ticks, "Entry $62,486.20" ran into "TP $62,736.14" on a phone
+   (375 px: a 267 px track, the entry at the middle, the take-profit 42 % to its right, and each label about 90 px wide). Width is not the
+   whole cause: two marks can sit as close as the prices are (a wide stop and a tight target, or a price that ran far past one of them
+   squeezes the other two together), so no card width keeps one line clear — and the cards are never wide anyway (the grids are
+   auto-fill minmax(300px, 1fr): one is at most about 610 px). So, wherever the browser has :has() (Chrome and Safari for years, Firefox
+   since 121), each mark's words take their OWN row under the track, in price order from the top — the lowest price first: for a long the
+   stop, the entry, the target; for a short the target, the entry, the stop (live.js gives the card data-side). On the ladder, price
+   rises to the right, so the words step down from left to right like the marks themselves, and two rows can never overlap. A ladder
+   with fewer marks has fewer rows (a position with no stop and no target: one, as before), and the ladder grows by one row per mark
+   (:has). Each label also stays inside the track, by where its tick is: in the left quarter it starts at the tick, in the right quarter
+   it ends there, in between it is centred on it — a label is at most about 110 px, so this holds on any track wider than about 220 px
+   (a 375 px phone's is 267). Nothing here moves on a price tick: the marks are written with the card, and only the dot slides. */
+@supports selector(:has(*)) {
+  .lv-ladder:has(.lv-sl), .lv-ladder:has(.lv-tp) { height: 68px; }
+  .lv-ladder:has(.lv-sl):has(.lv-tp) { height: 82px; }
+  .lv-mark span { top: calc(18px + var(--lv-row, 0) * 14px); line-height: 14px; }
+  /* the rows: the lower-priced exit first (a long's stop, a short's target: row 0), the entry under it, the higher-priced exit last */
+  .lv-card[data-side="long"] .lv-ladder:has(.lv-sl) .lv-entry, .lv-card[data-side="short"] .lv-ladder:has(.lv-tp) .lv-entry { --lv-row: 1; }
+  .lv-card[data-side="long"] .lv-tp, .lv-card[data-side="short"] .lv-sl { --lv-row: 1; }
+  .lv-card[data-side="long"] .lv-ladder:has(.lv-sl) .lv-tp, .lv-card[data-side="short"] .lv-ladder:has(.lv-tp) .lv-sl { --lv-row: 2; }
+  /* inside the track: centred (above), starting at the tick in the left quarter (0–24.9 %), ending at it in the right one (75–100 %) */
+  .lv-mark[style^="left:0"] span, .lv-mark[style^="left:1"] span, .lv-mark[style^="left:2."] span, .lv-mark[style^="left:20"] span,
+  .lv-mark[style^="left:21"] span, .lv-mark[style^="left:22"] span, .lv-mark[style^="left:23"] span, .lv-mark[style^="left:24"] span,
+  .lv-mark[style^="left:3."] span, .lv-mark[style^="left:4."] span, .lv-mark[style^="left:5."] span, .lv-mark[style^="left:6."] span,
+  .lv-mark[style^="left:7."] span, .lv-mark[style^="left:8."] span, .lv-mark[style^="left:9."] span { transform: none; }
+  .lv-mark[style^="left:75"] span, .lv-mark[style^="left:76"] span, .lv-mark[style^="left:77"] span, .lv-mark[style^="left:78"] span,
+  .lv-mark[style^="left:79"] span, .lv-mark[style^="left:8"]:not([style^="left:8."]) span, .lv-mark[style^="left:9"]:not([style^="left:9."]) span,
+  .lv-mark[style^="left:100"] span { transform: translateX(-100%); }
+}
 .lv-now { position: absolute; left: 0; top: 10px; width: 100%; transform: translateX(calc(var(--x, 50) * 1%)); transition: transform 220ms cubic-bezier(.2, .8, .2, 1); pointer-events: none; }
 .lv-dot { position: absolute; left: -7px; top: 1px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--accent); }
 .lv-now-t { position: absolute; left: 0; top: -14px; transform: translateX(-50%); font-size: 12px; font-weight: 800; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--surface); padding: 0 4px; border-radius: 4px; }
+/* The marker as drawn above is a track-wide layer, and one moved right by up to its own width reaches up to twice the track's width: the
+   page counted that empty box as content, and on a phone (375 px) a lead's card on the Agents pane pushed the whole page about 165 px wider
+   than the screen (every sheet then opened zoomed out and off-centre). Where the browser has container units (every one the page supports), the ladder is the
+   container and the marker is no wide layer at all: a box of no width moved by --x percent of the ladder's own width (cqw) — still a
+   transform, still nothing laid out again — and its price label is held inside the track (left-aligned at the start, centred mid-way,
+   right-aligned at the end) instead of sticking out past the card's edge */
+@supports (width: 1cqw) {
+  .lv-ladder { container-type: inline-size; }
+  .lv-now { width: 0; transform: translateX(calc(var(--x, 50) * 1cqw)); }
+  .lv-now-t { transform: translateX(calc(var(--x, 50) * -1%)); }
+}
 /* the dot breathes while the page is live (opacity on its ring, the compositor's work); not under reduced motion */
 @keyframes lv-breathe { 0%, 100% { box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--accent); } 50% { box-shadow: 0 0 0 3px var(--surface), 0 0 0 7px color-mix(in srgb, var(--accent) 35%, transparent); } }
 .lv-dot { animation: lv-breathe 2.4s ease-in-out infinite; }

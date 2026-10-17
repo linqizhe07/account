@@ -37,15 +37,19 @@
    A read that comes after a gap (the pane put aside, the page hidden) draws what is now and replays nothing.
 
    THE REST OF THE PAGE, top to bottom: a header in the grammar of Hyperliquid's market bar (the desk, PAPER, its venue, the session's
-   state and clock; Equity, Target, Next cycle and the Brain as label-over-value stats; the owner's controls — Pause or Resume, Cycle now,
-   Autonomy Cards | Auto on paper, End); the "Waits for you" strip, only while a card of the desk's waits (each with Reject and Approve, the
+   state and clock; Equity, Target, Next cycle and the Brain as label-over-value stats — the Brain always a button, "Brain ›", that opens
+   the Brains sheet (ui/brains.js): every provider the account offers, a key typed once, the model, Test, and "Use this brain", one
+   signature; the owner's controls — Pause or Resume, Cycle now, Autonomy Cards | Auto on paper, End; an ended session's "Start again ·
+   auto on paper", ONE signature: setDesk resume carrying the autonomy, so the new session's first cycle already has it); the "Waits for you" strip, only while a card of the desk's waits (each with Reject and Approve, the
    same signature the Agents pane asks); the floor; eight role cards (each seat's standing, its duty, its latest line typed out as it
    lands, its one real number); the balance (the desk's equity curve, its closes as bars, the big figure rolling), the analysis (the focus
    market's chart and book, ui/chart.js and ui/book.js, and its leads as HL's positions table), the rules with the real numbers the hard
    checks use and the pipeline lit where the desk is working, and the room's stream.
    NO DESK YET: what each mode is in one sentence, then — two columns on a wide pane, one on a narrow one — the steps (the form) beside a
-   checklist read live from the first view (a paper account, a brain key: where the key goes, said exactly, with Copy — never a command
-   composed here, never a sample key — and Start) and what the superagent is (its eight seats, each with its duty). "Start the superagent"
+   checklist read live from the first view (a paper account, a brain key: typed in the Brains sheet from "3 · The brain", or the key file
+   the account names, with Copy — never a command composed here, never a sample key — and Start) and what the superagent is (its eight
+   seats, each with its duty). What is typed in the form survives the form being drawn again when a key saved meanwhile flips a brain to
+   ready (core formKeep). "Start the superagent"
    signs in order: approveAgent for each house seat, approveSpend for each seat that trades, setDesk hire, setDesk autonomy {paper: true}
    (sgSetupSteps). The owner starts it: the brain's calls cost money. While the owner signs, the frame on screen is held (SG.signing): the
    feed's beat finds the desk hired before the last step is answered, and the form must stay to say that answer; a refusal after the hire
@@ -245,7 +249,8 @@ function sgTidy(text) {
     .replace(/→\s*([A-Z]{3,})\b/g, (all, r) => (SG_TO[r] ? `— to ${SG_TO[r]}` : all))
     .replace(/\$(\d{1,3}(?:,\d{3}){2,}(?:\.\d+)?)/g, (all, n) => sgVol(Number(n.replace(/,/g, ""))))
     .replace(/(^|[\s(:])-(?=[\d$])/g, "$1−")
-    .replace(/(^|[^\w.,$-])(\d{5,})(\.\d+)?(?![\w,])/g, (all, pre, i, d) => `${pre}${Number(i).toLocaleString("en-US")}${d || ""}`);
+    // a figure is grouped as a person reads it — but never a port after a host ("localhost:11434" stays as it is)
+    .replace(/(^|[^\w.,$:-]|(?<![\w\]]):)(\d{5,})(\.\d+)?(?![\w,])/g, (all, pre, i, d) => `${pre}${Number(i).toLocaleString("en-US")}${d || ""}`);
 }
 /* how a close was decided, as a person says it: "TP HIT at 64000 (+1.52%)" → "at the take-profit (64,000, +1.52%)" */
 function sgExitWords(why) {
@@ -650,8 +655,8 @@ function sgFloorState(feed, view, catalog, extra = {}) {
     stale: extra.stale && extra.stale.since ? { since: String(extra.stale.since) } : null,
     working: feed && feed.working ? { role: feed.working.role, what: feed.working.what, ...(feed.working.lead ? { lead: feed.working.lead } : {}) } : null,
     inFlight: num(feed && feed.inFlight),
-    // the brain's standing in a word or two where the account says what to fix (the floor's cabinet is small: the header's "How to fix ›"
-    // carries the rest), its own sentence where it does not
+    // the brain's standing in a word or two where the account says what to fix (the floor's cabinet is small: the header's "Brain ›" opens
+    // the Brains sheet, which carries the rest), its own sentence where it does not
     brain: feed && feed.brain ? { ok: !!feed.brain.ok, ...(feed.brain.ok ? {} : feed.brain.fix && SG_FIX_SHORT[feed.brain.fix.code] ? { why: SG_FIX_SHORT[feed.brain.fix.code] } : feed.brain.why ? { why: String(feed.brain.why) } : {}) } : { ok: false, why: "not read yet" },
     focus: sgFocusState(feed, extra.candles),
     scan: scan ? { at: scan.at, rows: (scan.rows || []).map((r) => ({ symbol: r.symbol, ...(Number.isFinite(Number(r.changePct24h)) ? { changePct24h: Number(r.changePct24h) } : {}), ...(Number.isFinite(Number(r.volumeUsd24h)) ? { volumeUsd24h: Number(r.volumeUsd24h) } : {}) })), picked: (scan.picked || []).map((p) => p.symbol) } : null,
@@ -668,10 +673,13 @@ function sgFloorState(feed, view, catalog, extra = {}) {
 
 // ---- what the owner signs --------------------------------------------------------------------------------------------------------------
 
-/** a control's draft: pause, resume (also a new session after the end), cycle, end, autonomy on or off — each one setDesk */
+/** a control's draft: pause, resume (also a new session after the end), cycle, end, autonomy on or off — each one setDesk. `on`: for
+ * autonomy, on or off; for resume, { autonomy: true } starts the new session after the end with its autonomy on paper in the same
+ * signature (the desk takes it only at a paper account, else refuses the whole resume) — a plain resume's value stays "" */
 function sgControlDraft(act, on) {
   const set = (change, value = "") => ({ type: "setDesk", desk: "desk", change, value });
   if (act === "autonomy") return set("autonomy", JSON.stringify({ paper: !!on }));
+  if (act === "resume" && on && typeof on === "object" && on.autonomy) return set("resume", JSON.stringify({ autonomy: { paper: true } }));
   return ["pause", "resume", "cycle", "end"].includes(act) ? set(act) : null;
 }
 
@@ -728,10 +736,17 @@ function sgSetupWords(f, catalog, venue, brain) {
   const trading = house.filter((r) => r.trades);
   const per = sgPer(venue, f.maxRiskPct);
   const brains = (catalog && (catalog.brains || [catalog.brain])) || [];
-  const b = brains.find((x) => x && brain && typeof brain === "object" && x.id === brain.provider) || brains[0] || null;
+  // the brain the form names — its draft's provider, or, where the draft is a sentence (no model yet), the provider the form picked: never
+  // another brain's standing said of it
+  const want = brain && typeof brain === "object" ? brain.provider : f && f.provider;
+  const b = brains.find((x) => x && want && x.id === want) || brains[0] || null;
   const names = (list) => list.map((r) => r.name).join(", ");
-  // the brain's reason is said once, where its key goes (3 · The brain): here only that it cannot think yet
-  const think = !b ? "" : b.ok ? `The brain's calls (${b.label}${brain && typeof brain === "object" ? ` · ${sgModelName(brain.model)}` : ""}) are billed to your key.` : "The brain cannot think yet: see 3 · The brain. Until it can, no lead is made up, and the plan's exits still run.";
+  // the brain's reason is said once, where its key goes (3 · The brain): here only that it cannot think yet. Whether it can is judged with
+  // the model the form names (sgReadyWith): a server on this machine whose only want is a model is ready with one, once Start signs it
+  const model = brain && typeof brain === "object" ? String(brain.model || "") : "";
+  const ready = !!b && sgReadyWith(b, model);
+  const named = `${b ? b.label : ""}${model ? ` · ${sgModelName(model)}` : ""}`;
+  const think = !b ? "" : !ready ? "The brain cannot think yet: see 3 · The brain. Until it can, no lead is made up, and the plan's exits still run." : sgKeyOptional(b) ? `The brain (${named}) needs no key. ${sgBilledWords(b)}${b.ok ? "" : ` It is ready with ${model} once you sign.`}` : `The brain's calls (${named}) are billed to your key.`;
   return `Starting signs ${house.length + trading.length + 1} things, one after another: ${house.length} house seats let in (${names(house)}); a trading limit for ${names(trading)} at ${venue.name} — up to ${money(per)} an order and ${money(per * SG_BUDGET_TIMES)} in all, about ${SG_BUDGET_TIMES} orders, for ${SG_SEAT_DAYS} days; and the desk hired with its autonomy on paper, in one signature. From then on the desk's own orders at ${venue.name} are placed at once, without a card for you — paper money — each inside its seat's limit. ${think} You can pause or end it at any time, or turn it back to cards: its orders then wait for you on this page, in the Waits for you strip, and under Portfolio.`;
 }
 
@@ -1049,15 +1064,19 @@ const SG_FIX_WORDS = { "no-key": "Not ready", example: "Not ready", unusable: "K
 /* …and as the floor's brain cabinet says it, in a few words (a key file with the empty template or a sample in it, or a sample key in the
    service's environment, is no key) */
 const SG_FIX_SHORT = { "no-key": "no key", example: "no key", unusable: "key file unusable", rejected: "key refused", env: "no key" };
-/** the brain as a header stat: its model as people say it, its calls (and how many the API refused), what they cost — or, when it cannot
- * think, a word in amber and "How to fix ›", which opens the account's own fix */
+/** the brain as a header stat, and always a button ("Brain ›") that opens the Brains sheet on it: its model as people say it, its calls
+ * (and how many got no answer at all — the account's spend.failed counts every call that came back with nothing: a key refused, a rate
+ * limit, an endpoint that could not be reached; it cannot tell those apart, so neither does this: "not answered", as the account's own
+ * evening report says it, never "refused"), what they cost — or, when it cannot think, a word in amber with the account's reason one
+ * pointer away; the sheet says the rest, takes a key, switches the brain */
 function sgBrainStat(b, catalog) {
   if (!b) return "";
+  const stat = (value, cls) => `<button type="button" class="sg-stat sg-brain${cls}" data-sg-act="brain" data-fk="sg:brain" title="The desk's brain: switch the model, add or test a key"><span class="sg-stat-l">Brain ›</span><span class="sg-stat-v tab-nums">${value}</span></button>`;
   if (!b.ok) {
     const code = b.fix && b.fix.code;
     const word = SG_FIX_WORDS[code] || "Not ready";
     const why = (b.fix && b.fix.words) || b.why || SG_NO_WHY;
-    return sgStat("Brain", `<span class="sg-warn-t" title="${esc(why)}">${esc(word)}</span> <button type="button" class="sg-link" data-sg-act="fix" data-fk="sg:fix">How to fix ›</button>`, "sg-brain sg-no");
+    return stat(`<span class="sg-warn-t" title="${esc(why)}">${esc(word)}</span>`, " sg-no");
   }
   // a scripted brain is a script whatever model it is filed under; a model is named from the catalog's list of its own provider (or of any,
   // where the provider is not known), else as people say its id
@@ -1069,7 +1088,7 @@ function sgBrainStat(b, catalog) {
   const sp = b.spend || {};
   const tokens = num(sp.inputTokens) + num(sp.outputTokens);
   const cost = num(sp.usd) === 0 && tokens === 0 ? "no cost recorded" : `~${money(sp.usd)}`;
-  return sgStat("Brain", `${esc(name)} · ${esc(plural(num(sp.calls), "call"))}${num(sp.failed) > 0 ? ` · ${esc(String(num(sp.failed)))} refused` : ""} · ${esc(cost)}${num(sp.unpricedTokens) ? ` + ${esc(String(sp.unpricedTokens))} tokens unpriced` : ""}`, "sg-brain");
+  return stat(`${esc(name)} · ${esc(plural(num(sp.calls), "call"))}${num(sp.failed) > 0 ? ` · ${esc(String(num(sp.failed)))} not answered` : ""} · ${esc(cost)}${num(sp.unpricedTokens) ? ` + ${esc(String(sp.unpricedTokens))} tokens unpriced` : ""}`, "");
 }
 
 /** where a brain's key goes, said by the account (brain.fix): its sentence, the key file's path with Copy, the command (when it gives one)
@@ -1083,15 +1102,32 @@ function sgFixHtml(b) {
   // needed (the account's sentence says when it reads the key)
   return `<div class="sg-fix"><p class="sg-fix-w">${esc(fix.words || (b && b.why) || SG_NO_WHY)}</p>${fix.command ? row("Run, in Terminal", fix.command, "Copy the command") : ""}${fix.file ? row("The key file", fix.file, "Copy the path") : ""}${fix.restart ? '<p class="sg-dim">The account reads the key when it starts: restart it once the key is in place.</p>' : ""}</div>`;
 }
-/* the fix in a sheet, from the header's "How to fix ›" */
-function sgFixSheet() {
-  const b = SG.desk && SG.desk.brain;
-  if (!b) return;
-  const body = openSheet(`${sgFixHtml(b)}<p class="sg-dim">Until the brain can think, no lead is made up: the plan's exits still run, and nothing is billed.</p>`, { title: "The brain's key" });
-  if (body && !body.dataset.sgCopy) {
-    body.dataset.sgCopy = "1";
-    body.addEventListener("click", sgCopyClick);
-  }
+/** The Brains sheet (ui/brains.js) from this pane. From the floor's header: on the brain the desk thinks with, "Use this brain" signing
+ * setDesk change "brain" (one signature; the feed's brain, and the floor's brain cabinet with it, say the new one at the next read). From the
+ * setup (`form` given): on the brain the form names, "Pick it for the desk" putting it into the form, and a key saved there shows in the
+ * checklist at once (the catalog is read again). `pick`: a provider to open on */
+function sgOpenBrains(form, pick = "") {
+  if (typeof openBrains !== "function") return;
+  const root = $("pane-superagent");
+  const setup = () => (root && root.querySelector ? root.querySelector("form.sg-setup-f") : null);
+  const brainOf = () => {
+    const f = setup();
+    const b = f ? sgBrainOf(formFields(f), SG.catalog) : null;
+    return b && typeof b === "object" ? b : null;
+  };
+  openBrains({
+    where: form ? "setup" : "superagent",
+    catalog: SG.catalog,
+    pick,
+    cur: () => (form ? brainOf() : (SG.view && SG.view.brain) || sgBrainNow(SG.desk, SG.view)),
+    desk: () => !form && !!SG.desk,
+    ...(form ? { form: setup } : {}),
+    after: () => {
+      sgAfter();
+      SG.viewAt = 0;
+      sgAgain([]);
+    },
+  });
 }
 /* a Copy button: its text to the clipboard, the button saying so a moment */
 function sgCopyClick(e) {
@@ -1122,16 +1158,18 @@ function sgHud(h) {
   return `${Math.round(Number(s.fps))} fps · p95 ${Number(s.p95ms).toFixed(1)} ms${s.lite ? " · lite" : ""}`;
 }
 
-/** the owner's controls: one run button (Pause, Resume, or Start a new session after the end — one element whatever it says, so the focus
- * stays on it), Cycle now, Autonomy Cards | Auto on paper, End. A browser that only looks sees them off, and why */
+/** the owner's controls: one run button (Pause, Resume, or after the end "Start again · auto on paper" — at a paper account a new session
+ * with its autonomy on, in one signature; elsewhere "Start a new session" — one element whatever it says, so the focus stays on it),
+ * Cycle now, Autonomy Cards | Auto on paper, End. A browser that only looks sees them off, and why */
 function sgToolsHtml(feed, owner) {
   const s = feed.session;
   const st = s ? s.state : "none";
   const off = owner ? "" : ' disabled title="This browser can look but not sign"';
-  const btn = (act, label, cls = "sg-btn", title = "", fk = act) => `<button type="button" class="${cls}" data-sg-act="${act}" data-fk="sg:${fk}"${off || (title ? ` title="${esc(title)}"` : "")}>${esc(label)}</button>`;
+  const btn = (act, label, cls = "sg-btn", title = "", fk = act, v = "") => `<button type="button" class="${cls}" data-sg-act="${act}"${v ? ` data-v="${esc(v)}"` : ""} data-fk="sg:${fk}"${off || (title ? ` title="${esc(title)}"` : "")}>${esc(label)}</button>`;
   const paper = !!(feed.venue && feed.venue.paper);
   const auto = !!(feed.autonomy && feed.autonomy.paper);
-  const run = st === "live" || st === "halted" ? btn("pause", "Pause", "sg-btn", "", "run") : st === "paused" ? btn("resume", "Resume", "sg-btn sg-btn-p", "", "run") : st === "ended" ? btn("resume", "Start a new session", "sg-btn sg-btn-p", "", "run") : "";
+  const again = paper ? btn("resume", "Start again · auto on paper", "sg-btn sg-btn-p", "A new session, its autonomy on paper: one signature", "run", "auto") : btn("resume", "Start a new session", "sg-btn sg-btn-p", "", "run");
+  const run = st === "live" || st === "halted" ? btn("pause", "Pause", "sg-btn", "", "run") : st === "paused" ? btn("resume", "Resume", "sg-btn sg-btn-p", "", "run") : st === "ended" ? again : "";
   const cycle = st === "live" || st === "halted" ? btn("cycle", "Cycle now", "sg-btn", feed.brain && feed.brain.ok ? "Run one cycle now: the brain is asked, which costs its tokens" : "The house seats have no brain to think with: a cycle now runs the plan's exits only") : "";
   const seg = `<div class="sg-seg" role="group" aria-label="Autonomy"><span class="sg-seg-l" aria-hidden="true">Autonomy</span>${[["off", "Cards"], ["on", "Auto on paper"]].map(([v, t]) => `<button type="button" data-sg-act="autonomy" data-v="${v}" data-fk="sg:auto:${v}" aria-pressed="${String((v === "on") === auto)}"${off || (v === "on" && !paper ? ` disabled title="${sgVenueUnread(feed) ? "The desk's venue is not connected: autonomy waits until it is read as a paper account" : "Autonomy is for a paper account only"}"` : "")}>${t}</button>`).join("")}</div>`;
   const end = st !== "ended" && st !== "none" ? btn("end", "End", "sg-btn sg-btn-g") : "";
@@ -1552,6 +1590,28 @@ function sgBrainOf(f, catalog) {
 }
 /* the brains the catalog offers, and the one the form (or, before it, the catalog's own pick) names */
 const sgBrains = (c) => ((c && (c.brains || [c.brain])) || []).filter(Boolean);
+/* whether a brain is a server on this machine that takes no key (its catalog entry's keyOptional, as the Brains sheet reads it) */
+const sgKeyOptional = (b) => !!b && (typeof brOf === "function" ? brOf(b).keyOptional : !!b.keyOptional);
+/** Whether the brain will think with the model the setup's form names — judged as the Brains sheet judges it (ui/brains.js brReadyWith):
+ * ready now, or a server on this machine whose only want is a model's name, with one named (the account calls it at its usual address
+ * with no key, and the model rides Start's hire). Where the sheet is not loaded, the catalog's standing alone */
+const sgReadyWith = (b, model) => !!b && (!!b.ok || (typeof brReadyWith === "function" && typeof brOf === "function" && brReadyWith(brOf(b), model)));
+/** a server on this machine whose only want is a model's name (ui/brains.js brOnlyModel) */
+const sgOnlyModel = (b) => !!b && typeof brOnlyModel === "function" && typeof brOf === "function" && brOnlyModel(brOf(b));
+/** What the setup says of who bills a brain: a model API's calls are billed to the owner's key; a server that needs no key runs on this
+ * machine — nothing is billed — when the account calls it at this machine's own loopback (ui/brains.js brWhere), and is the owner's server
+ * at its host when an address saved for it is another machine's: "this machine" is said of this machine only */
+function sgBilledWords(b) {
+  if (!sgKeyOptional(b)) return "Its calls are billed to your key.";
+  const base = typeof brOf === "function" ? brOf(b).base : String(b.baseUrl || "");
+  // no address of its own: its preset's, which is this machine's. One the page cannot read: never called "this machine"
+  if (!base) return "It runs on this machine: nothing is billed.";
+  const where = typeof brWhere === "function" ? brWhere(base) : "";
+  if (where === "this machine") return "It runs on this machine: nothing is billed.";
+  return where ? `It is your server at ${where}.` : "It is your server, at the address saved for it.";
+}
+/* the model the setup's form names for a brain (its own field, model-<id>), as Start would sign it */
+const sgFormModel = (f, b) => (f && b ? String(f[`model-${b.id}`] || "").trim() : "");
 const sgBrainPicked = (c, f) => {
   const all = sgBrains(c);
   return all.find((b) => f && b.id === f.provider) || all.find((b) => c && c.brain && b.id === c.brain.provider) || all[0] || null;
@@ -1568,9 +1628,16 @@ function sgPaintSetup(root, owner) {
   const sig = JSON.stringify([owner, sgBrains(SG.catalog).map((b) => [b.id, b.ok, b.fix ? b.fix.code : ""]), papers.map((v) => v.id), SG.params.venue || ""]);
   if (SG.setupSig === sig) return;
   SG.setupSig = sig;
+  // what was typed survives the form being drawn again (a key saved in the Brains sheet meanwhile flips a brain to ready). The Brain select
+  // put back to the owner's choice is told so (core formKeep's change event): its block shows, its efforts are offered — the fields on show
+  // are always the ones Start signs, never the block the catalog's own pick drew
+  const restore = formKeep(box.querySelector && box.querySelector("form.sg-setup-f"));
   box.innerHTML = sgSetupHtml(owner, SG.catalog, papers, SG.params.venue);
   const form = box.querySelector && box.querySelector("form");
-  if (form) sgSetupSay(form);
+  if (form) {
+    restore(form);
+    sgSetupSay(form);
+  }
 }
 
 /** the checklist at the setup's top, its standing read live from the first view: a paper account (✓ its name and balance, or the button
@@ -1580,8 +1647,26 @@ function sgCheckHtml(owner, c, papers, f, form) {
   const b = sgBrainPicked(c, f);
   const step = (ok, n, title, body) => `<li class="sg-ck" data-ok="${ok ? 1 : 0}"><span class="sg-ck-n" aria-hidden="true">${ok ? "✓" : n}</span><div class="sg-ck-b"><b>${title}<span class="sr">${ok ? ": done" : ": not yet"}</span></b><div>${body}</div></div></li>`;
   const one = v ? step(true, 1, "A paper account", `${esc(sgPaperless(v.name))} · ${esc(money(v.usd))} of paper money, not counted in your net worth.`) : step(false, 1, "A paper account", `None yet: the superagent trades paper money only.${owner ? ' <button type="button" class="sg-btn sg-btn-p sg-btn-s" data-sg-act="paper" data-fk="sg:paper">Open a paper account</button>' : ""}`);
-  const two = !b ? step(false, 2, "A brain key", "No brain is offered by this account.") : b.ok ? step(true, 2, "A brain key", `${esc(b.label)} is ready, through ${esc(b.how || "its API")}. Its calls are billed to your key.`) : step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: where its key goes is under 3 · The brain, below.` : `Not yet for ${esc(b.label)}.${sgFixHtml(b)}`);
-  const three = step(false, 3, "Start", !v ? "Once there is a paper account." : `Below: say what the superagent is for, then press Start the superagent. You sign each step; nothing starts until you do.${b && !b.ok ? " It can start before the brain can think: the plan's exits run, and no lead is made up until it can." : ""}`);
+  // a server on this machine takes no key: what it needs is the account's own words, in its block under 3 · The brain (never "type its key");
+  // said in full here only where there is no form — a path in them free to break at each "/" so a narrow pane is not pushed wide. Its
+  // readiness is judged with the model the form names (sgReadyWith): a server whose only want is a model is ready with one typed, once
+  // Start signs it — never "not yet" with the model in its field
+  const local = !!b && sgKeyOptional(b);
+  const model = sgFormModel(f, b);
+  const ready = sgReadyWith(b, model);
+  const base = b && typeof brOf === "function" ? brOf(b).base : "";
+  const two = !b
+    ? step(false, 2, "A brain key", "No brain is offered by this account.")
+    : b.ok
+      ? step(true, 2, "A brain key", `${esc(b.label)} is ready, through ${esc(b.how || "its API")}. ${esc(sgBilledWords(b))}`)
+      : ready
+        ? step(true, 2, "A brain key", `${esc(b.label)} is ready with ${esc(model)} once you sign: the account calls it at ${esc(base || "its usual address")} with no key. ${esc(sgBilledWords(b))}`)
+        : local && sgOnlyModel(b)
+          ? step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: it runs on this machine and needs no key, only the name of a model it serves — type it under 3 · The brain, below.` : `Not yet for ${esc(b.label)}: it runs on this machine and needs no key, only the name of a model it serves, typed in the setup once there is a paper account.`)
+          : local
+            ? step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: it runs on this machine and needs no key — what it needs is under 3 · The brain, below.` : `Not yet for ${esc(b.label)}: it runs on this machine and needs no key. ${esc(b.why || "Not set up yet.").replace(/\//g, "/<wbr>")}`)
+            : step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: type its key under 3 · The brain, below.` : `Not yet for ${esc(b.label)}.${sgFixHtml(b)}`);
+  const three = step(false, 3, "Start", !v ? "Once there is a paper account." : `Below: say what the superagent is for, then press Start the superagent. You sign each step; nothing starts until you do.${b && !ready ? " It can start before the brain can think: the plan's exits run, and no lead is made up until it can." : ""}`);
   return `${one}${two}${three}`;
 }
 /* every signature Start makes, by name, in order (the Start button's "What Start signs") */
@@ -1606,13 +1691,21 @@ function sgSetupHtml(owner, c, papers, want) {
   const bounds = c.bounds || SG_BOUNDS;
   const box = (name, label, val, mode = "decimal") => field(label, `<input name="${name}" inputmode="${mode}" value="${esc(String(val))}"${bounds[name] ? ` aria-describedby="sg-b-${name}"` : ""} />${bounds[name] ? `<span class="sg-range" id="sg-b-${name}">${esc(`${bounds[name][0]} to ${bounds[name][1]}`)}</span>` : ""}`);
   // the brain's fields (ui/desk.js), each brain that is not ready carrying where its key goes, once, in its own block
-  const fields = typeof dkBrainFields === "function" ? dkBrainFields(brains, c.brain, { fix: (b) => sgFixHtml(b) }) : field("Brain", select("provider", brains.map((b) => [b.id, `${b.label} · ${b.ok ? "ready" : "not ready"}`]), (c.brain && c.brain.provider) || brains[0].id));
+  // a brain that is not ready: its key typed in the Brains sheet first (one field, one paste), the key file the account names folded
+  // under it for whoever would rather put it there. A server on this machine takes no key: its block says the account's own words and opens
+  // the sheet on it ("Set it up ›"), never "Type its key"
+  const typeKey = (b) => (owner ? `<button type="button" class="sg-btn sg-btn-p sg-btn-s" data-sg-act="brains" data-v="${esc(b.id)}" data-fk="sg:brains:${esc(b.id)}">${sgKeyOptional(b) ? "Set it up ›" : "Type its key ›"}</button>` : "");
+  // a server whose only want is a model's name (sgOnlyModel): said in the setup's own words — the model field above is the way, and Start
+  // carries it — rather than the account's sentence, which names the Brains sheet's button
+  const localWhy = (b) => (sgOnlyModel(b) ? "Name a model it serves, above: it is ready with that model once you sign Start." : esc(b.why || "Not set up yet.").replace(/\//g, "/<wbr>"));
+  const fixOf = (b) => (sgKeyOptional(b) ? `${typeKey(b)}<p class="sg-dim">Runs on this machine and needs no key. ${localWhy(b)}</p>` : `${typeKey(b)}<details class="sg-fix-d"><summary>${esc(SG_FIX_WORDS[b.fix && b.fix.code] || "Not ready")} — or put the key in its key file</summary>${sgFixHtml(b)}</details>`);
+  const fields = typeof dkBrainFields === "function" ? dkBrainFields(brains, c.brain, { fix: fixOf, idp: "sg" }) : field("Brain", select("provider", brains.map((b) => [b.id, `${b.label} · ${b.ok ? "ready" : "not ready"}`]), (c.brain && c.brain.provider) || brains[0].id));
   return `<div class="sg-setup-g">${head}${check(true)}<form class="sg-setup-f" novalidate autocomplete="off">
     <div class="sg-step"><h3 class="sg-lab">1 · The paper account</h3>${field("Trades at", select("venue", papers.map((v) => [v.id, `${sgPaperless(v.name)} · ${money(v.usd)} paper`]), v0.id))}</div>
     <div class="sg-step"><h3 class="sg-lab">2 · The objective</h3>${field("Your words", '<textarea name="text" rows="2" maxlength="200" placeholder="e.g. Small, quick entries on the most traded coins; nothing I could not explain"></textarea>')}
       <div class="sg-row3">${box("targetPct", "Target this week (%)", d.targetPct ?? 3)}${box("maxRiskPct", "At most, a lead (% of equity)", d.maxRiskPct ?? 1)}${box("maxDailyLossPct", "Halt at a day's loss of (%)", d.maxDailyLossPct ?? 5)}</div>
       <div class="sg-row3">${box("hours", "Session (hours)", d.hours ?? 22, "numeric")}${box("everyMin", "A cycle every (min)", SG_EVERY_MIN, "numeric")}${box("maxOpen", "Leads open at once", d.maxOpen ?? 3, "numeric")}</div></div>
-    <div class="sg-step"><h3 class="sg-lab">3 · The brain</h3>${fields}</div>
+    <div class="sg-step"><div class="sg-step-h"><h3 class="sg-lab">3 · The brain</h3><button type="button" class="sg-link" data-sg-act="brains" data-fk="sg:brains">Brains: add a key, pick a model ›</button></div>${fields}</div>
     <div class="sg-go"><p class="sg-words" data-sg-words></p><details class="sg-signs"><summary>What Start signs</summary><ol data-sg-p="signs"></ol></details><div class="msg" data-sg-msg role="status"></div><button type="submit" class="sg-btn sg-btn-p sg-start"${owner ? "" : ` disabled title="${esc(sgLooking())}"`}>Start the superagent</button></div>
   </form>${sgAboutHtml(c)}</div>`;
 }
@@ -2006,12 +2099,14 @@ function sgWire(el) {
   el.addEventListener("change", words);
 }
 
-/* what the pane's buttons do: the ways out (Agents, a paper account, the brain's fix, the cards waiting), and the owner's signatures — the
-   session's controls, the autonomy (on after a yes), a card's answer */
+/* what the pane's buttons do: the ways out (Agents, a paper account, the Brains sheet, the cards waiting), and the owner's signatures —
+   the session's controls (an ended session started again with its autonomy, after a yes where it was off), the autonomy (on after a yes),
+   a card's answer */
 async function sgAct(act, d) {
   if (act === "agents") return void go("desk");
   if (act === "paper") return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account", back: true }));
-  if (act === "fix") return void sgFixSheet();
+  if (act === "brain" || act === "fix") return void sgOpenBrains(null, (SG.desk && SG.desk.brain && SG.desk.brain.provider) || "");
+  if (act === "brains") return void sgOpenBrains(true, (d && d.v) || "");
   if (act === "answer") return void sgToWaits();
   if (!owns()) return;
   const feed = SG.desk;
@@ -2021,6 +2116,12 @@ async function sgAct(act, d) {
     const c = (A.cards || []).find((x) => x.id === d.card);
     if (c) await own({ type: "approveCard", card: c.id, action: c.hash, decision: d.v === "approve" ? "approve" : "reject" }, sgAfter);
     return;
+  }
+  if (act === "resume" && d && d.v === "auto") {
+    // a new session after the end, its autonomy on paper in the same signature: a yes first where the autonomy is off now
+    const was = !!(feed && feed.autonomy && feed.autonomy.paper);
+    if (!was && !(await confirmSheet(`Start again with autonomy on? A new session starts, and the desk's own seats place their orders at ${sgVenueName(feed, SG.view)} at once, each inside its trading limit, without a card for you. Paper money only.`, { title: "Start again · auto on paper", yes: "Start it" }))) return;
+    return void own(sgControlDraft("resume", { autonomy: true }), sgAfter);
   }
   if (act === "pause" || act === "resume" || act === "cycle") return void own(sgControlDraft(act), sgAfter);
   if (act === "end") {

@@ -30,10 +30,167 @@ const FAKE = `function fakeEl(sel) {
     querySelectorAll: () => [], addEventListener() {}, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, contains: () => true };
 }`;
 
-/** The page's scripts in a stand-in for the browser. By default core.js, desk.js and superagent.js alone, with a stand-in device key
+/** A SMALL DOM, enough for a form to be drawn from the page's own HTML and used the way a browser uses it: HTML parsed into elements (tags,
+ * attributes, text; void elements; entities), a selector of one compound part (tag, #id, .class, [attr], [attr=value]) for querySelector,
+ * querySelectorAll, closest and matches, inputs, textareas and selects with a browser's value rules (a select's value is its selected
+ * option's; set to one it does not offer, it holds none), hidden and disabled as attributes, dataset over data-* attributes, events that
+ * bubble from the element up its parents to the document's listeners, and FormData over a form's named, enabled fields in document order.
+ * Built here, outside the page's scope, so the page's scripts meet it only as they meet a browser: through document and the elements */
+type Listener = (e: Fake) => void;
+const VOID = new Set(["input", "br", "img", "hr", "meta", "link", "source", "wbr", "col", "area"]);
+const unesc = (t: string) => t.replace(/&(amp|lt|gt|quot|#39);/g, (_, x: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[x] ?? "");
+const kebab = (k: string) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+class MiniText {
+  parentNode: MiniEl | null = null;
+  readonly nodeType = 3;
+  constructor(public text: string) {}
+}
+class MiniEl {
+  readonly nodeType = 1;
+  readonly tagName: string;
+  kids: Array<MiniEl | MiniText> = [];
+  parentNode: MiniEl | null = null;
+  listeners: Record<string, Listener[]> = {};
+  style: Record<string, string> = {};
+  private val: string | undefined;
+  private picked = -2;
+  private tick: boolean | undefined;
+  readonly dataset: Record<string, string>;
+  constructor(tag: string, public attrs: Record<string, string>, readonly doc: MiniDoc) {
+    this.tagName = tag.toUpperCase();
+    const attrsOf = this.attrs;
+    this.dataset = new Proxy({} as Record<string, string>, {
+      get: (_, k) => (typeof k === "string" ? attrsOf[`data-${kebab(k)}`] : undefined),
+      set: (_, k, v) => ((attrsOf[`data-${kebab(String(k))}`] = String(v)), true),
+      deleteProperty: (_, k) => (delete attrsOf[`data-${kebab(String(k))}`], true),
+      has: (_, k) => `data-${kebab(String(k))}` in attrsOf,
+    });
+  }
+  get isConnected() { return true; }
+  get children(): MiniEl[] { return this.kids.filter((k): k is MiniEl => k instanceof MiniEl); }
+  get id() { return this.attrs.id ?? ""; }
+  get name() { return this.attrs.name ?? ""; }
+  get type() { return (this.attrs.type ?? (this.tagName === "SELECT" ? "select-one" : this.tagName === "TEXTAREA" ? "textarea" : this.tagName === "BUTTON" ? "submit" : "text")).toLowerCase(); }
+  set type(v: string) { this.attrs.type = v; }
+  get className() { return this.attrs.class ?? ""; }
+  set className(v: string) { this.attrs.class = v; }
+  get hidden() { return "hidden" in this.attrs; }
+  set hidden(v: boolean) { if (v) this.attrs.hidden = ""; else delete this.attrs.hidden; }
+  get disabled() { return "disabled" in this.attrs; }
+  set disabled(v: boolean) { if (v) this.attrs.disabled = ""; else delete this.attrs.disabled; }
+  get readOnly() { return "readonly" in this.attrs; }
+  get checked() { return this.tick ?? "checked" in this.attrs; }
+  set checked(v: boolean) { this.tick = !!v; }
+  get options(): MiniEl[] { return this.all((e) => e.tagName === "OPTION"); }
+  private index() {
+    if (this.picked !== -2) return this.picked;
+    const o = this.options;
+    const sel = o.map((x, i) => ("selected" in x.attrs ? i : -1)).filter((i) => i >= 0);
+    return sel.length ? sel[sel.length - 1]! : o.length ? 0 : -1;
+  }
+  get value(): string {
+    if (this.tagName === "SELECT") return this.options[this.index()]?.value ?? "";
+    if (this.tagName === "OPTION") return this.attrs.value ?? this.textContent;
+    if (this.val !== undefined) return this.val;
+    return this.tagName === "TEXTAREA" ? this.textContent : (this.attrs.value ?? "");
+  }
+  set value(v: string) {
+    if (this.tagName === "SELECT") this.picked = this.options.findIndex((o) => o.value === String(v));
+    else this.val = String(v);
+  }
+  get textContent(): string { return this.kids.map((k) => (k instanceof MiniText ? k.text : k.textContent)).join(""); }
+  set textContent(t: string) { this.kids = [Object.assign(new MiniText(String(t)), { parentNode: this })]; }
+  get innerHTML(): string { return this.kids.map((k) => (k instanceof MiniText ? k.text : k.outerHTML)).join(""); }
+  set innerHTML(html: string) {
+    this.kids = [];
+    this.picked = -2;
+    parseInto(this, String(html), this.doc);
+  }
+  get outerHTML(): string { return `<${this.tagName.toLowerCase()}${Object.entries(this.attrs).map(([k, v]) => ` ${k}="${v}"`).join("")}>${VOID.has(this.tagName.toLowerCase()) ? "" : `${this.innerHTML}</${this.tagName.toLowerCase()}>`}`; }
+  getAttribute(k: string) { return this.attrs[k] ?? null; }
+  setAttribute(k: string, v: string) { this.attrs[k] = String(v); }
+  removeAttribute(k: string) { delete this.attrs[k]; }
+  hasAttribute(k: string) { return k in this.attrs; }
+  get classList() { const cls = () => this.className.split(/\s+/).filter(Boolean); return { contains: (c: string) => cls().includes(c), add: (c: string) => void (this.className = [...new Set([...cls(), c])].join(" ")), remove: (c: string) => void (this.className = cls().filter((x) => x !== c).join(" ")), toggle: (c: string, on?: boolean) => { const has = cls().includes(c); const want = on === undefined ? !has : on; if (want) this.classList.add(c); else this.classList.remove(c); return want; } }; }
+  all(test: (e: MiniEl) => boolean): MiniEl[] {
+    const out: MiniEl[] = [];
+    const walk = (e: MiniEl) => { for (const k of e.children) { if (test(k)) out.push(k); walk(k); } };
+    walk(this);
+    return out;
+  }
+  matches(sel: string) { return sel.split(",").some((one) => matchOne(this, one.trim())); }
+  querySelectorAll(sel: string) { return this.all((e) => e.matches(sel)); }
+  querySelector(sel: string) { return this.querySelectorAll(sel)[0] ?? null; }
+  closest(sel: string) { for (let e: MiniEl | null = this; e; e = e.parentNode) if (e.matches(sel)) return e; return null; }
+  contains(x: unknown) { for (let e = x as MiniEl | null; e; e = e.parentNode) if (e === this) return true; return false; }
+  addEventListener(type: string, fn: Listener) { (this.listeners[type] ??= []).push(fn); }
+  removeEventListener() {}
+  focus() { this.doc.focused = this; }
+  dispatchEvent(ev: Fake) {
+    ev.target = this;
+    for (let e: MiniEl | null = this; e; e = e.parentNode) {
+      for (const fn of e.listeners[ev.type] ?? []) fn(ev);
+      if (ev.bubbles === false) return true;
+    }
+    for (const fn of this.doc.listeners[ev.type] ?? []) fn(ev);
+    return true;
+  }
+}
+class MiniDoc {
+  listeners: Record<string, Listener[]> = {};
+  focused: MiniEl | null = null;
+  root(html = "") { const r = new MiniEl("div", {}, this); r.innerHTML = html; return r; }
+}
+/** one compound selector: tag, #id, .class, [attr], [attr=value] (quoted or not); no combinators (a page script here asks none) */
+function matchOne(e: MiniEl, sel: string): boolean {
+  if (/\s/.test(sel.replace(/\[[^\]]*\]/g, ""))) throw new Error(`the small DOM takes no combinator: ${sel}`);
+  const tag = /^[a-zA-Z][\w-]*/.exec(sel);
+  if (tag && e.tagName !== tag[0].toUpperCase()) return false;
+  for (const m of sel.matchAll(/#([\w-]+)/g)) if (e.id !== m[1]) return false;
+  for (const m of sel.replace(/\[[^\]]*\]/g, "").matchAll(/\.([\w-]+)/g)) if (!e.classList.contains(m[1]!)) return false;
+  for (const m of sel.matchAll(/\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]/g)) {
+    if (!(m[1]! in e.attrs)) return false;
+    const want = m[2] ?? m[3] ?? m[4];
+    if (want !== undefined && e.attrs[m[1]!] !== want) return false;
+  }
+  return true;
+}
+function parseInto(into: MiniEl, html: string, doc: MiniDoc) {
+  const stack: MiniEl[] = [into];
+  const add = (n: MiniEl | MiniText) => { const top = stack[stack.length - 1]!; n.parentNode = top; top.kids.push(n); };
+  for (const m of html.matchAll(/<!--[\s\S]*?-->|<(\/?)([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g)) {
+    const [whole, close, tag, rest] = m;
+    if (whole.startsWith("<!--")) continue;
+    if (!tag) { add(new MiniText(unesc(whole))); continue; }
+    const t = tag.toLowerCase();
+    if (close) { for (let i = stack.length - 1; i > 0; i--) if (stack[i]!.tagName === t.toUpperCase()) { stack.length = i; break; } continue; }
+    const attrs: Record<string, string> = {};
+    for (const a of (rest ?? "").matchAll(/([^\s=/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+)))?/g)) attrs[a[1]!.toLowerCase()] = unesc(a[2] ?? a[3] ?? a[4] ?? "");
+    const el = new MiniEl(t, attrs, doc);
+    add(el);
+    if (!VOID.has(t) && !/\/\s*$/.test(rest ?? "")) stack.push(el);
+  }
+}
+/** a form's named, enabled fields as a browser's FormData gives them: a box's text, a select's choice, a ticked box's value */
+class MiniFormData {
+  private readonly rows: Array<[string, string]> = [];
+  constructor(form: MiniEl) {
+    for (const el of form.all((e) => !!e.name && ["INPUT", "SELECT", "TEXTAREA"].includes(e.tagName))) {
+      if (el.disabled) continue;
+      if ((el.type === "checkbox" || el.type === "radio") && !el.checked) continue;
+      if (el.tagName === "SELECT" && !el.options.length) continue;
+      this.rows.push([el.name, el.type === "checkbox" || el.type === "radio" ? (el.attrs.value ?? "on") : el.value]);
+    }
+  }
+  get(k: string) { return this.rows.find(([n]) => n === k)?.[1] ?? null; }
+  getAll(k: string) { return this.rows.filter(([n]) => n === k).map(([, v]) => v); }
+  entries() { return this.rows[Symbol.iterator](); }
+}
+
+/** The page's scripts in a stand-in for the browser. By default core.js, brains.js, desk.js and superagent.js alone, with a stand-in device key
  * (Owner) the test may replace; `full`: every script account.html names, owner.js first, over the stand-in the other page tests use (the
  * device key asked for and never answering, so nothing is fetched or drawn after the start). Either way fetch is the test's */
-function page(files = ["ui/core.js", "ui/desk.js", "ui/superagent.js"], { full = false } = {}) {
+function page(files = ["ui/core.js", "ui/brains.js", "ui/desk.js", "ui/superagent.js"], { full = false, dom = false } = {}) {
   const stored: string[] = [];
   const element = (): Fake => ({ addEventListener() {}, removeAttribute() {}, setAttribute() {}, querySelectorAll: () => [], querySelector: () => null, classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, dataset: {}, style: {}, hidden: false, value: "", textContent: "", innerHTML: "" });
   const sandbox: Record<string, unknown> = {
@@ -62,6 +219,8 @@ function page(files = ["ui/core.js", "ui/desk.js", "ui/superagent.js"], { full =
       }
     },
     console,
+    // the browser's own URL parser: the Brains sheet reads a base URL's host with it (ui/brains.js brWhere — "this machine" only for its loopback)
+    URL,
     URLSearchParams,
     Intl,
     setTimeout,
@@ -69,6 +228,19 @@ function page(files = ["ui/core.js", "ui/desk.js", "ui/superagent.js"], { full =
   };
   if (full) Object.assign(sandbox, { MutationObserver: class { observe() {} }, indexedDB: { open: () => ({}) }, scrollTo() {}, setInterval: () => 0, clearInterval() {} });
   else sandbox.Owner = { role: "owner", act: async () => ({ status: 200, body: { ok: true } }), why: () => "" };
+  // the small DOM (`dom`): the document's listeners kept (desk.js listens there for the Brain select's change), forms read as a browser
+  // reads them, and mini(html) to make a part of the page to draw into
+  const doc = new MiniDoc();
+  if (dom) {
+    (sandbox.document as Fake).addEventListener = (type: string, fn: Listener) => void (doc.listeners[type] ??= []).push(fn);
+    sandbox.FormData = class {
+      constructor(f: Fake) {
+        // eslint-disable-next-line no-constructor-return
+        return f instanceof MiniEl ? new MiniFormData(f) : { get: (k: string) => f.values?.[k] ?? null, getAll: (k: string) => (f.values?.[k] === undefined ? [] : [f.values[k]]), entries: () => Object.entries(f.values ?? {})[Symbol.iterator]() };
+      }
+    };
+    sandbox.mini = (html: string) => doc.root(html);
+  }
   const ctx = createContext(sandbox);
   sandbox.window = runInContext("globalThis", ctx);
   for (const f of files) new Script(source(f), { filename: f }).runInContext(ctx);
@@ -77,7 +249,7 @@ function page(files = ["ui/core.js", "ui/desk.js", "ui/superagent.js"], { full =
   /** a value out of the page, as plain data */
   const out = <T = any>(code: string): T => JSON.parse(run<string>(`JSON.stringify(${code})`)) as T; // eslint-disable-line @typescript-eslint/no-explicit-any
   const set = (name: string, value: unknown) => run(`${name} = ${JSON.stringify(value)}`);
-  return { run, out, set, sandbox, stored };
+  return { run, out, set, sandbox, stored, doc };
 }
 /* every script the page names, in its order (one another builder delivers and has not written yet is left out here: the page's own test,
    page-scripts.test.ts, holds the page to naming only what is there) */
@@ -459,9 +631,12 @@ describe("the owner's controls", () => {
   const p = page();
   p.set("A", ACCOUNT);
 
-  it("drafts each as the desk takes it: pause, resume, cycle, end, autonomy on and off", () => {
+  it("drafts each as the desk takes it: pause, resume, cycle, end, autonomy on and off — and a new session with its autonomy, in one", () => {
     expect(p.out('["pause", "resume", "cycle", "end"].map((a) => sgControlDraft(a))')).toEqual(["pause", "resume", "cycle", "end"].map((change) => ({ type: "setDesk", desk: "desk", change, value: "" })));
     expect(p.out("[sgControlDraft('autonomy', true), sgControlDraft('autonomy', false), sgControlDraft('nothing')]")).toEqual([{ type: "setDesk", desk: "desk", change: "autonomy", value: '{"paper":true}' }, { type: "setDesk", desk: "desk", change: "autonomy", value: '{"paper":false}' }, null]);
+    // after the end: ONE setDesk resume whose value carries the autonomy (the desk validates it as at the hire: paper only)
+    expect(p.out("sgControlDraft('resume', { autonomy: true })")).toEqual({ type: "setDesk", desk: "desk", change: "resume", value: '{"autonomy":{"paper":true}}' });
+    expect(JSON.parse(p.out<{ value: string }>("sgControlDraft('resume', { autonomy: true })").value)).toEqual({ autonomy: { paper: true } });
   });
 
   it("offers what the session allows, and to a browser that only looks, nothing it can press", () => {
@@ -475,9 +650,13 @@ describe("the owner's controls", () => {
     const paused = tools({ session: { ...feed().session, state: "paused" } });
     expect(paused).toContain('data-sg-act="resume"');
     expect(paused).not.toContain('data-sg-act="cycle"');
+    // ended at a paper account: started again with its autonomy, one button, one signature; at a venue not read as paper, a plain new session
     const ended = tools({ session: { ...feed().session, state: "ended" } });
-    expect(ended).toContain(">Start a new session</button>");
+    expect(ended).toContain('data-sg-act="resume" data-v="auto" data-fk="sg:run" title="A new session, its autonomy on paper: one signature">Start again · auto on paper</button>');
     expect(ended).not.toContain('data-sg-act="end"');
+    const endedReal = tools({ session: { ...feed().session, state: "ended" }, venue: { id: "okx", name: "OKX", usd: 1, paper: false, connected: true }, autonomy: null });
+    expect(endedReal).toContain('data-sg-act="resume" data-fk="sg:run">Start a new session</button>');
+    expect(endedReal).not.toContain("auto on paper</button>");
     // the brain cannot think: Cycle now says what it would do
     expect(tools({ brain: { ok: false, why: "no key", label: "Claude", model: "claude-opus-5-5", spend: { calls: 0, usd: 0 } } })).toContain("a cycle now runs the plan&#39;s exits only");
     // a real venue: no autonomy to turn on
@@ -497,6 +676,24 @@ describe("the owner's controls", () => {
     p.run("DRAFTS = []; confirmSheet = async () => false");
     await p.run('sgAct("end", {})');
     expect(p.out("DRAFTS")).toEqual([]);
+  });
+
+  it("starts an ended session again with its autonomy in ONE signature: a yes first where the autonomy is off, none where it is on", async () => {
+    const ended = (paper: boolean) => feed({ session: { ...feed().session, state: "ended" }, autonomy: { paper, at: iso(NOW) } });
+    p.run(`Owner = { role: "owner" }; var DRAFTS = []; own = async (d) => { DRAFTS.push(d); }; var ASKED = []; confirmSheet = async (t, o) => (ASKED.push(o.title), true); SG.desk = ${JSON.stringify(ended(false))}`);
+    await p.run('sgAct("resume", { v: "auto" })');
+    expect(p.out("DRAFTS")).toEqual([{ type: "setDesk", desk: "desk", change: "resume", value: '{"autonomy":{"paper":true}}' }]);
+    expect(p.out("ASKED")).toEqual(["Start again · auto on paper"]);
+    // the autonomy already on: no question, the same one signature
+    p.run(`DRAFTS = []; ASKED = []; SG.desk = ${JSON.stringify(ended(true))}`);
+    await p.run('sgAct("resume", { v: "auto" })');
+    expect(p.out("[DRAFTS.length, DRAFTS[0].value, ASKED.length]")).toEqual([1, '{"autonomy":{"paper":true}}', 0]);
+    // a no signs nothing; a paused session's Resume is as it was, its value empty
+    p.run(`DRAFTS = []; confirmSheet = async () => false; SG.desk = ${JSON.stringify(ended(false))}`);
+    await p.run('sgAct("resume", { v: "auto" })');
+    expect(p.out("DRAFTS")).toEqual([]);
+    await p.run('sgAct("resume", {})');
+    expect(p.out("DRAFTS")).toEqual([{ type: "setDesk", desk: "desk", change: "resume", value: "" }]);
   });
 });
 
@@ -521,16 +718,23 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
 
   it("says why the brain cannot think, wherever it is shown, and where its key goes — and starting without one makes nothing up", () => {
     const no = { ok: false, why: "the API did not accept the key", label: "Claude", model: "claude-opus-5-5", spend: { calls: 0, usd: 0 } };
-    // the header: a word in amber, the reason one pointer away, and the way to the fix
+    // the header: always a button, "Brain ›", opening the Brains sheet — here a word in amber, the reason one pointer away
     const stat = p.run<string>(`sgBrainStat(${JSON.stringify(no)}, null)`);
     expect(stat).toContain('<span class="sg-warn-t" title="the API did not accept the key">Not ready</span>');
-    expect(stat).toContain('data-sg-act="fix"');
+    expect(stat).toMatch(/^<button type="button" class="sg-stat sg-brain sg-no" data-sg-act="brain" data-fk="sg:brain" [^>]*><span class="sg-stat-l">Brain ›<\/span>/);
+    expect(stat).not.toContain('data-sg-act="fix"');
+    // a brain that thinks is a button too: the model, the calls, the cost
+    expect(p.run<string>(`sgBrainStat(${JSON.stringify(feed().brain)}, ${JSON.stringify(CATALOG)})`)).toMatch(/^<button type="button" class="sg-stat sg-brain" data-sg-act="brain"[^>]*><span class="sg-stat-l">Brain ›<\/span><span class="sg-stat-v tab-nums">Opus 5\.5 · 37 calls · ~\$0\.84<\/span><\/button>$/);
     // a key the API refused is never drawn as a healthy brain
     const FIX = { code: "rejected", file: "/Users/x/.account/credentials/anthropic/api-key.json", restart: false, words: "The Anthropic API refused the key in the key file: put a key it accepts there." };
     expect(p.run<string>(`sgBrainStat(${JSON.stringify({ ...no, fix: FIX })}, null)`)).toContain(">Key refused</span>");
     expect(p.run<string>(`sgBrainStat(${JSON.stringify(feed().brain)}, ${JSON.stringify(CATALOG)})`)).toContain("Opus 5.5 · 37 calls · ~$0.84");
-    // a scripted brain is a script, never a model's name; an unpriced one has no cost recorded; refused calls counted
-    expect(p.run<string>(`sgBrainStat({ ok: true, provider: "scripted", label: "a script", model: "claude-opus-5-5", spend: { calls: 8, usd: 0, inputTokens: 0, outputTokens: 0, failed: 2 } }, null)`)).toContain("a script · 8 calls · 2 refused · no cost recorded");
+    // a scripted brain is a script, never a model's name; an unpriced one has no cost recorded; the calls that got no answer counted as
+    // what the account knows them to be — not answered (a key refused, a rate limit, an endpoint out of reach: spend.failed is all three),
+    // never "refused"
+    const failed = p.run<string>(`sgBrainStat({ ok: true, provider: "scripted", label: "a script", model: "claude-opus-5-5", spend: { calls: 8, usd: 0, inputTokens: 0, outputTokens: 0, failed: 2 } }, null)`);
+    expect(failed).toContain("a script · 8 calls · 2 not answered · no cost recorded");
+    expect(failed).not.toContain("refused");
     expect(p.out('[sgModelName("claude-opus-5-5"), sgModelName("claude-sonnet-4-5-20250929"), sgModelName("deepseek-chat")]')).toEqual(["Opus 5.5", "Sonnet 4.5", "deepseek-chat"]);
     // the fix as the account gives it: its sentence, the path with Copy, the command with Copy — never a command composed here, never a sample key
     const fix = p.run<string>(`sgFixHtml(${JSON.stringify({ ...no, fix: { ...FIX, command: "chmod 600 /Users/x/.account/credentials/anthropic/api-key.json" } })})`);
@@ -543,7 +747,10 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
     const setup = p.run<string>(`sgSetupHtml(true, ${JSON.stringify(none)}, sgPaperVenues(), "")`);
     // where each brain's key goes, said once, in its own block of 3 · The brain; the checklist points there
     expect(setup.match(/No key for Claude yet\./g)).toHaveLength(1);
-    expect(setup).toContain("Not yet for Claude: where its key goes is under 3 · The brain, below.");
+    expect(setup).toContain("Not yet for Claude: type its key under 3 · The brain, below.");
+    // the brain step opens the Brains sheet; each brain that is not ready has its own way there, at its own card
+    expect(setup).toContain('<button type="button" class="sg-link" data-sg-act="brains" data-fk="sg:brains">Brains: add a key, pick a model ›</button>');
+    expect(setup).toContain('data-sg-act="brains" data-v="openai" data-fk="sg:brains:openai">Type its key ›</button><details class="sg-fix-d"><summary>Not ready — or put the key in its key file</summary>');
     expect(setup).toContain("It can start before the brain can think: the plan's exits run, and no lead is made up until it can.");
     expect(p.run(`sgSetupWords({ maxRiskPct: "1", provider: "claude" }, ${JSON.stringify(none)}, sgPaperVenues()[0], { provider: "claude", model: "claude-opus-5-5", effort: "medium" })`)).toContain("The brain cannot think yet: see 3 · The brain. Until it can, no lead is made up, and the plan's exits still run.");
     // what each mode is, first; with no paper account, the way to open one, and the brain's fix in the checklist itself
@@ -606,6 +813,14 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
     expect(p.run<string>(`sgBalanceHtml(${JSON.stringify(feed())}, ${JSON.stringify(VIEW)}, { at: ${NOW - 60_000}, usd: 10013.5 }, ${NOW})`)).toContain('<span class="sr">$10,012.50</span>');
     // the odometer: each digit a column standing at its value, keyed from the right
     expect(p.run<string>('sgOdo("$9.5")')).toBe('<span class="sg-od-c" data-k="c4">$</span><span class="sg-od-d" data-k="d3"><span class="sg-od-s" style="--d:9"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></span></span><span class="sg-od-c" data-k="c2">.</span><span class="sg-od-d" data-k="d1"><span class="sg-od-s" style="--d:5"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></span></span>');
+  });
+
+  it("groups a figure as a person reads it, but never a port after a host or a figure inside a word", () => {
+    expect(p.run<string>(`sgTidy("BTC at 64000.5")`)).toBe("BTC at 64,000.5");
+    expect(p.run<string>(`sgTidy("Ollama at localhost:11434 answered")`)).toBe("Ollama at localhost:11434 answered");
+    expect(p.run<string>(`sgTidy("vLLM at http://[::1]:8000 · 12000 tokens")`)).toBe("vLLM at http://[::1]:8000 · 12,000 tokens");
+    expect(p.run<string>(`sgTidy("lead L-00031 · id abc12345")`)).toBe("lead L-00031 · id abc12345");
+    expect(p.run<string>(`sgTidy("spread: 25000")`)).toBe("spread: 25,000");
   });
 
   it("lists the rules with the real numbers and lights the stage at work", () => {
@@ -1219,5 +1434,191 @@ describe("the third round: the frame held while the owner signs, the header's wo
     expect(p.run<string>('sgExitWords("TP HIT at 61,800 (+1.00%)")')).toMatch(/^at the take-profit \(61,800(\.0+)?, \+1\.00%\)$/);
     expect(p.run<string>('sgExitWords("stop at 62,240.2 (-0.40%)")')).toMatch(/^at the stop \(62,240\.2, [−-]0\.40%\)$/);
     expect(p.run<string>('sgExitWords("TP HIT at 152.25 (+1.50%)")')).toMatch(/^at the take-profit \(152\.25, \+1\.50%\)$/);
+  });
+});
+
+// ---- the Brains sheet from this pane --------------------------------------------------------------------------------------------------------
+
+describe("the Brains sheet (ui/brains.js) from the floor's header and the setup", () => {
+  it("opens from the header's Brain stat on the brain the desk thinks with, offering Use this brain; from the setup on the form's brain, offering the pick into the form", async () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    p.run(`var OPENED = []; openBrains = (ctx) => OPENED.push(ctx); SG.catalog = ${JSON.stringify(CATALOG)}; SG.view = ${JSON.stringify({ ...VIEW, brain: { provider: "claude", model: "claude-opus-5-5", effort: "medium" } })}; SG.desk = ${JSON.stringify(feed({ brain: { ...feed().brain, provider: "claude" } }))}`);
+    // the header: always the same act, ready or not; a browser that only looks may open it too (its buttons are off there)
+    p.run('Owner = { role: "looking" }');
+    await p.run('sgAct("brain", {})');
+    expect(p.out("[OPENED[0].where, OPENED[0].pick, OPENED[0].desk(), OPENED[0].cur(), typeof OPENED[0].form, OPENED[0].catalog.brains.length]")).toEqual(["superagent", "claude", true, { provider: "claude", model: "claude-opus-5-5", effort: "medium" }, "undefined", 2]);
+    // the earlier act, from a page drawn before, lands in the same place
+    await p.run('sgAct("fix", {})');
+    expect(p.out("OPENED[1].where")).toBe("superagent");
+    // the setup: on the provider asked for, no desk to switch, the pick going into the setup's form
+    await p.run('sgAct("brains", { v: "openai" })');
+    expect(p.out('[OPENED[2].where, OPENED[2].pick, OPENED[2].desk(), typeof OPENED[2].form]')).toEqual(["setup", "openai", false, "function"]);
+    // after a change there: the desk and its catalog read again at once
+    p.run("SG.viewAt = 12345; OPENED[0].after()");
+    expect(p.out("SG.viewAt")).toBe(0);
+  });
+
+  it("keeps what was typed in the setup's form when a key saved meanwhile flips a brain to ready and the form is drawn again", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    p.run(`var KEPT = []; var BACK = []; formKeep = (form) => (KEPT.push(form && form.sel), (next) => BACK.push(next && next.sel)); SG.catalog = ${JSON.stringify(CATALOG)}; SG.params = {}; var ROOT = fakeEl("root")`);
+    p.run("sgPaintSetup(ROOT, true)");
+    // the brain becomes ready: the form is drawn again, what was typed read before and put back after
+    p.run(`SG.catalog = ${JSON.stringify({ ...CATALOG, brains: CATALOG.brains.map((b) => ({ ...b, ok: true })) })}; sgPaintSetup(ROOT, true)`);
+    expect(p.out("[KEPT.length, BACK.length, KEPT[1], BACK[1]]")).toEqual([2, 2, "form.sg-setup-f", "form"]);
+  });
+});
+
+// ---- the brain's fields drawn again: the choice put back, and what shows under it, agree ----------------------------------------------------
+
+describe("the brain's fields, drawn again with what was typed put back (core formKeep), in a small DOM", () => {
+  const ALL3 = ["low", "medium", "high"];
+  /** a catalog with three brains: Claude ready (the catalog's own pick, every effort), DeepSeek with no key (low and high only), Groq with no
+   * key (none of the desk's efforts: its own default), and Ollama on this machine (no key needed) */
+  const brains = [
+    { ok: true, id: "claude", label: "Claude", model: "claude-opus-5-5", models: [{ id: "claude-opus-5-5", name: "Claude Opus 5.5", inUsd: 4, outUsd: 20 }], how: "the Anthropic API", efforts: ALL3, kind: "model-api" },
+    { ok: false, id: "deepseek", label: "DeepSeek", models: [], why: "no key", efforts: ["low", "high"], kind: "model-api", fix: { code: "no-key", file: "/x/credentials/brains/deepseek.json", restart: false, words: "No key for DeepSeek yet." } },
+    { ok: false, id: "groq", label: "Groq", models: [], why: "no key", efforts: [], kind: "model-api", fix: { code: "no-key", file: "/x/credentials/brains/groq.json", restart: false, words: "No key for Groq yet." } },
+    { ok: false, id: "ollama", label: "Ollama", models: [], why: "name the model your server serves", efforts: [], kind: "local", keyOptional: true, baseUrl: "http://localhost:11434/v1" },
+  ];
+  const CAT = { ...CATALOG, brains, bounds: CATALOG_BOUNDS };
+  const flipped = (id: string) => ({ ...CAT, brains: brains.map((b) => (b.id === id ? { ...b, ok: true, why: undefined, fix: undefined } : b)) });
+  /** what the form shows now: the select's choice, the blocks on show, the model typed for DeepSeek, the efforts offered and the one chosen */
+  const shows = (form: string) => `(() => { const f = ${form}; const e = f.querySelector('select[name="effort"]'); return { provider: f.querySelector('select[name="provider"]').value, shown: f.querySelectorAll(".dk-brain-of").filter((b) => !b.hidden).map((b) => b.dataset.brain), model: f.querySelector('[name="model-deepseek"]').value, efforts: e.options.map((o) => o.value), effort: e.value, effortShown: !(e.closest("[data-dk-effort]") || e.parentNode).hidden }; })()`;
+  const pick = (form: string, id: string) => `(() => { const s = ${form}.querySelector('select[name="provider"]'); s.value = "${id}"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`;
+
+  it("the superagent's setup: a key saved meanwhile draws the form again, and the Brain select put back to DeepSeek shows DeepSeek's block — never the catalog's pick under it — and offers DeepSeek's efforts", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", ACCOUNT);
+    p.run(`SG.catalog = ${JSON.stringify(CAT)}; SG.params = {}; var ROOT = mini('<div data-sg-p="setup"></div>'); sgPaintSetup(ROOT, true)`);
+    const form = 'ROOT.querySelector("form.sg-setup-f")';
+    // drawn on the catalog's pick: Claude's block, every effort
+    expect(p.out(shows(form))).toMatchObject({ provider: "claude", shown: ["claude"], efforts: ALL3, effort: "medium" });
+    // the owner picks DeepSeek: its block, its two efforts (no medium), then names its model and picks low
+    p.run(pick(form, "deepseek"));
+    p.run(`${form}.querySelector('[name="model-deepseek"]').value = "deepseek-v4-pro"; ${form}.querySelector('select[name="effort"]').value = "low"`);
+    expect(p.out(shows(form))).toMatchObject({ provider: "deepseek", shown: ["deepseek"], model: "deepseek-v4-pro" });
+    // a key saved for Groq in the Brains sheet: the setup is drawn again, what was typed put back — and what shows agrees with the choice
+    p.run(`SG.catalog = ${JSON.stringify(flipped("groq"))}; sgPaintSetup(ROOT, true)`);
+    expect(p.out(shows(form))).toMatchObject({ provider: "deepseek", shown: ["deepseek"], model: "deepseek-v4-pro" });
+    // with DeepSeek's own efforts on offer, the one chosen kept
+    expect(p.out(shows(form))).toEqual({ provider: "deepseek", shown: ["deepseek"], model: "deepseek-v4-pro", efforts: ["low", "high"], effort: "low", effortShown: true });
+    // and Start signs exactly what shows: DeepSeek, the model typed, low
+    expect(p.out(`sgBrainOf(formFields(${form}), SG.catalog)`)).toEqual({ provider: "deepseek", model: "deepseek-v4-pro", effort: "low", price: null });
+  });
+
+  it("the Agents pane's hiring form: the same — the choice put back after a redraw shows its own block and its own efforts, and Hire signs what shows", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", { ...ACCOUNT, keys: [] });
+    p.run(`DK.catalog = ${JSON.stringify(CAT)}; DK.view = null; var PANE = mini('<div data-dk-part="body"></div>'); dkDraw(PANE, true)`);
+    const form = 'PANE.querySelector("form.dk-hire-f")';
+    expect(p.out(shows(form))).toMatchObject({ provider: "claude", shown: ["claude"] });
+    p.run(pick(form, "deepseek"));
+    p.run(`${form}.querySelector('[name="model-deepseek"]').value = "deepseek-flash"; ${form}.querySelector('select[name="effort"]').value = "high"`);
+    p.run(`DK.catalog = ${JSON.stringify(flipped("groq"))}; dkDraw(PANE, true)`);
+    expect(p.out(shows(form))).toMatchObject({ provider: "deepseek", shown: ["deepseek"], model: "deepseek-flash" });
+    expect(p.out(shows(form))).toEqual({ provider: "deepseek", shown: ["deepseek"], model: "deepseek-flash", efforts: ["low", "high"], effort: "high", effortShown: true });
+    expect(p.out(`dkBrainDraft(formFields(${form}), DK.catalog.brains)`)).toEqual({ provider: "deepseek", model: "deepseek-flash", effort: "high", price: null });
+  });
+
+  it("offers each provider's own efforts as the Brain select changes: never medium for DeepSeek, none at all (and none signed) for a provider that takes none, the one chosen kept where it is still offered", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", ACCOUNT);
+    p.run(`SG.catalog = ${JSON.stringify(CAT)}; SG.params = {}; var ROOT = mini('<div data-sg-p="setup"></div>'); sgPaintSetup(ROOT, true)`);
+    const form = 'ROOT.querySelector("form.sg-setup-f")';
+    p.run(`${form}.querySelector('select[name="effort"]').value = "high"`);
+    p.run(pick(form, "deepseek"));
+    expect(p.out(shows(form))).toMatchObject({ efforts: ["low", "high"], effort: "high" });
+    // Groq takes none of the three: the field hidden and off, and the brain signed without one (Groq's own default applies)
+    p.run(pick(form, "groq"));
+    p.run(`${form}.querySelector('[name="model-groq"]').value = "openai/gpt-oss-120b"`);
+    expect(p.out(shows(form))).toMatchObject({ shown: ["groq"], efforts: [], effortShown: false });
+    expect(p.out(`sgBrainOf(formFields(${form}), SG.catalog)`)).toEqual({ provider: "groq", model: "openai/gpt-oss-120b", price: null });
+    // back to Claude: all three again, medium where nothing else is chosen
+    p.run(pick(form, "claude"));
+    expect(p.out(shows(form))).toMatchObject({ shown: ["claude"], efforts: ALL3, effort: "medium", effortShown: true });
+    // the draft never carries an effort the provider does not take, whatever the form's fields say
+    expect(p.out(`dkBrainDraft({ provider: "deepseek", "model-deepseek": "deepseek-flash", effort: "medium" }, SG.catalog.brains)`)).toEqual({ provider: "deepseek", model: "deepseek-flash", price: null });
+  });
+
+  it("refuses a model that looks like an API key in the setup and the hiring form, in words that never repeat it", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", ACCOUNT);
+    const madeUp = `gsk_${"Ab3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5bC7dE9fG1hJ3kL5"}`;
+    const d = p.out<string>(`dkBrainDraft({ provider: "groq", "model-groq": ${JSON.stringify(madeUp)} }, ${JSON.stringify(brains)})`);
+    expect(d).toBe("That looks like an API key, not a model's name: a key goes in the key field, never in the model. Nothing is signed or sent while it is there.");
+    expect(d).not.toContain(madeUp.slice(4, 14));
+    // the setup's words beside Start say it too, and Start would sign nothing
+    expect(p.out(`sgBrainOf({ provider: "groq", "model-groq": ${JSON.stringify(madeUp)} }, ${JSON.stringify(CAT)})`)).toBe(d);
+  });
+
+  it("asks no key of a server on this machine: its block opens the Brains sheet to set it up and says the account's own words; the checklist says it needs no key", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    const local = { ...CAT, brain: { ...CAT.brain, provider: "ollama" } };
+    const setup = p.run<string>(`sgSetupHtml(true, ${JSON.stringify(local)}, sgPaperVenues(), "")`);
+    expect(setup).toContain('data-sg-act="brains" data-v="ollama" data-fk="sg:brains:ollama">Set it up ›</button><p class="sg-dim">Runs on this machine and needs no key. name the model your server serves</p>');
+    expect(setup).not.toContain('data-v="ollama" data-fk="sg:brains:ollama">Type its key ›');
+    // a provider that does take a key keeps its own way to it
+    expect(setup).toContain('data-v="deepseek" data-fk="sg:brains:deepseek">Type its key ›</button>');
+    const check = p.run<string>(`sgCheckHtml(true, ${JSON.stringify(local)}, sgPaperVenues(), { provider: "ollama" }, true)`);
+    expect(check).toContain("Not yet for Ollama: it runs on this machine and needs no key — what it needs is under 3 · The brain, below.");
+    expect(check).not.toContain("type its key");
+    // with no form on show, the account's own words in full — a path in them free to break at each "/" on a narrow pane
+    const why = { ...local, brains: local.brains.map((b) => (b.id === "ollama" ? { ...b, why: "a file (/x/credentials/brains/ollama.json) only for another address" } : b)) };
+    expect(p.run<string>(`sgCheckHtml(true, ${JSON.stringify(why)}, sgPaperVenues(), { provider: "ollama" }, false)`)).toContain("Not yet for Ollama: it runs on this machine and needs no key. a file (/<wbr>x/<wbr>credentials/<wbr>brains/<wbr>ollama.json) only for another address");
+  });
+});
+
+// ---- a server on this machine in the setup: judged with the model the form names --------------------------------------------------------
+
+describe("a server on this machine in the setup: ready once its model is named — the checklist, its block and the words beside Start judge with the form's model", () => {
+  /** Ollama as the account says it with no file and no model named (brain-openai.ts openaiReach): not ready, fix "no-key", its usual
+   * address, no key — the one want a model's name */
+  const OLLAMA = { ok: false, id: "ollama", label: "Ollama", models: [], why: "Ollama needs a model's name: name one your server serves when you choose it as the desk's brain (Use this brain) — it is reached at http://localhost:11434/v1 with no key, and needs no file", fix: { code: "no-key", file: "/x/credentials/brains/ollama.json", restart: false, words: "Name the model when you choose Ollama as the desk's brain — nothing else is needed." }, efforts: [], kind: "local", keyOptional: true, baseUrl: "http://localhost:11434/v1", keyFrom: "none" };
+  // the catalog's own pick, Ollama, as the account gives it unhired: no model of its own (desk.ts catalog)
+  const CAT = { ...CATALOG, brains: [CATALOG.brains[0], OLLAMA], brain: { ok: false, provider: "ollama", label: "Ollama", model: "", models: [], effort: "medium" }, bounds: CATALOG_BOUNDS };
+
+  it("the checklist: not yet with no model, and ✓ ready with the model once it is typed — never \"not yet\" with qwen3:8b in its field", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", ACCOUNT);
+    p.run(`SG.catalog = ${JSON.stringify(CAT)}; SG.params = {}; var ROOT = mini('<div data-sg-p="setup"></div>'); sgPaintSetup(ROOT, true); var FORM = ROOT.querySelector("form.sg-setup-f")`);
+    const check = () => p.run<string>(`ROOT.querySelector('[data-sg-p="check"]').innerHTML`);
+    const words = () => p.run<string>("FORM.querySelector('[data-sg-words]').textContent");
+    // no model yet: not yet, and what it wants said in the setup's own words — the model, typed under 3 · The brain
+    expect(check()).toContain("Not yet for Ollama: it runs on this machine and needs no key, only the name of a model it serves — type it under 3 · The brain, below.");
+    expect(words()).toContain("The brain cannot think yet: see 3 · The brain.");
+    // the model typed (the setup's words are drawn again on every input): ready with it once Start signs it
+    p.run(`FORM.querySelector('[name="model-ollama"]').value = "qwen3:8b"; sgSetupSay(FORM)`);
+    expect(check()).toContain('<li class="sg-ck" data-ok="1"><span class="sg-ck-n" aria-hidden="true">✓</span><div class="sg-ck-b"><b>A brain key<span class="sr">: done</span></b><div>Ollama is ready with qwen3:8b once you sign: the account calls it at http://localhost:11434/v1 with no key. It runs on this machine: nothing is billed.</div></div></li>');
+    expect(check()).not.toContain("Not yet for Ollama");
+    expect(check()).not.toContain("It can start before the brain can think");
+    expect(words()).toContain("The brain (Ollama · qwen3:8b) needs no key. It runs on this machine: nothing is billed. It is ready with qwen3:8b once you sign.");
+    expect(words()).not.toContain("cannot think");
+    // and Start signs exactly that model
+    expect(p.out("sgBrainOf(formFields(FORM), SG.catalog)")).toEqual({ provider: "ollama", model: "qwen3:8b", price: null });
+  });
+
+  it("its block under the model field says what it wants in the setup's own words — never the account's sentence naming the Brains sheet's button", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    const setup = p.run<string>(`sgSetupHtml(true, ${JSON.stringify(CAT)}, sgPaperVenues(), "")`);
+    expect(setup).toContain('<span class="tag">needs a model</span><button type="button" class="sg-btn sg-btn-p sg-btn-s" data-sg-act="brains" data-v="ollama" data-fk="sg:brains:ollama">Set it up ›</button><p class="sg-dim">Runs on this machine and needs no key. Name a model it serves, above: it is ready with that model once you sign Start.</p>');
+    expect(setup).not.toContain("(Use this brain)");
+    expect(setup).toContain('<option value="ollama" selected>Ollama · Local · needs a model</option>');
+  });
+
+  it("the words beside Start speak of the brain the form picked — never another brain's standing — while its draft is still a sentence", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    // Ollama picked, no model yet (the draft a sentence): Claude, first in the catalog and ready, is not the one spoken of
+    const words = p.run<string>(`sgSetupWords({ maxRiskPct: "1", provider: "ollama" }, ${JSON.stringify(CAT)}, sgPaperVenues()[0], sgBrainOf({ provider: "ollama" }, ${JSON.stringify(CAT)}))`);
+    expect(words).toContain("The brain cannot think yet: see 3 · The brain.");
+    expect(words).not.toContain("Claude");
+    // a server that needs no key at an address saved on another machine: its server there, never "this machine"
+    const remote = { ...CAT, brains: [CATALOG.brains[0], { ...OLLAMA, ok: true, why: undefined, fix: undefined, keyFrom: "file", baseUrl: "https://ollama.example.com/v1", how: "the key file credentials/brains/ollama.json (no key: a local server) · ollama.example.com" }] };
+    expect(p.run<string>(`sgSetupWords({ maxRiskPct: "1", provider: "ollama" }, ${JSON.stringify(remote)}, sgPaperVenues()[0], { provider: "ollama", model: "qwen3:8b" })`)).toContain("The brain (Ollama · qwen3:8b) needs no key. It is your server at ollama.example.com.");
+    expect(p.run<string>(`sgCheckHtml(true, ${JSON.stringify(remote)}, sgPaperVenues(), { provider: "ollama", "model-ollama": "qwen3:8b" }, true)`)).toContain("Ollama is ready, through the key file credentials/brains/ollama.json (no key: a local server) · ollama.example.com. It is your server at ollama.example.com.");
   });
 });

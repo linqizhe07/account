@@ -93,3 +93,19 @@ describe("the Agents sheet", () => {
     expect(malformed({ ...draft, nonce: 1 } as OwnerAction)).toBeNull();
   });
 });
+
+describe("the Agents pane on a phone", () => {
+  it("keeps a lead's live card inside the screen: the price marker is no track-wide layer pushed past the card, but a box of no width moved along the ladder's own width (container units), its price label held inside the track", () => {
+    const css = readFileSync(join(PUBLIC, "ui/live.css"), "utf8");
+    // the rules that hold it, inside the one guard that says the browser has container units
+    const block = /@supports \(width: 1cqw\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    expect(block).toContain(".lv-ladder { container-type: inline-size; }");
+    expect(block).toContain(".lv-now { width: 0; transform: translateX(calc(var(--x, 50) * 1cqw)); }");
+    expect(block).toContain(".lv-now-t { transform: translateX(calc(var(--x, 50) * -1%)); }");
+    // written after the rules they replace, so they win where the browser takes them (the same specificity: the later rule stands)
+    expect(css.indexOf("@supports (width: 1cqw)")).toBeGreaterThan(css.indexOf(".lv-now-t { position: absolute;"));
+    expect(css.indexOf("@supports (width: 1cqw)")).toBeGreaterThan(css.indexOf(".lv-now { position: absolute;"));
+    // still a transform that slides (220 ms), nothing laid out again, and none of it under reduced motion
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.lv-now \{ transition: none; \}/);
+  });
+});

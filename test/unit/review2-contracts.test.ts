@@ -127,3 +127,63 @@ describe("the docs' flags and scripts exist", () => {
     expect(/二十六个文件/.test(cookbook) && /二十六个文件/.test(readme) ? 26 : n).toBe(n);
   });
 });
+
+describe("a brain's key typed on the page: the route, the server's parser, the docs", () => {
+  // the route's path is written out literally where it is registered (so the header check above sees it); the parser's skip is the module's
+  // constant: the two must be the same path, or the server's JSON parser would read — and could log — the one body that carries a key
+  it("POST /api/account/brain-key is registered under the path the JSON parser skips, and brain-test beside it", () => {
+    const keys = read("src/portfolio/account/brain-keys.ts");
+    const constant = /export const BRAIN_KEY_PATH = "([^"]+)"/.exec(keys)?.[1];
+    expect(constant).toBe("/api/account/brain-key");
+    expect(registeredRoutes()).toEqual(expect.arrayContaining([constant!, "/api/account/brain-test"]));
+    expect(server).toMatch(/app\.use\(\(req, res, next\) => \(isBrainKeyPath\(req\.path\) \? next\(\) : json\(req, res, next\)\)\)/);
+    // no JSON parser runs before the guard: the first app.use(express.json…) is gone, and the one there is comes after the 403
+    expect(server).not.toMatch(/app\.use\(express\.json\(/);
+    expect(server.indexOf("const json = express.json({ inflate: false })")).toBeGreaterThan(server.indexOf("this server answers only its own pages on this machine"));
+  });
+  it("setBrainKey is an owner action, and the docs say where a typed key goes and that the older key files are still read", () => {
+    expect((OWNER_TYPES as readonly string[]).includes("setBrainKey")).toBe(true);
+    for (const doc of [readme, cookbook, read("docs/account.md")]) {
+      expect(doc).toContain("credentials/brains/");
+      expect(doc).toContain("/api/account/brain-key");
+      expect(doc).toContain("credentials/anthropic/api-key.json");
+      expect(doc).toContain("credentials/openai/api-key.json");
+    }
+  });
+  // round 2 of the brains review: what the docs say matches what the code does
+  it("the docs say a key never goes in the model field, the gateway rule, that a local server needs no file — and what Test the key's check is (not authentication)", () => {
+    for (const doc of [readme, cookbook, read("docs/account.md")]) {
+      expect(doc).toContain("keyShaped");
+      expect(doc).toContain("ANTHROPIC_BASE_URL");
+      expect(doc).toMatch(/Ollama、vLLM 不用文件|\*\*不用文件\*\*/);
+      expect(doc).toContain("keyChanged");
+      expect(doc).toMatch(/不是认证/);
+    }
+    // the server's header says what the brain-test check is, and no longer that it is the page's alone
+    const header = server.slice(0, server.indexOf("*/"));
+    expect(header).toContain("That is not authentication");
+    expect(header).not.toMatch(/The owner's\s+\*\s+page only/);
+    expect(cookbook).not.toContain("只收这个页面自己发的");
+  });
+  // round 3 of the brains review: the key route's answer and the base-URL rule, as the code's own headers say them
+  it("the server's header names what the key route answers (keyless, envBlocks beside envWins), and brain-key.ts states the base-URL rule the page mirrors", () => {
+    const header = server.slice(0, server.indexOf("*/"));
+    expect(header).toContain("{keyless: true}");
+    expect(header).toContain("envBlocks");
+    expect(server).toMatch(/keyless \? \{ keyless: true \} : \{ cleared: true \}/);
+    expect(server).toMatch(/now\.envBlocks \? \{ envBlocks: now\.envBlocks \}/);
+    const rule = read("src/portfolio/account/brain-key.ts");
+    expect(rule).toMatch(/THE BASE-URL RULE — baseUrlKeyShaped\(raw\)/);
+    expect(rule).toContain("ui/brains.js brBaseKeyShaped");
+    expect(rule).toMatch(/export function baseUrlKeyShaped\(raw: string\): boolean/);
+    // the brain says a gateway's variable blocks a saved key: a field of what it says of itself, which the catalog spreads to the page
+    expect(read("src/portfolio/account/desk.ts")).toMatch(/envBlocks\?: string \| undefined;/);
+  });
+  it("the README's Grok Bot sentence says what xAI's docs say (dated): no API, webhook or MCP entry point, and not whether grok.com's connectors reach Grok Bot", () => {
+    const para = readme.split("\n").find((l) => l.includes("**Muse、Grok Bot、Instinct**"))!;
+    expect(para).toContain("2026-10-15");
+    expect(para).toMatch(/Grok Bot（2026-08-11 beta）的文档没有写任何 API、webhook 或 MCP 入口/);
+    expect(para).toMatch(/xAI 的文档没说这些 connector 到不到得了 Grok Bot/);
+    expect(para).not.toMatch(/Grok Bot 都只能反过来接/);
+  });
+});

@@ -95,9 +95,9 @@ import { locator, type Locator } from "./live/location.ts";
 import { isStable, realHttp } from "./live/types.ts";
 import { isPlain } from "./account/state.ts";
 import type { AgentAction, Envelope, Hex } from "./account/sign.ts";
-import { Desk, type Brain, type DeskWorld } from "./account/desk.ts";
-import { claudeBrain } from "./account/brain-claude.ts";
-import { openaiBrain } from "./account/brain-openai.ts";
+import { Desk, type Brain, type BrainStatus, type BrainTest, type DeskWorld } from "./account/desk.ts";
+import { applyBrainKey, BrainKeyStage, envBlocksOf, envWinsOf, type BrainKeyDone } from "./account/brain-keys.ts";
+import { brainProviders, testBrain } from "./account/brains.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const FIXTURES = join(ROOT, "fixtures", "home", "portfolio");
@@ -152,10 +152,11 @@ export interface ServiceOptions {
   /** the keyless public market data Markets reads beside the connected venues (default: live/public-markets.ts publicSources over the live
    * connection's network and exchange library); stand-ins in tests */
   publicMarkets?: PublicSource[] | undefined;
-  /** THE DESK (account/desk.ts), on a real account: the brain its house seats think with (default: a Claude model through the Anthropic
-   * API, account/brain-claude.ts; a scripted one in tests) and how often its clock ticks (0: only when asked, as in tests) */
-  /** the desk's brains: by default Claude (the Anthropic API) and any OpenAI-format endpoint, each ready when its key is there */
-  desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined; firstCycleMs?: number | undefined } | undefined;
+  /** THE DESK (account/desk.ts), on a real account: the brains its house seats may think with and how often its clock ticks (0: only when
+   * asked, as in tests). The brains, by default: every provider the Brains place offers (account/brains.ts brainProviders) — Claude through
+   * the Anthropic API and each OpenAI-format preset — each ready when its key is there; a scripted one in tests. `env`: the environment
+   * those brains read before their key files, as the answer to a key typed on the page says it (envWins); the process's own by default */
+  desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined; firstCycleMs?: number | undefined; env?: NodeJS.ProcessEnv | undefined } | undefined;
 }
 
 /** one slice of an order (or any step an agent flies): where, what, and the agent's words for it */
@@ -337,6 +338,9 @@ export class PortfolioService {
   restoring: Promise<void> | undefined;
   /** the account's own agents (account/desk.ts), on a real account */
   readonly desk: Desk | undefined;
+  /** A brain's key typed on the page (account/brain-keys.ts), held in memory from the moment its route has checked it against the signed
+   * fingerprint until that route answers — taken once by the door's handler, which writes the provider's key file. Nothing else reads it */
+  readonly brainKeys = new BrainKeyStage();
   /** the most one order or movement may be worth, in dollars: the server's `--live-cap` to start with, then what the owner last signed
    * (setPolicy cap), which a restart brings back from the ledger */
   private capUsd: number;
@@ -364,7 +368,7 @@ export class PortfolioService {
     this.account = opts.account !== undefined || opts.venues === "frontline" ? new AccountEngine(this.host(), opts.account ?? {}) : undefined;
     if (this.account) this.catalog = opts.connectable ?? loadConnectable();
     // the desk lives on a real account only: its seats are keys at the real door, its leads orders at a venue connected live
-    this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? [claudeBrain({ home: opts.home }), openaiBrain({ home: opts.home })], tickMs: opts.desk?.tickMs, firstCycleMs: opts.desk?.firstCycleMs }) : undefined;
+    this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? brainProviders(opts.home, { env: opts.desk?.env }), tickMs: opts.desk?.tickMs, firstCycleMs: opts.desk?.firstCycleMs }) : undefined;
     // the payees are simulated hosts: a real account has none. A real account pays real ones, from agent wallets (account/pay-real.ts)
     this.payees = this.account && !opts.real ? mountPayees(this.account) : undefined;
     if (this.account && opts.real && opts.liveWrites) this.account.usePayer(new RealPayer(this.account, { http: opts.payHttp ?? guardedHttp, chain: this.liveDeps().chain, wallet: (name) => agentWalletKey(opts.home, name), clock: () => this.liveDeps().clock(), capUsd: () => this.capUsd }));
@@ -574,6 +578,19 @@ export class PortfolioService {
       pairingCode: () => this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode,
       memory: () => this.memory,
       desk: (action, who) => (this.desk ? this.desk.apply(action, who) : Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk: it is the real account's" }))),
+      // a brain's key (account/brain-keys.ts): the key staged for this signature is taken here — once — and written to the provider's file.
+      // Taken whatever the handler answers, so a key is never left behind in memory by a refusal. Once a key file was written or removed, the
+      // desk is told (Desk.keyChanged): a refusal the provider gave the OLD key stops being the brain's standing — the page, the feed and the
+      // answer to this route then agree with no cycle in between — and the room says the key changed, by its fingerprint only (the desk
+      // keeps a refusal standing when a variable in the service's environment wins over the file: that key is still the one in use). A clear
+      // that found no file changed nothing, so the desk is not told: its line would say a key was taken away that never was
+      brainKey: (action, who): BrainKeyDone | Refusal => {
+        const staged = this.brainKeys.take(who.hash);
+        if (!this.desk) return no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk, so it holds no brain's key: brain keys are the real account's" });
+        const done = applyBrainKey(this.opts.home, this.desk.brains, action, staged);
+        if (!isRefusal(done) && done.changed) this.desk.keyChanged(done.provider, done.fingerprint, { keyless: done.keyless === true });
+        return done;
+      },
       autonomy: (signer, venue) => (this.desk && this.paperVenue(venue) ? this.desk.autonomyFor(signer, venue) : undefined),
       ...(real && this.opts.liveWrites
         ? {
@@ -1831,6 +1848,39 @@ export class PortfolioService {
       log: (row) => void this.ledger.append(unaddressedRow(row)),
     };
   }
+  /** How one of the desk's brains stands now that its key changed (account/brain-keys.ts), as the page, the feed and a seat read it — the
+   * desk's own standing (Desk.catalog), which is the brain's word about itself (a key file is read again at every check, so a key just
+   * written needs no restart) overlaid with a refusal the provider gave its key at a call, while that refusal stands. So the answer to the
+   * route that set the key never says "ready" beside a card that says "Key refused": they are read from the same place. And the variable in
+   * the service's environment that wins over the file, when one holds a key for it (envWins) — or that blocks the file without being used
+   * itself (envBlocks: Claude behind a gateway's ANTHROPIC_BASE_URL, brain-claude.ts). Undefined: no desk, or no brain of that id */
+  brainStanding(provider: string): { standing: BrainStatus; label: string; envWins?: string | undefined; envBlocks?: string | undefined } | undefined {
+    const b = this.desk?.brains.find((x) => x.id === provider);
+    if (!b) return undefined;
+    const row = this.desk!.catalog().brains.find((x) => x.id === provider);
+    const standing: BrainStatus = row ? { ok: row.ok, model: row.model, ...(row.how ? { how: row.how } : {}), ...(row.why ? { why: row.why } : {}), ...(row.fix ? { fix: row.fix } : {}) } : b.ready();
+    const envWins = envWinsOf(b, this.opts.desk?.env ?? process.env);
+    const envBlocks = envBlocksOf(b);
+    return { standing, label: b.label, ...(envWins ? { envWins } : {}), ...(envBlocks ? { envBlocks } : {}) };
+  }
+
+  /** "Test the key" (POST /api/account/brain-test): the brain's own test — the one call that bills nothing, to the provider's own base URL
+   * (desk.ts Brain.test, through brains.ts testBrain). One at a time per brain AND model: a second ask for the same pair while one is out
+   * waits for the same answer, so the page (or anything local that asks) cannot make a run of calls of it — and an ask for another model
+   * is its own test, so that its answer ("… X is listed") is never the words of a test about a different model. A brain with no test (a
+   * script) says so; nothing is sent then. Undefined: no desk, or no brain of that id */
+  async brainTest(provider: string, model = ""): Promise<BrainTest | undefined> {
+    const b = this.desk?.brains.find((x) => x.id === provider);
+    if (!b) return undefined;
+    const key = `${provider}\u0000${model}`;
+    const out = this.brainTests.get(key);
+    if (out) return out;
+    const asked = testBrain(this.desk!.brains, provider, model || undefined).finally(() => this.brainTests.delete(key));
+    this.brainTests.set(key, asked);
+    return asked;
+  }
+  private readonly brainTests = new Map<string, Promise<BrainTest>>();
+
   /** the real server runs the desk's clock (never in tests, which tick it themselves) */
   watchDesk(): () => void {
     return this.desk ? this.desk.start() : () => undefined;

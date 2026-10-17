@@ -70,7 +70,11 @@ function dkDraw(el, owner) {
     // the form keeps what is typed: drawn once, and again only when what it offers changed
     if (body.dataset.hire === JSON.stringify([owner, DK.catalog.hired, (DK.catalog.brains || []).map((b) => b.ok), A.requests.length, connected().map((v) => v.id)])) return;
     body.dataset.hire = JSON.stringify([owner, DK.catalog.hired, (DK.catalog.brains || []).map((b) => b.ok), A.requests.length, connected().map((v) => v.id)]);
+    // what was typed survives the form being drawn again (a key saved in the Brains sheet meanwhile flips a brain to ready); the Brain select
+    // put back is told so (core formKeep's change event), so the block on show and the efforts offered are its own, the ones Hire signs
+    const restore = formKeep(body.querySelector("form.dk-hire-f"));
     body.innerHTML = dkHireHtml(owner);
+    restore(body.querySelector("form.dk-hire-f"));
     DK.hiring = was;
     dkHireWire(body, owner);
     return;
@@ -178,7 +182,7 @@ function dkViewHtml(v, owner) {
   // the roster: each seat, its standing at the door, its limit, its charter
   const roster = `<section class="sec dk-roster" aria-labelledby="dk-roster-h"><div class="sec-head"><div class="label" id="dk-roster-h">Roster</div><div class="tools">${dkBtn("agents", "Every agent ›", { cls: "link dim" })}</div></div><div class="dk-seats">${v.seats.map((s) => { const ok = s.status === "ok"; const needsLimit = ((DK.catalog && DK.catalog.roles.find((x) => x.id === s.role)) || {}).trades && !s.limit; return `<details class="dk-seat" data-k="${esc(s.role)}"><summary><span class="dk-role dk-${esc(s.role)}">${esc(dkTag(s.role))}</span><span class="dk-seat-n"><b>${esc(s.name)}</b><span class="dim small">${esc(s.kind === "house" ? "the house" : "outside")} · ${ok ? (s.limit ? `up to ${money(s.limit.perOrderUsd)} a lead · ${money(s.limit.leftUsd)} left of ${money(s.limit.budgetUsd)}` : needsLimit ? "no trading limit" : "reads and speaks") : s.status}${s.cards ? ` · ${plural(s.cards, "card")} waiting` : ""}</span></span>${!ok ? '<span class="tag warn">not let in</span>' : needsLimit ? '<span class="tag warn">no limit</span>' : ""}</summary><div class="dk-charter"><div><b>Owns</b><p>${esc(s.charter.owns)}</p></div><div><b>Good output</b><p>${esc(s.charter.good)}</p></div><div><b>Never</b><p>${esc(s.charter.never)}</p></div><div class="acts">${owner ? `${dkBtn("charter", "Edit charter", { cls: "btn btn-sm", data: { role: s.role } })}${!ok ? dkBtn("letin", "Let it in", { cls: "btn btn-sm btn-primary", data: { role: s.role } }) : ""}${ok && needsLimit ? dkBtn("limit", "Give a limit", { cls: "btn btn-sm btn-primary", data: { role: s.role } }) : ""}` : ""}<button type="button" class="link dim" data-dk-act="memory" data-role="${esc(s.role)}">Memory</button></div></div></details>`; }).join("")}</div>${DK.catalog ? `<p class="dim small">${esc(DK.catalog.roles.filter((r) => !v.seats.some((s) => s.role === r.id)).map((r) => r.name).join(", ") || "Every seat is filled")}${DK.catalog.roles.some((r) => !v.seats.some((s) => s.role === r.id)) ? " — not on the desk" : ""}. ${owner ? dkBtn("fill", "Fill a seat…", { cls: "link" }) : ""}</p>` : ""}</section>`;
   const b = v.brain;
-  const brain = `<section class="sec dk-brain" aria-labelledby="dk-brain-h"><div class="sec-head"><div class="label" id="dk-brain-h">Brain</div></div><p class="small">${esc(b.label || "")} · <b>${esc(b.model)}</b> · ${esc(b.effort)} effort${b.ok ? ` · reached through ${esc(b.how || "the API")}` : ""}.</p>${b.ok ? "" : `<p class="small warn-t">The house seats cannot think: ${esc(b.why || "no key")}.</p><p class="dim small">The plan's exits still run; no lead is made up. A key file is read again at every check, no restart — or pick another brain under Brain….</p>`}<p class="dim small">${esc(String(b.spend.calls))} calls this desk · about ${esc(money(b.spend.usd))} ${b.price ? `at your price ($${esc(String(b.price.inUsd))}/$${esc(String(b.price.outUsd))} per M tokens)` : "at the model's listed price"} (${esc(String(b.spend.inputTokens))} in, ${esc(String(b.spend.outputTokens))} out)${b.spend.unpricedTokens ? ` · ${esc(String(b.spend.unpricedTokens))} tokens unpriced: give the model's price under Brain…` : ""}.</p></section>`;
+  const brain = `<section class="sec dk-brain" aria-labelledby="dk-brain-h"><div class="sec-head"><div class="label" id="dk-brain-h">Brain</div></div><p class="small">${esc(b.label || "")} · <b>${esc(b.model)}</b> · ${esc(b.effort)} effort${b.ok ? ` · reached through ${esc(b.how || "the API")}` : ""}.</p>${b.ok ? "" : `<p class="small warn-t">The house seats cannot think: ${esc(b.why || "no key")}.</p><p class="dim small">The plan's exits still run; no lead is made up. Type its key, test it or pick another brain under Brain….</p>`}<p class="dim small">${esc(String(b.spend.calls))} calls this desk · about ${esc(money(b.spend.usd))} ${b.price ? `at your price ($${esc(String(b.price.inUsd))}/$${esc(String(b.price.outUsd))} per M tokens)` : "at the model's listed price"} (${esc(String(b.spend.inputTokens))} in, ${esc(String(b.spend.outputTokens))} out)${b.spend.unpricedTokens ? ` · ${esc(String(b.spend.unpricedTokens))} tokens unpriced: give the model's price under Brain…` : ""}.</p></section>`;
   return `<div class="dk-grid"><div class="col-main">${hero}${openHtml}${tape}${big}</div><div class="col-side">${room}${roster}${brain}</div></div>`;
 }
 
@@ -232,7 +236,8 @@ async function dkAct(act, d) {
     case "report": return void set("report");
     case "end": if (await confirmSheet("End the session? The desk stops; its leads stay as they are (close them from their cards, or start a new session later).", { title: "End the session", yes: "End it", danger: true })) set("end"); return;
     case "objective": return void dkObjectiveForm();
-    case "brain": return void dkBrainForm();
+    case "brain": return void dkBrains();
+    case "brains": return void dkBrains($("pane-desk"));
     case "charter": return void dkCharterForm(d.role);
     case "fill": return void dkFillForm();
     case "agents": return void (typeof openAgents === "function" && openAgents());
@@ -247,30 +252,81 @@ async function dkAct(act, d) {
   }
 }
 
-/* the brain's fields: which one thinks, the model (listed, or named as the endpoint names it), the owner's price, the effort. opts.fix(b):
-   where a brain that is not ready gets its key, drawn in that brain's own block in place of its reason (the superagent's setup says it
-   there, once) */
+/* the brain's fields: which one thinks, the model (listed, or named as the endpoint names it — with the model ids the provider's own docs
+   suggest in a datalist, ui/brains.js brOf, never offered as the whole list), the owner's price, the effort. opts.fix(b): where a brain
+   that is not ready gets its key, drawn in that brain's own block in place of its reason (the superagent's setup says it there, once);
+   opts.idp: the datalists' id prefix, so the hiring form and the superagent's setup, both on the page, never share an id.
+   THE EFFORT offers only what the picked provider takes of the desk's three (its catalog entry's efforts, ui/brains.js brOf: DeepSeek takes
+   low and high, a provider that takes none has its own default) — each block says its provider's in data-efforts, and the change of the
+   Brain select (the owner's pick, core formKeep putting a choice back, the Brains sheet's "Pick it for the desk") offers that provider's
+   anew (dkBrainShow). A provider that takes none: no effort field, and none signed — so what is signed and said is what is sent */
 function dkBrainFields(brains, cur, opts = {}) {
   const pick = (cur && cur.provider) || brains[0].id;
-  const standing = (b) => (b.ok ? `<span class="tag up">ready</span> <span class="dim small">through ${esc(b.how || "the API")}</span>` : typeof opts.fix === "function" ? `<span class="tag warn">not ready</span>${opts.fix(b)}` : `<span class="tag warn">not ready</span> <span class="dim small">${esc(b.why || "")}</span>`);
+  // a server on this machine whose only want is a model's name (ui/brains.js brOnlyModel): "needs a model" — the field above it is the way,
+  // and it is ready with the model the form signs — never "not ready" beside the model typed for it. In the hiring form (no opts.fix) its
+  // own words say so, not the account's sentence, which names the Brains sheet's button
+  const onlyModel = (b) => typeof brOnlyModel === "function" && typeof brOf === "function" && brOnlyModel(brOf(b));
+  const standing = (b) =>
+    b.ok
+      ? `<span class="tag up">ready</span> <span class="dim small">through ${esc(b.how || "the API")}</span>`
+      : onlyModel(b)
+        ? `<span class="tag">needs a model</span>${typeof opts.fix === "function" ? opts.fix(b) : ' <span class="dim small">Runs on this machine and needs no key: name a model it serves above. It is ready with that model once you sign.</span>'}`
+        : typeof opts.fix === "function"
+          ? `<span class="tag warn">not ready</span>${opts.fix(b)}`
+          : `<span class="tag warn">not ready</span> <span class="dim small">${esc(b.why || "")}</span>`;
   const blocks = brains.map((b) => {
     const mine = !!cur && cur.provider === b.id;
     const model = mine ? cur.model : b.model || (b.models[0] ? b.models[0].id : "");
     const price = mine && cur.price ? cur.price : null;
     const fields = b.models.length
       ? `<div class="row2">${field("Model", select(`model-${b.id}`, b.models.map((m) => [m.id, `${m.name} · $${m.inUsd}/$${m.outUsd} per M tokens`]), model))}<div></div></div>`
-      : `<div class="row2">${field("Model, as the endpoint names it", `<input name="model-${esc(b.id)}" value="${esc(model)}" placeholder="e.g. deepseek-chat" />`)}${field("Its price per M tokens ($ in · $ out, optional)", `<div class="dk-price"><input name="in-${esc(b.id)}" inputmode="decimal" placeholder="in" value="${price ? esc(String(price.inUsd)) : ""}" /><input name="out-${esc(b.id)}" inputmode="decimal" placeholder="out" value="${price ? esc(String(price.outUsd)) : ""}" /></div>`)}</div>`;
-    return `<div class="dk-brain-of" data-brain="${esc(b.id)}"${b.id === pick ? "" : " hidden"}>${fields}<${!b.ok && typeof opts.fix === "function" ? "div" : "p"} class="small dk-standing">${standing(b)}</${!b.ok && typeof opts.fix === "function" ? "div" : "p"}></div>`;
+      : `<div class="row2">${field("Model, as the endpoint names it", `<input name="model-${esc(b.id)}" value="${esc(model)}" list="${esc(`${opts.idp || "dk"}-ml-${b.id}`)}" autocomplete="off" spellcheck="false" placeholder="${esc(dkSuggest(b)[0] ? `e.g. ${dkSuggest(b)[0][0]}` : "its model id")}" /><datalist id="${esc(`${opts.idp || "dk"}-ml-${b.id}`)}">${dkSuggest(b).map(([m, w]) => `<option value="${esc(m)}"${w ? ` label="${esc(w)}"` : ""}></option>`).join("")}</datalist>`)}${field("Its price per M tokens ($ in · $ out, optional)", `<div class="dk-price"><input name="in-${esc(b.id)}" inputmode="decimal" placeholder="in" value="${price ? esc(String(price.inUsd)) : ""}" /><input name="out-${esc(b.id)}" inputmode="decimal" placeholder="out" value="${price ? esc(String(price.outUsd)) : ""}" /></div>`)}</div>`;
+    return `<div class="dk-brain-of" data-brain="${esc(b.id)}" data-efforts="${esc(dkEfforts(b).join(" "))}"${b.id === pick ? "" : " hidden"}>${fields}<${!b.ok && typeof opts.fix === "function" ? "div" : "p"} class="small dk-standing">${standing(b)}</${!b.ok && typeof opts.fix === "function" ? "div" : "p"}></div>`;
   }).join("");
-  return `<div class="row2">${field("Brain", select("provider", brains.map((b) => [b.id, `${b.label} · ${b.ok ? "ready" : "no key"}`]), pick))}${field("Effort", select("effort", [["low", "low"], ["medium", "medium"], ["high", "high"]], (cur && cur.effort) || "medium"))}</div>${blocks}`;
+  // each provider's standing as the Brains sheet words it (Ready · key …ab12, No key, Key refused, Local · ready …)
+  const word = (b) => (typeof brOf === "function" ? brStanding(brOf(b))[0] : b.ok ? "ready" : "no key");
+  const picked = brains.find((b) => b.id === pick) || brains[0];
+  const efforts = dkEfforts(picked);
+  const effort = `<label data-dk-effort${efforts.length ? "" : " hidden"}>Effort${select("effort", efforts.map((e) => [e, e]), dkEffortOf(efforts, (cur && cur.effort) || ""))}</label>`;
+  return `<div class="row2">${field("Brain", select("provider", brains.map((b) => [b.id, `${b.label} · ${word(b)}`]), pick))}${efforts.length ? effort : effort.replace("<select ", "<select disabled ")}</div>${blocks}`;
+}
+/* the efforts a provider takes of the desk's three: its catalog entry's (ui/brains.js brOf reads it, or the page's own fact for an older
+   account's entry); all three where the Brains sheet is not loaded */
+const dkEfforts = (b) => (typeof brOf === "function" ? brOf(b).efforts : ["low", "medium", "high"]);
+/* the effort to show of those offered: the one asked for where it is offered, else medium, else the highest offered ("" for none) */
+const dkEffortOf = (efforts, want) => (efforts.includes(want) ? want : efforts.includes("medium") ? "medium" : efforts[efforts.length - 1] || "");
+/** the chosen provider's own block shown, the others' hidden, and the effort offering that provider's own choices — the one chosen kept
+ * where it is still offered (a provider that takes none: the field hidden and off, so nothing is signed for it) */
+function dkBrainShow(form, id) {
+  if (!form || !form.querySelectorAll) return;
+  let efforts = null;
+  form.querySelectorAll(".dk-brain-of").forEach((x) => {
+    x.hidden = x.dataset.brain !== id;
+    if (!x.hidden) efforts = String(x.dataset.efforts || "").split(" ").filter(Boolean);
+  });
+  const sel = form.querySelector('select[name="effort"]');
+  if (!sel || !efforts) return;
+  const now = sel.value;
+  if ([...(sel.options || [])].map((o) => o.value).join(" ") !== efforts.join(" ")) sel.innerHTML = efforts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
+  if (efforts.length) sel.value = dkEffortOf(efforts, now);
+  sel.disabled = !efforts.length;
+  const wrap = sel.closest ? sel.closest("[data-dk-effort]") : null;
+  if (wrap) wrap.hidden = !efforts.length;
 }
 
-/* the brain as the form says it — or why not yet */
+/* the model ids a provider's own docs suggest, as the Brains sheet has them ([id, a few words]); none where the sheet is not loaded */
+const dkSuggest = (b) => (typeof brOf === "function" ? brOf(b).suggest : []);
+
+/* the brain as the form says it — or why not yet: a model that looks like an API key is refused in words that never repeat it (ui/brains.js
+   brKeyShaped: a key signed as a model's name would be kept in the ledger and sent to the provider); the effort only where the provider takes
+   it (the field is off, and so not in the form's fields, where it takes none) */
 function dkBrainDraft(f, brains) {
   const b = brains.find((x) => x.id === f.provider) || brains[0];
   const model = String(f[`model-${b.id}`] || "").trim();
   if (!model) return "Name the model, as the endpoint names it.";
-  const out = { provider: b.id, model, effort: f.effort };
+  if (typeof brKeyShaped === "function" && brKeyShaped(model)) return BR_KEY_WORDS.model;
+  const effort = f.effort && dkEfforts(b).includes(f.effort) ? f.effort : "";
+  const out = { provider: b.id, model, ...(effort ? { effort } : {}) };
   if (!b.models.length) {
     const i = String(f[`in-${b.id}`] || "").trim();
     const o = String(f[`out-${b.id}`] || "").trim();
@@ -282,30 +338,33 @@ function dkBrainDraft(f, brains) {
   return out;
 }
 
-/* the brain, changed by signature */
-function dkBrainForm() {
-  const brains = DK.catalog.brains || [DK.catalog.brain];
-  const cur = DK.view.brain;
-  quoteDialog({
-    title: "The brain",
-    sub: "Which model the house seats think with, asked one structured question at a time. The authority stays the limits you signed.",
-    fields: dkBrainFields(brains, cur),
-    go: "Sign the brain",
-    draft(form) {
-      const b = dkBrainDraft(formFields(form), brains);
-      return typeof b === "string" ? b : { type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify(b) };
+/** the brains (ui/brains.js): from the hired desk's "Brain…", the sheet on the brain it thinks with, "Use this brain" signing setDesk change
+ * "brain"; from the hiring form's "Brains ›" (`pane` given), the same sheet, "Pick it for the desk" putting the provider and the model into
+ * that form. A key saved there flips the brain to ready here at the next read of the catalog, which is dropped at once */
+function dkBrains(pane) {
+  if (typeof openBrains !== "function") return;
+  const form = () => (pane && pane.querySelector ? pane.querySelector("form.dk-hire-f") : null);
+  const hiring = !!pane && !DK.view;
+  openBrains({
+    where: hiring ? "hire" : "agents",
+    catalog: DK.catalog,
+    cur: () => (hiring ? (form() && typeof dkBrainDraft === "function" ? dkBrainDraft(formFields(form()), (DK.catalog && (DK.catalog.brains || [DK.catalog.brain])) || []) : null) : DK.view && DK.view.brain),
+    desk: () => !hiring && !!DK.view,
+    ...(hiring ? { form } : {}),
+    after: () => {
+      forget("/api/account/desk");
+      dkRead();
     },
-    show(p) { const x = JSON.parse(p.action.value); const b = brains.find((y) => y.id === x.provider) || {}; return `<div class="big"><span>${esc(x.model)}</span></div><div class="path">${esc(b.label || x.provider)} · ${esc(x.effort)} effort${x.price ? ` · $${esc(String(x.price.inUsd))}/$${esc(String(x.price.outUsd))} per M tokens` : ""}</div>`; },
-    done: () => { forget("/api/account/desk"); return "The brain is signed."; },
   });
 }
 
-/* the chosen brain's own fields shown, the others' hidden — on the hire form and in the dialog alike */
+/* the chosen brain's own fields shown, the others' hidden, its own efforts offered — on the hire form and the superagent's setup alike, at
+   the owner's pick, a choice core formKeep puts back, and the Brains sheet's pick */
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (!t || t.name !== "provider" || !t.closest) return;
   const form = t.closest("form");
-  if (form) form.querySelectorAll(".dk-brain-of").forEach((x) => { x.hidden = x.dataset.brain !== t.value; });
+  if (form) dkBrainShow(form, t.value);
 });
 
 /* the objective, changed by signature */
@@ -402,9 +461,9 @@ function dkHireHtml(owner) {
       <div class="row2">${field("The seats stay for", select("days", [["7", "7 days"], ["30", "30 days"], ["90", "90 days"]], "30"))}<div></div></div>
       <p class="dim small">Sniper, Exit and Watch get a trading limit at the venue (your signature each); Head, Search and Risk get none — the door refuses them an order whatever they decide. In Guard every order still waits for you on a card.</p>
     </div>
-    <div class="dk-step"><div class="label">4 · The brain</div>
-      ${dkBrainFields(brains, c.brain)}
-      <p class="dim small">Claude through the Anthropic API, or any endpoint in OpenAI's chat format (OpenAI, DeepSeek, Kimi, a model on this machine): its key file says where. The desk asks one structured question at a time; the limits you signed stay the authority.</p>
+    <div class="dk-step"><div class="label">4 · The brain ${dkBtn("brains", "Brains: add a key, pick a model ›", { cls: "link" })}</div>
+      ${dkBrainFields(brains, c.brain, { idp: "dk" })}
+      <p class="dim small">Claude through the Anthropic API, or a model API in OpenAI's chat format — OpenAI, DeepSeek, Grok, Muse, Kimi, Qwen and more — or a model on this machine. Its key is typed once under Brains, kept by the account on this machine and sent only to its provider. The desk asks one structured question at a time; the limits you signed stay the authority.</p>
     </div>
     <div class="dk-hire-go"><div class="msg" data-dk-msg role="status"></div><button type="submit" class="btn btn-primary"${owner ? "" : ' disabled title="This browser can look but not sign"'}>Hire the desk</button><span class="dim small" data-dk-count></span></div>
   </form>`;
