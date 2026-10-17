@@ -451,11 +451,13 @@ function pfPaperWorthHtml(l) {
     if ((h.events || []).length) notes.push("Paper accounts opened and closed are marked on the curve, and are not counted as a gain or a loss.");
   }
   // what was made or lost since the start: the curve's own figure (every paper account in it said what it started with), else the venues'
+  // — the paper money the owner added since (topUpPaper) put in, never counted as made
   const started = L.filter((v) => num(v.paperStartUsd) > 0);
   const startUsd = h && !h.error && h.startUsd !== undefined ? h.startUsd : started.length === L.length ? started.reduce((s, v) => s + num(v.paperStartUsd), 0) : 0;
-  const since = startUsd > 0 ? (h && !h.error && h.sinceStartUsd !== undefined ? h.sinceStartUsd : usd - startUsd) : null;
+  const addedUsd = h && !h.error && h.addedUsd !== undefined ? num(h.addedUsd) : L.reduce((s, v) => s + num(v.paperAddedUsd), 0);
+  const since = startUsd > 0 ? (h && !h.error && h.sinceStartUsd !== undefined ? h.sinceStartUsd : usd - startUsd - addedUsd) : null;
   const realUsd = PF.holdReal && Number.isFinite(Number(PF.holdReal.totalUsd)) ? Number(PF.holdReal.totalUsd) : A.liveUsd;
-  const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)} <span class="tag paper">Paper</span></div><div class="num">${money(usd)}</div><div class="pf-today">${pfPaperRangeLine(h)}${pfInfo(notes)}</div>${since !== null ? `<div class="pf-aside small">${chg(since, "$")} <span class="dim">since ${L.length === 1 ? "it" : "they"} started with ${money(startUsd)}${h && h.first ? ` · ${esc(nyDay(h.first))}` : ""}</span></div>` : ""}</div><div class="pf-worth-c">${pfBookSeg(l, "paper")}${pfSeg("range", PF_RANGES, PF.range, "Range")}</div></div>`;
+  const head = `<div class="pf-worth-h"><div class="pf-worth-n"><div class="label">${esc(label)} <span class="tag paper">Paper</span></div><div class="num">${money(usd)}</div><div class="pf-today">${pfPaperRangeLine(h)}${pfInfo(notes)}</div>${since !== null ? `<div class="pf-aside small">${chg(since, "$")} <span class="dim">since ${L.length === 1 ? "it" : "they"} started with ${money(startUsd)}${addedUsd > 0 ? ` and ${money(addedUsd)} added` : ""}${h && h.first ? ` · ${esc(nyDay(h.first))}` : ""}</span></div>` : ""}</div><div class="pf-worth-c">${pfBookSeg(l, "paper")}${pfSeg("range", PF_RANGES, PF.range, "Range")}</div></div>`;
   // the superagent: Trade's second mode, the account's desk trading a paper account by itself (#/trade?mode=superagent, ui/superagent.js),
   // reached from the book it would trade. A link only: it does not change the mode the rail's Trade opens (only the switch keeps that)
   const superagent = ` <a class="link" href="${esc(hashOf("superagent", one ? { venue: one.id } : {}))}">${icon("superagent", "sm")}Let the superagent trade it ›</a>`;
@@ -966,6 +968,34 @@ async function declineAsk(a) {
   if (ok) await own({ type: "answerAsk", ask: a.id, decision: "decline" });
 }
 
+/** A PAPER ACCOUNT THE ACCOUNT KEEPS ITSELF, run by its owner (live/paper.ts): paper money added (topUpPaper), or the account started
+ * again with a new sum (resetPaper — its book as it stands archived beside it, never deleted; refused while an order of yours is open
+ * there). Each prepared by the account, said in its own words, and signed: paper money, nothing real moves. Its curve is read again after */
+function pfPaperDialog(venue, kind) {
+  const v = A.venues.find((x) => x.id === venue);
+  if (!v || !owns()) return;
+  const reset = kind === "reset";
+  const name = v.name.replace(/\s*·\s*paper$/i, "");
+  quoteDialog({
+    title: reset ? `Start ${name} again` : `Add paper money to ${name}`,
+    sub: esc(reset ? "A new book with the sum below (empty: $10,000). The book as it stands is archived beside it on this machine, not deleted. Paper money: nothing real moves." : "Paper money added to its cash, counted as put in — never as a gain. Nothing real moves."),
+    fields: field(reset ? "Start again with" : "Add", `<input name="usd" inputmode="decimal" autocomplete="off" placeholder="${reset ? "10000" : "5000"}" />`),
+    draft: (form) => {
+      const t = String(formFields(form).usd || "").trim();
+      if (!reset && !t) return "Type how much paper money to add.";
+      if (t && !/^\$?\d{1,9}(\.\d{1,2})?$/.test(t.replace(/,/g, ""))) return "A number of dollars, like 25000.";
+      return { type: reset ? "resetPaper" : "topUpPaper", venue, usd: t };
+    },
+    show: (p) => `<div class="path">${esc((p.quote && p.quote.words) || "")}</div>`,
+    done: () => {
+      PF.histPaper.clear();
+      forget("/api/account/history");
+      return "";
+    },
+    go: reset ? "Sign and start again" : "Sign and add",
+  });
+}
+
 /* disconnect an account, after a yes: nothing at the venue changes */
 async function pfDisconnect(venue) {
   const v = A.venues.find((x) => x.id === venue);
@@ -1060,7 +1090,7 @@ function pfDetails(venue) {
     const ticket = typeof openTicket === "function";
     const btn = (act, label, { primary = false, ghost = false, needsOwner = true } = {}) => `<button type="button" class="btn btn-sm${primary ? " btn-primary" : ghost ? " btn-ghost" : ""}" data-det="${act}" data-fk="det:${act}"${needsOwner && !owner ? " disabled" : ""}>${label}</button>`;
     // an agent wallet is emptied with Take back… (under Agents), never disconnected: the account holds its key and its money
-    return `<div class="pf-det"><div class="who">${avatar(v.name, "lg")}<div><b>${esc(v.name)}</b><span class="dim">${esc(pfCaption(v))}</span></div></div><div class="pf-det-v"><div class="label">Value</div><div class="num-m">${money(v.usd)}</div>${v.asOf ? `<span class="dim small">as of ${esc(nyDay(v.asOf))} ${esc(nyTime(v.asOf))}</span>` : ""}</div><div class="pf-chips">${pfChips(v)}</div><div class="pf-det-acts">${ticket && canTrade(v) ? btn("trade", "Trade…", { primary: true }) : ""}${canMove(v) ? btn("move", "Move…") : ""}${canReceive(v) ? btn("receive", "Receive", { needsOwner: false }) : ""}${btn("lens", "Show only this", { ghost: true, needsOwner: false })}${t.rekey ? btn("rekey", "Connect a new key") : ""}</div><section class="sec pf-det-sec"><div class="label">Holds</div>${table([
+    return `<div class="pf-det"><div class="who">${avatar(v.name, "lg")}<div><b>${esc(v.name)}</b><span class="dim">${esc(pfCaption(v))}</span></div></div><div class="pf-det-v"><div class="label">Value</div><div class="num-m">${money(v.usd)}</div>${v.asOf ? `<span class="dim small">as of ${esc(nyDay(v.asOf))} ${esc(nyTime(v.asOf))}</span>` : ""}</div><div class="pf-chips">${pfChips(v)}</div><div class="pf-det-acts">${ticket && canTrade(v) ? btn("trade", "Trade…", { primary: true }) : ""}${canMove(v) ? btn("move", "Move…") : ""}${canReceive(v) ? btn("receive", "Receive", { needsOwner: false }) : ""}${btn("lens", "Show only this", { ghost: true, needsOwner: false })}${t.rekey ? btn("rekey", "Connect a new key") : ""}${v.paper && v.connector === "live:paper" ? `${btn("topup", "Add paper money…")}${btn("reset", "Start again…")}` : ""}</div><section class="sec pf-det-sec"><div class="label">Holds</div>${table([
       { label: "Asset", cell: (x) => `${esc(x.asset)}${x.note ? `<span class="why">${esc(x.note)}</span>` : ""}` },
       { label: "Amount", r: true, cell: (x) => esc(qtyOf(x.amount)) },
       { label: "Value", r: true, cell: (x) => (x.usd ? money(x.usd) : '<span class="dim">no price</span>') },
@@ -1081,6 +1111,7 @@ function pfDetails(venue) {
     else if (act === "move") openLiveMove(venue);
     else if (act === "receive") openReceive(venue);
     else if (act === "rekey") pfRekey(venue);
+    else if (act === "topup" || act === "reset") pfPaperDialog(venue, act);
     else if (act === "lens") {
       view.lens = `venue:${venue}`;
       render();

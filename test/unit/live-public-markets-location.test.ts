@@ -4,7 +4,7 @@ import { exchangeSaidNo, type ExchangeClient, type OpenExchange } from "../../sr
 import { OKX_REBASED_PER_POINT, PRE_IPO_ISSUERS } from "../../src/portfolio/live/preipo.ts";
 import { PUBLIC_EXCHANGES, publicPrices } from "../../src/portfolio/live/prices.ts";
 import { exchangeNo, exchangeTickers, holdBackMs, hyperliquidPreIpoPublic, hyperliquidPublic, KEEP_MS, LIST_MS, preIpoPublic, PUBLIC_HOSTS, type Listing } from "../../src/portfolio/live/public-markets.ts";
-import type { Candle } from "../../src/portfolio/live/trade.ts";
+import type { Candle, CandlePage } from "../../src/portfolio/live/trade.ts";
 import { BINANCE_451_BODY, BINANCE_SAID, BN_DAY, BN_INFO, BN_MARK, BYBIT_403_BODY, BYBIT_SAID, BY_PAGE, BY_PAGES, BY_TICK, HOUR, MIN, NOW, UNIT, binance451, bybit403, hip3Net, json, network, refusing, venueOf, type Rec } from "./live-public-markets-fixtures.ts";
 
 /** The keyless public market data, wherever this machine is: what a venue serves here is read, what it refuses here lands in `missing` in
@@ -79,7 +79,7 @@ describe("Bybit's 403, which the library labels RateLimitExceeded", () => {
     now += 9 * MIN;
     expect(await bybit.listings({ q: "eth", limit: 5 })).toBe(first);
     expect(await bybit.stats!(["BTC/USDT", "ETH/USDT"])).toBe(first);
-    expect(await bybit.candles!("BTC/USDT", "1h", now - 24 * HOUR)).toBe(first);
+    expect(await bybit.candles!("BTC/USDT", "1h", { since: now - 24 * HOUR })).toBe(first);
     expect(by.counts).toEqual({ loads: 1, reloads: 0, tickers: 0, bars: 0 });
     // past the ten minutes: asked again, the markets loaded afresh
     now += 2 * MIN;
@@ -249,14 +249,15 @@ describe("Hyperliquid's HIP-3 pre-IPO perpetuals, keyless", () => {
   it("reads a HIP-3 market's bars by its dex-prefixed coin, and each Hyperliquid source refuses the other's names before asking", async () => {
     const net = hip3Net();
     const hl = hyperliquidPreIpoPublic({ http: net.http, clock: () => NOW });
-    const bars = (await hl.candles!("io:ANTH-PERP", "1h", NOW - 6 * HOUR)) as Candle[];
-    expect(net.sent.map((s) => s.body)).toEqual([{ type: "candleSnapshot", req: { coin: "io:ANTH", interval: "1h", startTime: NOW - 6 * HOUR, endTime: NOW } }]);
+    // from 11:12: the first whole hour is 12:00, the first bar Hyperliquid gave
+    const bars = ((await hl.candles!("io:ANTH-PERP", "1h", { since: NOW - 7 * HOUR })) as CandlePage).bars;
+    expect(net.sent.map((s) => s.body)).toEqual([{ type: "candleSnapshot", req: { coin: "io:ANTH", interval: "1h", startTime: Math.ceil((NOW - 7 * HOUR) / HOUR) * HOUR, endTime: Math.floor(NOW / HOUR) * HOUR + HOUR - 1 } }]);
     expect(bars).toEqual([
       { t: 1791460800000, o: 2102, h: 2109.3, l: 2101.4, c: 2108.5, v: 126.631 },
       { t: 1791464400000, o: 2108.6, h: 2113.6, l: 2106, c: 2112.9, v: 145.573 },
     ]);
-    expect(await hl.candles!("BTC-PERP", "1h", NOW - HOUR)).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION", message: 'a Hyperliquid perpetual here is <dex>:<COIN>-PERP (io:ANTH-PERP), not "BTC-PERP"' });
-    expect(await hyperliquidPublic({ http: net.http, clock: () => NOW }).candles!("io:ANTH-PERP", "1h", NOW - HOUR)).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION" });
+    expect(await hl.candles!("BTC-PERP", "1h", { since: NOW - HOUR })).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION", message: 'a Hyperliquid perpetual here is <dex>:<COIN>-PERP (io:ANTH-PERP), not "BTC-PERP"' });
+    expect(await hyperliquidPublic({ http: net.http, clock: () => NOW }).candles!("io:ANTH-PERP", "1h", { since: NOW - HOUR })).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION" });
     expect(net.sent).toHaveLength(1);
   });
 });

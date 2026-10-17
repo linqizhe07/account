@@ -9,7 +9,7 @@ import type { LiveDeps } from "../../src/portfolio/live/index.ts";
 import { rebuildEquity } from "../../src/portfolio/live/paper-history.ts";
 import { paperBookPath, type PaperBook } from "../../src/portfolio/live/paper.ts";
 import type { Listing, PublicSource } from "../../src/portfolio/live/public-markets.ts";
-import type { Candle, CandleInterval } from "../../src/portfolio/live/trade.ts";
+import { INTERVAL_MS, type Candle, type CandleInterval } from "../../src/portfolio/live/trade.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
 
 /** The paper accounts' curve (account/paper-equity.ts): each account's points — the ones the service wrote winning over the ones told again
@@ -168,7 +168,7 @@ describe("the service's paper accounts' curve", () => {
   // BTC climbs ten dollars an hour from 100,000 at T0
   const T0 = Date.parse("2026-10-11T12:00:00Z");
   const price = (t: number): number => r2(100_000 + (10 * (t - T0)) / H);
-  const SPAN: Record<CandleInterval, number> = { "5m": 5 * MIN, "1h": H, "1d": DAY };
+  const SPAN: Record<CandleInterval, number> = INTERVAL_MS;
   /** three days and a few minutes on, between two five-minute bars */
   const NOW3 = T0 + 3 * DAY + 3 * MIN + 17_000;
 
@@ -182,7 +182,7 @@ describe("the service's paper accounts' curve", () => {
       for (let t = Math.floor((T0 - DAY) / SPAN[interval]) * SPAN[interval]; t + SPAN[interval] <= clock.t; t += SPAN[interval]) if (t >= since) out.push({ t, o: price(t), h: price(t), l: price(t), c: price(t) });
       return out;
     };
-    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())), candles: async (symbol, interval, since) => (symbol === "BTC/USD" ? candles(interval, since) : []) };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())), candles: async (symbol, interval, w) => (symbol === "BTC/USD" ? candles(interval, w.since ?? 0) : []) };
     const home = mkdtempSync(join(tmpdir(), "paper-equity-"));
     homes.push(home);
     const liveDeps: Partial<LiveDeps> = { clock: () => clock.t, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };

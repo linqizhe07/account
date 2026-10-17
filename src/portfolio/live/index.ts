@@ -39,6 +39,7 @@ import { locator } from "./location.ts";
 import { metamaskSource, type RunMm } from "./metamask.ts";
 import { PAPER_DEFAULT_CASH, paperSource, parsePaperCash } from "./paper.ts";
 import type { PublicSource } from "./public-markets.ts";
+import type { MarketHub } from "./stream-hub.ts";
 import { POLYMARKET_TRADE_KEY, polymarketTradeSource } from "./polymarket-clob.ts";
 import { POLYMARKET_US_KEY, polymarketUsSource } from "./polymarket-us.ts";
 import { ROBINHOOD_CRYPTO_KEY, realMcp, robinhoodCryptoSource, robinhoodStocksSource, type OpenMcp } from "./robinhood.ts";
@@ -72,6 +73,9 @@ export interface LiveDeps {
   sender?: ChainSender | undefined;
   /** the public market data Markets reads without a key, as the service keeps it: what a paper account prices itself at (paper.ts) */
   publicSources?: (() => PublicSource[]) | undefined;
+  /** the venues' live market-data streams (live/stream-hub.ts), as the service runs them — asked each time, none until it runs them: what a
+   * paper account takes its prices from first (paper.ts) */
+  streams?: (() => MarketHub | undefined) | undefined;
 }
 
 export interface LiveRequest {
@@ -272,7 +276,7 @@ const paper: Connector = {
   async open(req, deps) {
     const cash = parsePaperCash(req.reference, req.venue);
     if (isRefusal(cash)) return cash;
-    const opened = await paperSource({ home: deps.home, venue: req.venue, label: req.label, cashUsd: cash, sources: () => deps.publicSources?.() ?? [], clock: deps.clock });
+    const opened = await paperSource({ home: deps.home, venue: req.venue, label: req.label, cashUsd: cash, sources: () => deps.publicSources?.() ?? [], clock: deps.clock, ...(deps.streams ? { hub: deps.streams } : {}) });
     return isRefusal(opened) ? opened : { ...opened, summary: `${opened.source.name}: ${opened.source.probe.note}` };
   },
 };

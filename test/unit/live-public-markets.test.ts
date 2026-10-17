@@ -4,9 +4,9 @@ import type { ExchangeClient, OpenExchange } from "../../src/portfolio/live/exch
 import { no } from "../../src/portfolio/refuse.ts";
 import { KALSHI_SERIES } from "../../src/portfolio/live/categories.ts";
 import { PRE_IPO_ISSUERS, PRE_IPO_NAMES } from "../../src/portfolio/live/preipo.ts";
-import { exchangeTickers, fixedHosts, holdBackMs, hyperliquidPublic, kalshiPublic, KEEP_MS, LIST_MS, polymarketPublic, polymarketUsPublic, PRE_IPO_VENUES, preIpoPublic, publicSources, stockTokensPublic, type Listing } from "../../src/portfolio/live/public-markets.ts";
+import { exchangeTickers, fixedHosts, holdBackMs, hyperliquidPublic, kalshiPublic, keeper, KEEP_MS, LIST_MS, polymarketPublic, polymarketUsPublic, PRE_IPO_VENUES, preIpoPublic, publicSources, readAtOf, readLike, stockTokensPublic, type Listing } from "../../src/portfolio/live/public-markets.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS } from "../../src/portfolio/live/robinhood.ts";
-import type { Candle } from "../../src/portfolio/live/trade.ts";
+import type { Candle, CandlePage } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply } from "../../src/portfolio/live/types.ts";
 
 /** Public market data, read without a key, against stand-ins: a stand-in exchange library whose tickers carry each exchange's own raw
@@ -189,6 +189,50 @@ const MARKET = (o: Rec): Rec => ({
 
 /** a Kalshi event as GET /events?with_nested_markets=true answers it (2026-10-06): the event's title and category, its markets nested */
 const EVENT = (ticker: string, title: string, category: string, markets: Rec[]): Rec => ({ event_ticker: ticker, series_ticker: ticker.split("-")[0], title, category, mutually_exclusive: true, markets });
+
+describe("when a kept answer was read from its venue (feat/paper-live p0: a price says its age)", () => {
+  it("a keeper stamps what it takes, and what is in it, with the moment it came back — and hands it out with that stamp while it keeps it", async () => {
+    let t = NOW;
+    const keep = keeper<{ rows: Array<{ p: number }> }>(() => t, KEEP_MS);
+    const answer = { rows: [{ p: 1 }, { p: 2 }] };
+    const got = await keep("k", async () => {
+      t = NOW + 900;
+      return answer;
+    });
+    expect([readAtOf(got), readAtOf(answer.rows), readAtOf(answer.rows[1])]).toEqual([NOW + 900, NOW + 900, NOW + 900]);
+    // asked again 80 s later: the same answer, still as old as when its venue answered
+    t = NOW + 80_000;
+    expect(readAtOf(((await keep("k", async () => ({ rows: [] }))) as typeof answer).rows[0])).toBe(NOW + 900);
+    // a refusal is no answer, and nothing that is not an object is stamped
+    expect(readAtOf(await keeper<unknown>(() => t, KEEP_MS)("r", async () => no("E_VENUE_UNREACHABLE", { message: "no" })))).toBeUndefined();
+    expect(readAtOf(7)).toBeUndefined();
+  });
+
+  it("a listing built afresh from a kept answer takes the oldest stamp it was built from; a listing from nothing stamped says nothing", () => {
+    const a = readLike({ x: 1 }, NOW);
+    const b = readLike([{ y: 1 }, { y: 2 }], a, NOW + 5_000);
+    expect([readAtOf(b[0]), readAtOf(b[1])]).toEqual([NOW, NOW]);
+    expect(readAtOf(readLike({ z: 1 }, {}, undefined))).toBeUndefined();
+  });
+
+  it("an exchange's tickers and Kalshi's legs carry the moment their venue answered, read again only once the keep runs out", async () => {
+    let t = NOW;
+    const lib = library({ "BTC/USD": spot("BTC", "USD") }, { "BTC/USD": { last: 100_000, info: { a: ["100010.0"], b: ["99990.0"], c: ["100000.0"], v: ["1", "2"], p: ["1", "1"], o: "1" } } });
+    const kraken = exchangeTickers("kraken", { open: lib.open, clock: () => t });
+    const first = (await kraken.listings({ limit: 5 })) as Listing[];
+    expect(readAtOf(first[0])).toBe(NOW);
+    t = NOW + 60_000;
+    expect(readAtOf(((await kraken.listings({ limit: 5 })) as Listing[])[0])).toBe(NOW);
+    t = NOW + KEEP_MS + 1;
+    expect(readAtOf(((await kraken.listings({ limit: 5 })) as Listing[])[0])).toBe(NOW + KEEP_MS + 1);
+    const ev = EVENT("KXFEDDECISION-26OCT", "Fed decision in Oct 2026?", "Economics", [MARKET({ ticker: "KXFEDDECISION-26OCT-H0", event_ticker: "KXFEDDECISION-26OCT", title: "Hike 0bps?", yes_sub_title: "Fed maintains rate", volume_24h_fp: "10.00", close_time: "2026-10-28T17:59:00Z", yes_bid_dollars: "0.8200", yes_ask_dollars: "0.8300", no_bid_dollars: "0.1700", no_ask_dollars: "0.1800" })]);
+    const net = network([["/trade-api/v2/events?", (url) => json({ events: query(url).series_ticker === "KXFEDDECISION" ? [ev] : [], cursor: "" })]]);
+    t = NOW + 3_000;
+    const legs = (await kalshiPublic({ http: net.http, clock: () => t }).listings({ limit: 5 })) as Listing[];
+    expect(legs.length).toBe(2);
+    expect(legs.map((l) => readAtOf(l))).toEqual([NOW + 3_000, NOW + 3_000]);
+  });
+});
 
 describe("Kalshi, keyless", () => {
   /** the network answering each series' open events: by series ticker; a series not named answers with no event at all, as Kalshi does
@@ -548,19 +592,22 @@ describe("Hyperliquid, keyless", () => {
     expect(hl.notes!({ q: "eth" })).toEqual([]);
   });
 
-  it("reads a perpetual's bars with candleSnapshot, sorted and as numbers, and refuses a name that is not <COIN>-PERP before asking", async () => {
+  it("reads a perpetual's bars with candleSnapshot, sorted and as numbers — saying where its bars start — and refuses a name that is not <COIN>-PERP before asking", async () => {
     const net = hyperliquidNet([
       { t: NOW - 2 * HOUR, T: NOW - HOUR - 1, s: "BTC", i: "1h", o: "85425.0", c: "85644.0", h: "85650.0", l: "85330.0", v: "791.9847", n: 10611 },
       { t: NOW - 3 * HOUR, T: NOW - 2 * HOUR - 1, s: "BTC", i: "1h", o: "85400.0", c: "85425.0", h: "85430.0", l: "85390.0", v: "100.5", n: 500 },
     ]);
     const hl = hyperliquidPublic({ http: net.http, clock: () => NOW });
-    const bars = (await hl.candles!("BTC-PERP", "1h", NOW - 24 * HOUR)) as Candle[];
-    expect(bars).toEqual([
+    const page = (await hl.candles!("BTC-PERP", "1h", { since: NOW - 24 * HOUR })) as CandlePage;
+    // its bars start long after the day asked, well inside its latest 5,000 hours: not the edge of what Hyperliquid keeps, but where its
+    // market's bars start
+    expect([page.more, page.ends, page.source]).toEqual([false, "Hyperliquid's BTC trading starts Mon 5 Oct 2026", "Hyperliquid · BTC perpetual"]);
+    expect(page.bars).toEqual([
       { t: NOW - 3 * HOUR, o: 85400, h: 85430, l: 85390, c: 85425, v: 100.5 },
       { t: NOW - 2 * HOUR, o: 85425, h: 85650, l: 85330, c: 85644, v: 791.9847 },
     ]);
-    expect(net.sent[0]!.body).toEqual({ type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: NOW - 24 * HOUR, endTime: NOW } });
-    expect(await hl.candles!("BTC/USDT", "1h", NOW - HOUR)).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION" });
+    expect(net.sent[0]!.body).toEqual({ type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: Math.ceil((NOW - 24 * HOUR) / HOUR) * HOUR, endTime: Math.floor(NOW / HOUR) * HOUR + HOUR - 1 } });
+    expect(await hl.candles!("BTC/USDT", "1h", { since: NOW - HOUR })).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION" });
     expect(net.sent).toHaveLength(1);
   });
 

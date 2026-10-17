@@ -68,6 +68,19 @@ export function parseOpenness(raw: unknown): Openness {
   };
 }
 
+/** THE AGENTS' SESSION, FROM WHEN IT IS MEASURED: the fixture's dial (fixtures/home/portfolio/openness.json) ends its session on a fixed
+ * date, which passes — a service on the real clock built from it as it is would refuse every agent write (E_WALLET_SESSION_EXPIRED). So a
+ * dial with no later session of its own gets SESSION_DAYS from `nowMs`: the server's start (server.ts), or a service's own clock when it is
+ * given no dial (service.ts). A session already later than that stays. The fixture's date is never moved forward instead: one a year out
+ * would make every first or --fresh start's session a year long, and the fixture would no longer bound a new account's session
+ * (service.ts adoptDial keeps the earlier of the ledger's session and this one) */
+export const SESSION_DAYS = 30;
+export function sessionFrom<T extends { sessionExpiresAt?: string | undefined }>(o: T, nowMs: number): T & { sessionExpiresAt: string } {
+  const until = nowMs + SESSION_DAYS * 86_400_000;
+  const kept = o.sessionExpiresAt !== undefined && Date.parse(o.sessionExpiresAt) > until ? o.sessionExpiresAt : undefined;
+  return { ...o, sessionExpiresAt: kept ?? new Date(until).toISOString() };
+}
+
 export function isExpired(now: string, until: string): boolean {
   return Date.parse(now) >= Date.parse(until);
 }

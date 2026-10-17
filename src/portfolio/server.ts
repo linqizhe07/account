@@ -29,6 +29,8 @@
  *   POST /api/account/prepare {draft}  turn what the owner asked for into the exact action to sign (a movement gets its route, fee and arrival;
  *                                      an order its exact size, price and the most it may be worth)
  *   GET  /api/account/exchanges        the exchanges the unified library covers, for the connect form
+ *   GET  /api/account/paper/books      the paper books kept in the home that no connection has open: what connecting one would continue (the
+ *                                      connect form says so, and offers to start it again: a signed resetPaper)
  *   GET  /api/account/keyfile?kind=&venue=&ref=    whether a key file is in place for a connection: its place, its mode, the fields it misses
  *   GET  /api/account/venues[?force=1]  where this user can connect: every venue the account knows, judged from this network (its own
  *                                      answer, and its terms matched to where the network is — never named) — live/availability.ts
@@ -40,6 +42,14 @@
  *   GET  /api/account/signin/status?state=         how that sign-in stands
  *   GET  /api/account/signin/callback              where the venue sends the owner's browser back
  *   GET  /api/account/statement        every transaction at the real venues, across the account's runs, newest first
+ *   GET  /api/account/stream[?since=&client=&markets=]  THE PUSH CHANNEL (account/stream.ts): text/event-stream, one a tab (ui/stream.js) —
+ *                                      what changes on the account as it happens: order, fill, position, balance, paper, statement, card,
+ *                                      desk; a heartbeat every 15 s; a page that comes back resumes after the last id it heard (Last-Event-ID,
+ *                                      or ?since=), or is sent a snapshot. A page that names itself (client) gets the quote, book and trades of
+ *                                      the markets it follows, from the venues' own streams (live/stream-hub.ts). Past the bus's room, 503
+ *   POST /api/account/stream/markets {client, markets: ["<venue>:<symbol>"], n}   what that page shows now: its markets followed instead
+ *                                      (a key with "~" before it: a market whose price alone it shows — its quote only, no book streamed);
+ *                                      `n` the page's own number for the telling, rising: one no later than the last taken is let be
  *   GET  /api/account/markets?venue=okx&q=BTC        what a venue connected live trades (a read)
  *   GET  /api/account/market?venue=okx&symbol=BTC/USDT   one market: a fresh price, the smallest order, the steps, open or not (a read)
  *   GET  /api/account/compare?base=BTC&side=buy&usd=     the same coin or stock at every venue connected live, ranked by the price an
@@ -56,7 +66,8 @@
  *                                                        instead (the Paper lens), summed as paper money
  *   GET  /api/account/history?range=1d|1w|1m|all         the net worth curve
  *   GET  /api/account/receive?venue=&asset=&network=     where to send an asset so that it lands at a venue
- *   GET  /api/account/asset?key=crypto:BTC&interval=1h   one asset: its row, every venue's price, price history, positions, orders, lines
+ *   GET  /api/account/asset?key=crypto:BTC&interval=1h   one asset: its row, every venue's price, price history (over `range` where
+ *                                                        named: 1D … MAX), positions, orders, lines
  *   GET  /api/account/quotes?pairs=okx|BTC/USDT,…        fresh prices for up to twelve markets
  *   GET  /api/account/sellable                           everything held that is not a dollar, and what selling it would sign
  *   GET  /api/account/agents                             the agents one by one: keys, limits, cards, orders, payments, wallets, intents
@@ -99,8 +110,12 @@
  *                                                        reads it: its notes (the waiting ones too), the switches, what its limits say
  *   GET  /api/account/memory/agent?address=&q=           one agent's memory as that agent reads it (portfolio_memory): its notes kept,
  *                                                        the ones waiting for the owner, its limits in words, and what other agents share
- *   GET  /api/account/candles?venue=&symbol=&interval=   one market's price history (5m · 1h · 1d): a connected venue's own, or a venue not
- *                                                        connected from its public data, without a key; kept a minute
+ *   GET  /api/account/candles?venue=&symbol=&interval=&range=   one market's price history (1m · 5m · 15m · 1h · 4h · 1d · 1w), a chart's
+ *                                                        first view of a range (1D 5D 1M 3M 6M YTD 1Y 5Y MAX, in its own bar size unless
+ *                                                        one is named) — or &before=<bar start ms>&limit= instead, one page scrolled left —
+ *                                                        with `more` (older bars exist) and, where the history ends, why: a connected
+ *                                                        venue's own, or a venue not connected from its public data, without a key; kept
+ *                                                        seconds to minutes in a bounded memory, nothing written
  *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
  *                                                        bid and ask only, depth "top"); kept a second and a half
  *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds (a source that
@@ -138,6 +153,7 @@ import { isRefusal, type Refusal } from "../core/errors.ts";
 import { parseIntent, parseOrder } from "./intents.ts";
 import { no } from "./refuse.ts";
 import { cardHash, type AccountPage } from "./account/exchange.ts";
+import { CLIENT_ID, MAX_FOLLOWS, STREAM_ID } from "./account/stream.ts";
 import { actionHash, type Envelope } from "./account/sign.ts";
 import { BODY_WORDS, BRAIN_KEY_BODY_LIMIT, checkBeforeDoor, fingerprintOf, isBrainKeyPath, KEY_SHAPED_WORDS, keyTail, parseBrainKeyBody } from "./account/brain-keys.ts";
 import { MODEL_ID } from "./account/desk.ts";
@@ -150,6 +166,7 @@ import { exchangeList } from "./live/exchange.ts";
 import { positionIcon } from "./live/icons.ts";
 import { STABLES } from "./live/types.ts";
 import { parseEventSymbol } from "./events.ts";
+import { sessionFrom } from "./openness.ts";
 import type { OrderPlan } from "./router.ts";
 import { isPending, loadOpenness, PortfolioService } from "./service.ts";
 import { defaultHome } from "./home.ts";
@@ -430,9 +447,11 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const local = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(host);
     const origin = req.headers.origin;
     // a browser says where a request comes from (Fetch Metadata): another site's request is refused, except a top-level navigation — a link to
-    // the page, or a venue's sign-in page sending the owner back (Robinhood's OAuth callback)
+    // the page, or a venue's sign-in page sending the owner back (Robinhood's OAuth callback) — and only to those: no other site navigates a
+    // tab to a route of the account's own (its push channel among them, which would hold a stream open and follow markets for that site)
     const site = req.headers["sec-fetch-site"];
-    const topLevel = req.headers["sec-fetch-mode"] === "navigate" && req.headers["sec-fetch-dest"] === "document" && req.method === "GET";
+    const navigable = !req.path.startsWith("/api/") || req.path === "/api/account/signin/callback";
+    const topLevel = req.headers["sec-fetch-mode"] === "navigate" && req.headers["sec-fetch-dest"] === "document" && req.method === "GET" && navigable;
     const foreignOrigin = typeof origin === "string" && origin !== `${req.protocol}://${host}`;
     const foreignSite = (site === "cross-site" || site === "same-site") && !topLevel;
     if (!local || foreignOrigin || foreignSite) return void res.status(403).json({ ok: false, error: "this server answers only its own pages on this machine" });
@@ -485,6 +504,13 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
 
   // the exchanges the unified library covers, for the page's list of real venues (the library is loaded on first ask)
   app.get("/api/account/exchanges", wrap(async (_req, res) => void res.json({ ok: true, exchanges: await exchangeList() })));
+
+  // the paper books in the home that no connection has open now, each said of itself (live/paper.ts summaryOf): connecting one of their ids
+  // continues it, and the connect form says so before the owner signs — offering to start it again instead (a signed resetPaper)
+  app.get("/api/account/paper/books", wrap(async (_req, res) => {
+    if (!svc.account) return void res.status(404).json({ ok: false, error: "the account layer is not mounted" });
+    res.json({ ok: true, books: svc.paperBooksIdle() });
+  }));
 
   // whether a key file is in place for a connection, before the owner connects it: its place, its permissions, the names of missing fields
   app.get("/api/account/keyfile", wrap(async (req, res) => {
@@ -562,6 +588,43 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     await svc.account.settle();
     res.json({ ok: true, lines: svc.statement() });
   }));
+
+  // THE PUSH CHANNEL (account/stream.ts): one text/event-stream a page holds open, behind the same guard as every route here (only this
+  // machine's own pages, under this server's own host) — what changes on the account, told as it happens. A page that comes back names the
+  // last event it heard (the browser's own Last-Event-ID on a reconnect, or ?since= on a stream it opens anew): the events after it come
+  // again, or — anything not shaped as one of this bus's ids, one from another run, one too old — a snapshot. One stream a tab: past the
+  // bus's room a further one is answered 503 in words, and the page goes on reading as it did before it had a stream
+  // A page names itself (?client=, a name of its own its tab keeps) and may say at once which markets it shows (?markets=, each
+  // `<venue>:<symbol>`, comma-separated): their quote, book and trades come on the stream as the venues' own streams move
+  // (live/stream-hub.ts). What it shows later it says at POST /api/account/stream/markets
+  app.get("/api/account/stream", (req, res) => {
+    if (!svc.account) return void res.status(404).json({ ok: false, error: "the account layer is not mounted" });
+    // the page opens its stream as an EventSource (cors, empty), never as a page of its own: a navigation here — from any site, the address
+    // bar too — holds no slot of the bus and follows no market
+    if (req.headers["sec-fetch-mode"] === "navigate" || req.headers["sec-fetch-dest"] === "document") return void res.status(403).json({ ok: false, error: "this server answers only its own pages on this machine" });
+    const q = strings(req, res, { since: 64, client: 48, markets: 4_000 });
+    if (!q) return;
+    const asked = String(req.get("last-event-id") ?? q.since).trim().slice(0, 64);
+    if (q.client && !CLIENT_ID.test(q.client)) return void bad(res, "a page names itself in 8 to 48 letters, digits, dashes or underscores");
+    if (!svc.stream.room()) return void res.status(503).json({ ok: false, error: `this account has ${svc.stream.listening} pages listening already: close a tab of it, and this one listens again on its next try` });
+    svc.stream.attach(req, res, STREAM_ID.test(asked) ? asked : "", q.client);
+    if (q.client && q.markets) svc.stream.follow(q.client, q.markets.split(",").slice(0, MAX_FOLLOWS));
+  });
+  // WHAT A PAGE SHOWS NOW: the markets whose quote, book and trades its stream carries, in place of what it showed before ({client, markets:
+  // [`<venue>:<symbol>`]}, at most MAX_FOLLOWS) — 404 when no stream of that name is open (the page opens one first). `n`, where the page
+  // numbers its tellings (a whole number, one more each): a telling that arrives after a later one is let be, and the answer says what the
+  // page follows now
+  app.post("/api/account/stream/markets", (req, res) => {
+    if (!svc.account) return void res.status(404).json({ ok: false, error: "the account layer is not mounted" });
+    const body = (req.body ?? {}) as { client?: unknown; markets?: unknown; n?: unknown };
+    const client = typeof body.client === "string" ? body.client : "";
+    if (!CLIENT_ID.test(client)) return void bad(res, "a page names itself in 8 to 48 letters, digits, dashes or underscores (\"client\")");
+    if (!Array.isArray(body.markets) || !body.markets.every((m) => typeof m === "string")) return void bad(res, "\"markets\" is a list of `<venue>:<symbol>`");
+    if (body.n !== undefined && !(typeof body.n === "number" && Number.isSafeInteger(body.n) && body.n > 0)) return void bad(res, "\"n\" is the page's own number for this telling: a whole number above 0");
+    const following = svc.stream.follow(client, (body.markets as string[]).slice(0, MAX_FOLLOWS), body.n as number | undefined);
+    if (!following) return void res.status(404).json({ ok: false, error: "no stream of that page is open: it opens one at GET /api/account/stream first" });
+    res.json({ ok: true, following });
+  });
 
   // the markets a venue connected live trades, and one market with a fresh price: what the order ticket and an agent read before an order
   app.get("/api/account/markets", wrap(async (req, res) => {
@@ -654,12 +717,13 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     answerOf(res, await svc.receive(q.venue, q.asset, q.network));
   }));
 
-  // one asset: its row, every venue's price, its price history, positions, open orders, statement lines and cost
+  // one asset: its row, every venue's price, its price history (over `range` where one is named, else the range of its bar size),
+  // positions, open orders, statement lines and cost
   app.get("/api/account/asset", wrap(async (req, res) => {
     if (!mounted(res)) return;
-    const q = strings(req, res, { key: 140, interval: 4 });
+    const q = strings(req, res, { key: 140, interval: 4, range: 4 });
     if (!q) return;
-    answerOf(res, await svc.asset(q.key, q.interval || "1h"));
+    answerOf(res, await svc.asset(q.key, q.interval || "1h", q.range || undefined));
   }));
 
   // a fresh price for each of up to twelve markets: ?pairs=okx|BTC/USDT,kalshi|KXFED-25DEC-T4.00:YES (or one ?pair= each). How many is
@@ -733,9 +797,9 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
   // symbol plain text: neither ever names a host (service.ts candles)
   app.get("/api/account/candles", wrap(async (req, res) => {
     if (!mounted(res)) return;
-    const q = strings(req, res, { venue: 60, symbol: 200, interval: 4 });
+    const q = strings(req, res, { venue: 60, symbol: 200, interval: 4, range: 4, before: 16, limit: 6 });
     if (!q) return;
-    answerOf(res, await svc.candles(q.venue, q.symbol, q.interval || "1h"));
+    answerOf(res, await svc.candles(q.venue, q.symbol, q.interval, { range: q.range, before: q.before, limit: q.limit }));
   }));
 
   // one market's order book (best first, `depth` levels a side, 1 to 50) and its latest trades (newest first, `limit`, 1 to 100): a connected
@@ -999,6 +1063,11 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
       closed = true;
       if (timer) clearInterval(timer);
       svc.onConnection = undefined;
+      // every page's stream ended first (and its heartbeat): an open stream never holds the server, or a test, open — then the venues'
+      // streams closed, and every paper book's last change written
+      svc.stream.end();
+      svc.closeStreams();
+      await svc.flushPaper();
       await snapping;
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -1040,13 +1109,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // runs too, trading and all
   const code = classic ? undefined : pairingCode();
   const liveWrites = !readOnly && !classic ? { capUsd, pairingCode: code! } : undefined;
-  // the fixture's session ends on a fixed date; a server on the real clock gets thirty days from when it starts
-  const openness = loadOpenness() as { sessionExpiresAt?: string };
-  const month = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  // the fixture's session ends on a fixed date; a server on the real clock gets thirty days from when it starts (openness.ts sessionFrom)
+  const openness = sessionFrom(loadOpenness() as { sessionExpiresAt?: string }, Date.now());
   // a real account continues its earlier runs — the owner's device, the venues, the agents and their limits come back (account/restore.ts);
   // --fresh starts it from nothing
   const fresh = args.includes("--fresh");
-  const service = await PortfolioService.create({ home: at("--home") ?? defaultHome(), live, fresh, ...(liveWrites ? { liveWrites } : {}), ...(code ? { pairingCode: code } : {}), ...(classic ? {} : { venues: "frontline" as const, real: true, openness: { ...openness, sessionExpiresAt: (openness.sessionExpiresAt ?? "") > month ? openness.sessionExpiresAt : month } }) });
+  const service = await PortfolioService.create({ home: at("--home") ?? defaultHome(), live, fresh, ...(liveWrites ? { liveWrites } : {}), ...(code ? { pairingCode: code } : {}), ...(classic ? {} : { venues: "frontline" as const, real: true, openness }) });
   const srv = await startPortfolioServer({ port, service }).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "EADDRINUSE") throw e;
     // the usual reason: this server is already running in another terminal
@@ -1064,6 +1132,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!classic && service.account) service.watchVenues();
   // the paper accounts' own clock: their resting orders, stops, days and funding looked at every few seconds (service.ts watchPaper)
   if (!classic && service.account) service.watchPaper();
+  // the venues' own live streams (live/stream-hub.ts): started lazily — nothing opens until a paper order or a page wants a market — so
+  // they never delay the server's listen; each venue only while its REST answers this network
+  if (!classic && service.account) service.watchStreams();
+  // while a page listens on the push channel, the account's door follows real venues' orders, payments and earn by itself
+  if (!classic && service.account) service.watchDoor();
   // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
   if (!classic && service.account) service.watchDesk();
   const stop = () => srv.close().then(() => process.exit(0));

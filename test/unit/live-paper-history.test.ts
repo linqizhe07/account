@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { paperBarsWanted, paperBookStart, rebuildEquity, REBUILD_MAX_POINTS, replayPaperBook, type PriceSeries } from "../../src/portfolio/live/paper-history.ts";
 import type { PaperBook, PaperFill, PaperMarketRef, PaperOrder } from "../../src/portfolio/live/paper.ts";
-import type { Candle } from "../../src/portfolio/live/trade.ts";
+import { INTERVAL_MS, type Candle, type CandleInterval } from "../../src/portfolio/live/trade.ts";
 
 /** A PAPER ACCOUNT'S PAST, told again from its own book (live/paper-history.ts): the book's orders replayed from its starting money, what
  * it held valued at the public sources' bars between the fills. The first book is the user's real paper-1 as it stands (its three market
@@ -588,10 +588,13 @@ describe("a paper account's past, told again from its own book", () => {
     expect(wants(now - DAY)).toEqual(["AAPL 1d 2026-10-04T14:00:00.000Z", "AAPL 5m 2026-10-11T13:55:00.000Z", "BTC/USD 5m 2026-10-11T13:55:00.000Z"]);
     // a week: hourly bars and the last day's five-minute ones, and the stock's daily closes
     expect(wants(now - 7 * DAY)).toEqual(["AAPL 1d 2026-09-28T14:00:00.000Z", "AAPL 1h 2026-10-05T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1h 2026-10-05T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
-    // a month: hourly bars reach back twelve days; daily bars before that, a coin's from the one that had closed when the range started (it
-    // started at midnight UTC the day before), not from a day before the range's start, which a source that gives the bars starting at or
-    // after it would leave out
-    expect(wants(now - 30 * DAY)).toEqual(["AAPL 1d 2026-09-05T14:00:00.000Z", "AAPL 1h 2026-09-30T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1d 2026-09-11T00:00:00.000Z", "BTC/USD 1h 2026-09-30T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
+    // a month: hourly bars reach back a month and a day now (a source gives HISTORY_MOST in one ask since phase H; twelve days before), so
+    // a month is hourly from its start, from the bar before the one it starts in; the stock's daily closes still from a week before
+    expect(wants(now - 30 * DAY)).toEqual(["AAPL 1d 2026-09-05T14:00:00.000Z", "AAPL 1h 2026-09-12T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1h 2026-09-12T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
+    // past the hourly bars' reach: daily bars before it, a coin's from the one that had closed when the range started (it started at
+    // midnight UTC the day before), not from a day before the range's start, which a source that gives the bars starting at or after it
+    // would leave out
+    expect(wants(now - 60 * DAY)).toEqual(["AAPL 1d 2026-08-06T14:00:00.000Z", "AAPL 1h 2026-09-11T13:00:00.000Z", "AAPL 5m 2026-10-11T14:00:00.000Z", "BTC/USD 1d 2026-08-12T00:00:00.000Z", "BTC/USD 1h 2026-09-11T13:00:00.000Z", "BTC/USD 5m 2026-10-11T14:00:00.000Z"]);
     // with them, the weekend stands at Friday's close (known at the session's end, 20:00 UTC), not at the price the account paid
     const daily = { symbol: "AAPL", interval: "1d" as const, candles: [{ t: ms("2026-10-08T13:30:00Z"), o: 205, h: 205, l: 205, c: 205 }, { t: ms("2026-10-09T13:30:00Z"), o: 210, h: 210, l: 210, c: 210 }], closeAt: (c: Candle) => c.t + 6.5 * HOUR };
     const stock = bookOf({ createdAt: iso(C), cashUsd: 8000, holdings: { AAPL: { qty: 10, costUsd: 2000 } }, orders: { p1: order("p1", "AAPL", "buy", 10, 200, C, { feeUsd: 0 }) }, markets: { AAPL: market("stock", "AAPL", "USD", { source: "us-stocks" }) } });
@@ -612,9 +615,9 @@ describe("a paper account's past, told again from its own book", () => {
       markets: { "BTC/USD": market("spot", "BTC") },
     });
     const now = ms("2026-10-12T14:00:00Z");
-    const span = { "5m": 5 * MIN, "1h": HOUR, "1d": DAY } as const;
+    const span = INTERVAL_MS;
     /** a source's candles: the bars of the interval that have closed by now, from the first that starts at or after `since` */
-    const candles = (interval: keyof typeof span, since: number): Candle[] => {
+    const candles = (interval: CandleInterval, since: number): Candle[] => {
       const out: Candle[] = [];
       for (let t = Math.floor(created / span[interval]) * span[interval]; t + span[interval] <= now; t += span[interval]) {
         const c = 100_000 + (100 * (t + span[interval] - created)) / DAY;
@@ -625,8 +628,9 @@ describe("a paper account's past, told again from its own book", () => {
     const fromMs = now - 30 * DAY;
     const series: PriceSeries[] = paperBarsWanted(book, fromMs, now).map((w) => ({ symbol: w.symbol, interval: w.interval, candles: candles(w.interval, w.since) }));
     const r = rebuildEquity(book, series, { fromMs, toMs: now, stepMs: 6 * HOUR });
-    // at the range's start (14:00 UTC): the daily bar that closed at midnight before it, thirty days after the book started — 103,000
-    expect(r.points[0]).toEqual({ at: fromMs, usd: 9990 + 10_300 });
+    // at the range's start (14:00 UTC): the hourly bar that closed then (the hourly bars reach a month back), thirty days and fourteen hours
+    // after the book started — 103,058.33
+    expect(r.points[0]).toEqual({ at: fromMs, usd: 20_295.83 });
     expect(r.points.every((p) => !p.partial)).toBe(true);
     expect(r.missing).toEqual([]);
     expect(r.inexact).toEqual([]);

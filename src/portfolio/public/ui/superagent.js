@@ -82,14 +82,19 @@ const SG = {
   tickerAt: 0,
   live: { at: 0, usd: null },
   quotesAt: 0,
-  // the beat: a timer, or -1 while a read is on its way; the reads numbered, so one let go after a stall is not used when it comes back
+  // the beat: a timer, or -1 while a read is on its way; the reads numbered, so one let go after a stall is not used when it comes back;
+  // when the last read began, and whether the desk moved while one was on its way (the next read comes as soon as it ends: sgNudge)
   timer: 0,
   readNo: 0,
+  tickAt: 0,
+  nudged: false,
   // the floor's handle (ui/floor.js), or why there is none
   floor: null,
   floorNo: "",
-  // the market the analysis panel is mounted on, "venue|symbol"
+  // the market the analysis panel is mounted on, "venue|symbol", and the range, the bar size and the price scale the owner picked on its
+  // chart (kept when the focus moves to another market; a day of five-minute bars until one is picked)
   mounted: "",
+  chart: { range: "1D", interval: "5m", log: false },
   stopSecond: null,
   // the cards' typed lines: the element being typed into and its words; the seq each card shows
   typing: new Map(),
@@ -113,6 +118,11 @@ const SG = {
   signing: false,
 };
 const SG_EVERY_MS = 1_000;
+/* while the account's stream is connected the desk tells the page each time its floor moves (a `desk` event: sgNudge reads it at once), and
+   the beat is the fallback: this many times slower */
+const SG_PUSHED_SLOW = 4;
+/* the least time between two reads a burst of the desk's moves asks for */
+const SG_NUDGE_MS = 150;
 const SG_VIEW_MS = 5_000;
 const SG_CANDLES_MS = 60_000;
 const SG_TICKER_MS = 30_000;
@@ -137,12 +147,25 @@ const sgMaxSpread = (feed) => {
   const v = feed && feed.hard ? feed.hard.maxSpreadPct : undefined;
   return v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v);
 };
-/* the superagent's trading limits: a seat's budget is twenty orders of the per-order size, so a day of paper trading does not run it out
-   after ten entries as the Agents pane's hire (ten) would. The limit's window stays 0: on a trade limit the window is not a budget that
-   renews — it allows ONE order per window at each venue (account/state.ts covers, E_MANDATE_RATE), so 24 would let the Sniper enter once
-   a day and the Exit close once a day. The budget is spent as orders fill and is not renewed: the words beside the button say so */
+/* the superagent's trading limits: a seat's ENTRY budget is twenty orders of the per-order size A DAY, and it renews — every SG_RENEW_HOURS
+   the account counts what the entries spent afresh (approveSpend renewHours, signed with the limit: account/state.ts renewSpend), and a
+   close (a sell of what is held, a reduce-only order) counts against none of it, so a session never stops after its twentieth order and a
+   stop is never kept waiting by the day's entries. It is still a limit the owner signs, never a silent exemption for paper: the words beside
+   the button say what it is. The limit's window stays 0: on a trade limit the window is not the budget's — it allows ONE order per window
+   at each venue (account/state.ts covers, E_MANDATE_RATE), so 24 there would let the Sniper enter once a day and the Exit close once a day */
 const SG_BUDGET_TIMES = 20;
+const SG_RENEW_HOURS = 24;
 const SG_WINDOW_HOURS = 0;
+/* ROOM FOR A CLOSE on that limit: a close counts against none of the budget, but the limit's per-order cap still holds it (account/state.ts
+   covers — it is what keeps a limit from selling a whole holding in one order). The desk sizes an entry at the risk per lead (sgPer; the
+   desk's own clamp, desk.ts clearing: the least of the objective's risk, the limit per order and what is left), and buys it at up to a 2%
+   worse price — so the plan's own close of a lead that gained a few percent is worth more than the entry was. The per-order cap the owner
+   signs is this many times the entry size, so that close still goes (a lead up to about 45%). That cap holds entries too: the desk sizes
+   each at the risk per lead of what the account held when ITS SESSION started (session.startEquityUsd), and a later session of an account
+   that grew (gains, a top-up) sizes them larger, up to the cap — and the day's budget then covers fewer of them. So the words beside the
+   button say what is signed: entries sized at the risk per lead of a session's start (today's size beside it), any one order up to the
+   cap, the day's budget in dollars (about SG_BUDGET_TIMES entries at today's size) — never an entry size the signature does not hold */
+const SG_CLOSE_ROOM = 1.5;
 const SG_SEAT_DAYS = 30;
 /* a superagent's cycle, by default: every five minutes (the Agents pane's hire starts at fifteen) */
 const SG_EVERY_MIN = 5;
@@ -481,7 +504,7 @@ function sgMetric(role, { feed, view, seat, now }) {
   if (role === "sniper") {
     const last = leads.filter((l) => l.entry && Number.isFinite(Number(l.entry.price))).sort((x, y) => String(y.entry.at || "").localeCompare(String(x.entry.at || "")))[0];
     const lim = seat && seat.limit;
-    return { text: last ? `last fill ${qtyOf(last.entry.qty)} ${sgBase(last.symbol)} at ${px(last.entry.price)}` : "no fill yet", bar: lim && num(lim.budgetUsd) > 0 ? num(lim.leftUsd) / num(lim.budgetUsd) : null, word: lim ? `${money(lim.leftUsd)} left of ${money(lim.budgetUsd)}` : seat ? "no trading limit" : "" };
+    return { text: last ? `last fill ${qtyOf(last.entry.qty)} ${sgBase(last.symbol)} at ${px(last.entry.price)}` : "no fill yet", bar: lim && num(lim.budgetUsd) > 0 ? num(lim.leftUsd) / num(lim.budgetUsd) : null, word: lim ? `${money(lim.leftUsd)} left of ${money(lim.budgetUsd)}${lim.renewsAt ? ` · renews ${nyTime(lim.renewsAt)} New York` : ""}` : seat ? "no trading limit" : "" };
   }
   if (role === "exit") {
     const open = leads.filter((l) => l.state === "executed" || l.state === "closing").length;
@@ -564,8 +587,9 @@ function sgFocus(feed) {
   const row = (scan.rows || []).find((r) => r.symbol === pick.symbol) || {};
   return { symbol: pick.symbol, name: row.name || pick.symbol, kind: row.kind || "", why: "the last scan's top pick", confidence: pick.confidence };
 }
-/* the focus market's five-minute bars, as the account reads them for the chart (the same path ui/chart.js asks: one read for both) */
-const sgCandlesPath = (venue, symbol) => `/api/account/candles?${new URLSearchParams({ venue, symbol, interval: "5m" })}`;
+/* the focus market's five-minute bars over its latest day, as the account reads them for the chart (the same path ui/chart.js asks for
+   its first view of a day of five-minute bars, chPath: one read for both while the chart shows them) */
+const sgCandlesPath = (venue, symbol) => `/api/account/candles?${new URLSearchParams({ venue, symbol, interval: "5m", range: "1D" })}`;
 
 /** the focus as the floor draws it: its bars where they were read (none before: nothing is drawn), its price, the leads on it held now
  * with their entry and the plan's take-profit and stop prices */
@@ -685,13 +709,17 @@ function sgControlDraft(act, on) {
 
 /* the per-order size a lead may be: the objective's risk per lead of what the paper account holds, in whole dollars, a dollar at least */
 const sgPer = (venue, riskPct) => Math.max(1, Math.round((num(venue && venue.usd) * num(riskPct)) / 100));
+/* the per-order cap a seat's trading limit is signed with: the entry size with room for a close of a lead that gained (SG_CLOSE_ROOM) */
+const sgPerOrder = (per) => Math.ceil(per * SG_CLOSE_ROOM);
 /* the house seats, and the ones of them that trade, as the catalog names them */
 const sgHouse = (catalog) => (catalog && Array.isArray(catalog.roles) ? catalog.roles.filter((r) => r.house) : []);
 
 /** The setup's signatures, in the order they are signed — or a sentence saying what is missing:
  *   1. approveAgent   each house seat's key let in (Head, Search, Risk, Sniper, Exit, Watch), for SG_SEAT_DAYS
  *   2. approveSpend   each house seat that trades (Sniper, Exit, Watch): scope trade, at the paper account only, per order the objective's
- *                     risk per lead of what it holds, SG_BUDGET_TIMES orders in all, the window SG_WINDOW_HOURS (see above)
+ *                     risk per lead of what it holds with room for a close (SG_CLOSE_ROOM; it caps entries too), SG_BUDGET_TIMES times the
+ *                     risk per lead of entries a day — renewing every SG_RENEW_HOURS (renewHours, signed), closes counting against none of
+ *                     it — the window SG_WINDOW_HOURS (see above)
  *   3. setDesk hire   the objective, the brain, the house seats
  *   4. setDesk autonomy {paper: true}
  * f: the form's fields; venue: the paper account (a connected one); brain: the brain as dkBrainDraft gives it, or its sentence */
@@ -718,7 +746,7 @@ function sgSetupSteps(f, catalog, venue, brain, now) {
   const per = sgPer(venue, f.maxRiskPct);
   const seatName = (r) => `Desk ${String(r.name).replace(" of desk", "")}`;
   const steps = house.map((r) => ({ say: `Let in ${seatName(r)}`, draft: { type: "approveAgent", agentAddress: seats[r.id], agentName: seatName(r), validUntil: until } }));
-  for (const r of house.filter((x) => x.trades)) steps.push({ say: `${r.name}'s trading limit`, draft: { type: "approveSpend", agent: seats[r.id], scope: "trade", allow: venue.id, perPayment: String(per), budget: String(per * SG_BUDGET_TIMES), windowHours: SG_WINDOW_HOURS, validUntil: until } });
+  for (const r of house.filter((x) => x.trades)) steps.push({ say: `${r.name}'s trading limit`, draft: { type: "approveSpend", agent: seats[r.id], scope: "trade", allow: venue.id, perPayment: String(sgPerOrder(per)), budget: String(per * SG_BUDGET_TIMES), windowHours: SG_WINDOW_HOURS, validUntil: until, renewHours: SG_RENEW_HOURS } });
   const d = catalog.defaults || {};
   const objective = { text: String(f.text).trim(), venue: venue.id, universe: d.universe || "all", targetPct: Number(f.targetPct), maxRiskPct: Number(f.maxRiskPct), maxDailyLossPct: Number(f.maxDailyLossPct), hours: Number(f.hours), everyMin: Number(f.everyMin), reportAt: d.reportAt || "21:00", maxOpen: Number(f.maxOpen) };
   // the hire carries the autonomy in the same signature (desk.ts hire `autonomy`): the desk is never hired without it, so its first cycle,
@@ -747,7 +775,7 @@ function sgSetupWords(f, catalog, venue, brain) {
   const ready = !!b && sgReadyWith(b, model);
   const named = `${b ? b.label : ""}${model ? ` · ${sgModelName(model)}` : ""}`;
   const think = !b ? "" : !ready ? "The brain cannot think yet: see 3 · The brain. Until it can, no lead is made up, and the plan's exits still run." : sgKeyOptional(b) ? `The brain (${named}) needs no key. ${sgBilledWords(b)}${b.ok ? "" : ` It is ready with ${model} once you sign.`}` : `The brain's calls (${named}) are billed to your key.`;
-  return `Starting signs ${house.length + trading.length + 1} things, one after another: ${house.length} house seats let in (${names(house)}); a trading limit for ${names(trading)} at ${venue.name} — up to ${money(per)} an order and ${money(per * SG_BUDGET_TIMES)} in all, about ${SG_BUDGET_TIMES} orders, for ${SG_SEAT_DAYS} days; and the desk hired with its autonomy on paper, in one signature. From then on the desk's own orders at ${venue.name} are placed at once, without a card for you — paper money — each inside its seat's limit. ${think} You can pause or end it at any time, or turn it back to cards: its orders then wait for you on this page, in the Waits for you strip, and under Portfolio.`;
+  return `Starting signs ${house.length + trading.length + 1} things, one after another: ${house.length} house seats let in (${names(house)}); a trading limit for ${names(trading)} at ${venue.name} — entries sized at ${num(f.maxRiskPct)}% of what the paper account holds when a session starts (${money(per)} now), any one order up to ${money(sgPerOrder(per))} so a lead that gained can still be closed, and ${money(per * SG_BUDGET_TIMES)} of entries a day (about ${SG_BUDGET_TIMES} at today's size), counted afresh every ${SG_RENEW_HOURS} hours (a close counts against none of it), for ${SG_SEAT_DAYS} days; and the desk hired with its autonomy on paper, in one signature. From then on the desk's own orders at ${venue.name} are placed at once, without a card for you — paper money — each inside its seat's limit. ${think} You can pause or end it at any time, or turn it back to cards: its orders then wait for you on this page, in the Waits for you strip, and under Portfolio.`;
 }
 
 /** a desk on a real venue moved to a paper account: each house seat whose key is not let in now let in again (the account grants a trading
@@ -767,11 +795,47 @@ function sgMoveSteps(view, catalog, venue, now) {
   for (const s of house) if (s.status !== "ok") steps.push({ say: `Let in ${s.name}`, draft: { type: "approveAgent", agentAddress: s.address, agentName: String(s.name), validUntil: until } });
   for (const s of view.seats || []) {
     const spec = sgSpec(s.role, catalog);
-    if (s.kind === "house" && spec.trades) steps.push({ say: `${spec.name}'s trading limit at ${venue.name}`, draft: { type: "approveSpend", agent: s.address, scope: "trade", allow: venue.id, perPayment: String(per), budget: String(per * SG_BUDGET_TIMES), windowHours: SG_WINDOW_HOURS, validUntil: until } });
+    if (s.kind === "house" && spec.trades) steps.push({ say: `${spec.name}'s trading limit at ${venue.name}`, draft: { type: "approveSpend", agent: s.address, scope: "trade", allow: venue.id, perPayment: String(sgPerOrder(per)), budget: String(per * SG_BUDGET_TIMES), windowHours: SG_WINDOW_HOURS, validUntil: until, renewHours: SG_RENEW_HOURS } });
   }
   steps.push({ say: `Move the desk to ${venue.name}`, draft: { type: "setDesk", desk: "desk", change: "objective", value: JSON.stringify({ text: o.text, venue: venue.id, universe: o.universe, targetPct: o.targetPct, maxRiskPct: o.maxRiskPct, maxDailyLossPct: o.maxDailyLossPct, everyMin: o.everyMin, maxOpen: o.maxOpen, reportAt: o.reportAt }) } });
   steps.push({ say: "Autonomy on paper", draft: sgControlDraft("autonomy", true) });
   return steps;
+}
+
+/* the desk's house seats that trade whose limit does not renew — none at all, or one signed without renewHours (a desk hired before the
+   Superagent's limits renewed, or on the Agents pane): [] while every one renews, and before the desk and the catalog are read */
+function sgUnrenewed(view, catalog) {
+  if (!view || !catalog) return [];
+  return (view.seats || []).filter((s) => s.kind === "house" && sgSpec(s.role, catalog).trades && !(s.limit && num(s.limit.renewHours) > 0));
+}
+
+/** A DESK WHOSE SEATS' LIMITS DO NOT RENEW (sgUnrenewed: hired before the renewing limit, like a Superagent from before it) spends its
+ * budget once — about twenty entries — and then stops; Start again, Resume and the Agents pane's "Give a limit" re-use or draft limits
+ * that do not renew, so nothing else gets it out short of ending the desk and hiring it again. Here each such seat is given the setup's
+ * own renewing limit at the desk's paper account (the numbers sgSetupSteps signs), a seat whose key is not let in now let in again first
+ * (the account grants a trading limit only to a key authorised now) — or the sentence why not. Each is signed by the owner, and replaces
+ * the seat's limit now (one standing limit per seat, account/state.ts) */
+function sgRenewSteps(view, catalog, venue, now) {
+  if (!view || !catalog) return "The desk is being read: a moment.";
+  if (!venue || !venue.paper) return "The desk's venue is not read as a paper account now: its seats' limits renew at a paper account only.";
+  const stale = sgUnrenewed(view, catalog);
+  if (!stale.length) return "Every trading seat's limit renews already.";
+  const revoked = stale.find((s) => s.status === "revoked");
+  if (revoked) return `${sgSpec(revoked.role, catalog).name}'s key was revoked, and a revoked key is never let in again: hire the seat again from the Agents pane first.`;
+  const per = sgPer(venue, view.objective && view.objective.maxRiskPct);
+  const until = num(now) + SG_SEAT_DAYS * DAY;
+  const steps = [];
+  for (const s of stale) if (s.status !== "ok") steps.push({ say: `Let in ${s.name}`, draft: { type: "approveAgent", agentAddress: s.address, agentName: String(s.name), validUntil: until } });
+  for (const s of stale) steps.push({ say: `${sgSpec(s.role, catalog).name}'s trading limit, renewing`, draft: { type: "approveSpend", agent: s.address, scope: "trade", allow: venue.id, perPayment: String(sgPerOrder(per)), budget: String(per * SG_BUDGET_TIMES), windowHours: SG_WINDOW_HOURS, validUntil: until, renewHours: SG_RENEW_HOURS } });
+  return steps;
+}
+
+/* the words of the renewal, before the owner says yes: exactly what signing does, with the setup's own words for the limit */
+function sgRenewWords(view, catalog, venue) {
+  const stale = sgUnrenewed(view, catalog);
+  const per = sgPer(venue, view && view.objective && view.objective.maxRiskPct);
+  const names = stale.map((s) => sgSpec(s.role, catalog).name).join(", ");
+  return `Renewing signs a trading limit for ${names} at ${venue ? venue.name : "the paper account"} that renews — entries sized at ${num(view && view.objective && view.objective.maxRiskPct)}% of what the paper account holds when a session starts (${money(per)} now), any one order up to ${money(sgPerOrder(per))} so a lead that gained can still be closed, and ${money(per * SG_BUDGET_TIMES)} of entries a day (about ${SG_BUDGET_TIMES} at today's size), counted afresh every ${SG_RENEW_HOURS} hours (a close counts against none of it), for ${SG_SEAT_DAYS} days. Each replaces the seat's limit now${stale.some((s) => s.status !== "ok") ? "; a seat whose key is not let in now is let in again first" : ""}.`;
 }
 
 /** signatures one after another, each through the owner's device key (Owner.act: prepare, sign, send); the first refusal stops the rest.
@@ -1188,6 +1252,18 @@ function sgNoteHtml(feed, view, owner, now) {
     const first = SG.started.tone !== "warn" && s && s.state === "live" && num(s.cycles) === 0 ? " The first cycle starts within seconds." : "";
     out.push(`<span class="${SG.started.tone === "warn" ? "sg-warn-t" : "sg-ok-t"}">${esc(SG.started.text + first)}</span>`);
   }
+  // a desk whose trading seats' limits do not renew stops once a budget is spent — and a seat with no limit at all (none signed, or the one
+  // signed ran out: its days, or the key it was for) places nothing: each said as it is, with the one way out that keeps the desk (sgRenew),
+  // which signs the setup's own renewing limit for every such seat
+  const stale = feed.venue && feed.venue.paper ? sgUnrenewed(view, SG.catalog) : [];
+  if (stale.length) {
+    const renew = owner ? ` <button type="button" class="sg-link" data-sg-act="renew" data-fk="sg:renew">Renew the seats' limits…</button>` : "";
+    const names = (l) => esc(l.map((x) => sgSpec(x.role, SG.catalog).name).join(", "));
+    const once = stale.filter((x) => x.limit);
+    const none = stale.filter((x) => !x.limit);
+    const said = [once.length ? `The seats' trading limits do not renew: once a budget is spent, that seat's orders stop until a new limit is signed (${names(once)}).` : "", none.length ? `${none.length > 1 ? "These seats have" : "This seat has"} no trading limit now — none was signed, or the one signed ran out — so ${none.length > 1 ? "they place" : "it places"} nothing (${names(none)}).` : ""].filter(Boolean).join(" ");
+    out.push(`<span class="sg-warn-t">${said}${renew}</span>`);
+  }
   const want = SG.params && SG.params.venue;
   if (want && feed.venue && want !== feed.venue.id && A) {
     const there = (A.venues || []).find((v) => v.id === want);
@@ -1471,7 +1547,8 @@ function sgPaintFocus(root, feed) {
       paint(chart, `<p class="sg-dim sg-wait-w">${focus ? `${esc(sgVenueName(feed, SG.view).replace(/^the /, "The "))} is not connected: no chart or book until it is.` : "Nothing to analyse yet: the market of the first lead — or of the first scan's top pick — shows here."}</p>`);
       paint(book, "");
     } else {
-      if (typeof chMount === "function") chMount(chart, { venue, symbol: focus.symbol, kind: focus.kind, interval: "5m" });
+      const c = SG.chart;
+      if (typeof chMount === "function") chMount(chart, { venue, symbol: focus.symbol, kind: focus.kind, range: c.range, interval: c.interval || undefined, log: c.log === true, onRange: (r) => (c.range = r), onInterval: (iv) => (c.interval = iv), onLog: (on) => (c.log = on) });
       else paint(chart, '<p class="sg-dim">The chart is not on this page.</p>');
       if (typeof bkMount === "function") bkMount(book, { venue, symbol: focus.symbol, kind: focus.kind, base: sgBase(focus.symbol) });
       else paint(book, '<p class="sg-dim">The order book is not on this page.</p>');
@@ -1535,7 +1612,7 @@ function sgRulesHtml(feed, view) {
     ${row("Risk a lead", o ? esc(`${o.maxRiskPct}% (${money((start * num(o.maxRiskPct)) / 100)})`) : rd)}
     ${row("Day's loss line", o ? esc(`${o.maxDailyLossPct}%`) : rd, feed.today ? esc(`room ${money(feed.today.lossRoomUsd)} left`) : "")}
     ${row("Leads open", o ? esc(`at most ${o.maxOpen}`) : rd, esc(`${open} open`))}
-    ${row("Size", sniper && sniper.limit ? esc(`≤ ${money(sniper.limit.perOrderUsd)}`) : view ? "no Sniper limit" : rd, sniper && sniper.limit ? esc(`the Sniper's limit · ${money(sniper.limit.leftUsd)} left`) : "")}
+    ${row("Size", sniper && sniper.limit ? esc(`≤ ${money(o && start > 0 ? Math.min(num(sniper.limit.perOrderUsd), (start * num(o.maxRiskPct)) / 100) : sniper.limit.perOrderUsd)}`) : view ? "no Sniper limit" : rd, sniper && sniper.limit ? esc(`the Sniper's limit · ${money(sniper.limit.leftUsd)} left`) : "")}
     <div class="sg-rh">The plan</div>
     ${plan ? row("Exit", esc(`TP +${plan.tpPct}% · SL −${plan.slPct}% · ${plan.maxHours} h`), esc(plan.id)) : row("Exit", "<span class=\"sg-dim\">Risk sets each lead's plan: none cleared yet</span>")}
   </div>`;
@@ -1815,7 +1892,7 @@ function sgPaintReal(root, owner) {
 }
 /* the form that moves the desk to a paper account: which one, what moving signs, the button */
 function sgMoveFormHtml(owner, papers, want) {
-  return `<form class="sg-move-f" novalidate>${field("Move it to", select("venue", papers.map((v) => [v.id, `${sgPaperless(v.name)} · ${money(v.usd)} paper`]), (papers.find((v) => v.id === want) || papers[0]).id))}<p class="sg-words">Moving signs, one after another: each house seat whose key is not let in now, let in again for ${SG_SEAT_DAYS} days; a trading limit at that paper account for each house seat that trades (up to the objective's risk per lead of what it holds an order, ${SG_BUDGET_TIMES} orders in all, for ${SG_SEAT_DAYS} days), the desk's objective with its venue changed, and its autonomy on paper — after which its orders there are placed without a card for you, each inside its seat's limit.</p><div class="msg" data-sg-msg role="status"></div><button type="submit" class="sg-btn sg-btn-p"${owner && SG.view && SG.catalog ? "" : ` disabled title="${owner ? "The desk is being read" : esc(sgLooking())}"`}>Move it to paper</button></form>`;
+  return `<form class="sg-move-f" novalidate>${field("Move it to", select("venue", papers.map((v) => [v.id, `${sgPaperless(v.name)} · ${money(v.usd)} paper`]), (papers.find((v) => v.id === want) || papers[0]).id))}<p class="sg-words">Moving signs, one after another: each house seat whose key is not let in now, let in again for ${SG_SEAT_DAYS} days; a trading limit at that paper account for each house seat that trades (entries sized at the objective's risk per lead of what it holds when a session starts, any one order up to ${SG_CLOSE_ROOM} times that, and ${SG_BUDGET_TIMES} times it of entries a day, counted afresh every ${SG_RENEW_HOURS} hours — a close counts against none of it — for ${SG_SEAT_DAYS} days), the desk's objective with its venue changed, and its autonomy on paper — after which its orders there are placed without a card for you, each inside its seat's limit.</p><div class="msg" data-sg-msg role="status"></div><button type="submit" class="sg-btn sg-btn-p"${owner && SG.view && SG.catalog ? "" : ` disabled title="${owner ? "The desk is being read" : esc(sgLooking())}"`}>Move it to paper</button></form>`;
 }
 /* the move from the floor (arrived from Regular on another paper account): the same form, in a sheet */
 function sgMoveSheet(want) {
@@ -1867,6 +1944,40 @@ async function sgMove(form) {
   sgAgain([]);
   return out.ok;
 }
+/* the seats' limits renewed (sgRenewSteps): what signing does said first, and a yes; then signed one after another. Resolves whether
+   they went through */
+async function sgRenew() {
+  if (!owns() || busy) return false;
+  const view = SG.view;
+  const venue = view && view.objective ? sgPaperVenues().find((v) => v.id === view.objective.venue) : undefined;
+  const steps = sgRenewSteps(view, SG.catalog, venue, nowMs());
+  if (typeof steps === "string") {
+    toast(steps, "no");
+    return false;
+  }
+  if (!(await confirmSheet(sgRenewWords(view, SG.catalog, venue), { title: "Renew the seats' limits", yes: "Sign them" }))) return false;
+  busy = true;
+  document.body.classList.add("busy");
+  let out;
+  try {
+    out = await sgSigning(() => sgRun(steps, (t) => (SG.started = { at: Date.now(), text: t, tone: "ok" })));
+  } finally {
+    busy = false;
+    document.body.classList.remove("busy");
+  }
+  if (!out.ok) {
+    const words = sgRefusedWords(out, steps, "Renew them again when you are ready: what is signed stands.");
+    SG.started = { at: Date.now(), text: words, tone: "warn" };
+    flash = words;
+  } else {
+    SG.started = { at: Date.now(), text: `Renewed: ${plural(steps.filter((x) => x.draft.type === "approveSpend").length, "trading limit")} now counted afresh every ${SG_RENEW_HOURS} hours.`, tone: "ok" };
+    said = `The seats' trading limits renew now: their entries are counted afresh every ${SG_RENEW_HOURS} hours, and a close counts against none of it.`;
+  }
+  sgAfter();
+  await load().catch(() => {});
+  sgAgain([]);
+  return out.ok;
+}
 
 // ---- reading -------------------------------------------------------------------------------------------------------------------------------
 
@@ -1878,6 +1989,8 @@ function sgBeat(wait = 0) {
 async function sgTick() {
   SG.timer = -1;
   const t0 = Date.now();
+  SG.tickAt = t0;
+  SG.nudged = false;
   try {
     if (sgShowing()) {
       let stop = 0;
@@ -1890,11 +2003,28 @@ async function sgTick() {
     console.error(err);
   }
   SG.timer = 0;
-  sgBeat(Math.max(150, sgWaitMs() - (Date.now() - t0)));
+  sgBeat(SG.nudged ? SG_NUDGE_MS : Math.max(150, sgWaitMs(t0) - (Date.now() - t0)));
 }
-/* the beat's next wait: a second while the account answers; after misses in a row 1, 2, 5, then 10 s, so a stopped service is not asked
-   once a second for as long as the page is open */
-const sgWaitMs = () => (SG.fails ? SG_BACKOFF_MS[Math.min(SG.fails, SG_BACKOFF_MS.length) - 1] : SG_EVERY_MS);
+/* the beat's next wait, from `from` (the tick's start): a second while the account answers; after misses in a row 1, 2, 5, then 10 s, so a
+   stopped service is not asked once a second for as long as the page is open. While its stream is connected the desk's moves are pushed,
+   and the beat is SG_PUSHED_SLOW seconds — but no later than the first of the slower reads that ride on it falls due (the desk's view, the
+   open leads' prices: sgSlow), so those keep their own five seconds rather than wait for the next slow beat; a second at the least */
+function sgWaitMs(from = Date.now()) {
+  if (SG.fails) return SG_BACKOFF_MS[Math.min(SG.fails, SG_BACKOFF_MS.length) - 1];
+  if (!(typeof stHealth === "function" && stHealth() === "connected")) return SG_EVERY_MS;
+  const due = Math.min(num(SG.viewAt) + SG_VIEW_MS, num(SG.quotesAt) + SG_QUOTES_MS) - from;
+  return Math.max(SG_EVERY_MS, Math.min(SG_EVERY_MS * SG_PUSHED_SLOW, due));
+}
+/* THE DESK MOVED (ui/stream.js, a `desk` event: its record written, a step begun or ended, a brain call sent or answered): the floor read
+   now rather than at the beat — at most every SG_NUDGE_MS through a burst; a read on its way is followed by the next as soon as it ends */
+function sgNudge() {
+  if (!sgShowing()) return;
+  if (SG.timer === -1) return void (SG.nudged = true);
+  if (SG.timer) clearTimeout(SG.timer);
+  SG.timer = 0;
+  sgBeat(Math.max(0, SG_NUDGE_MS - (Date.now() - SG.tickAt)));
+}
+if (typeof stOn === "function") stOn("desk", sgNudge);
 /** a read that did not answer (noAnswer: nothing came back — a stopped service, a dropped connection) or that the account refused: counted,
  * since when noted, and said in the page's own words — never the browser's error as it was thrown */
 function sgMiss(noAnswer, refusal = "") {
@@ -1982,7 +2112,8 @@ function sgSlow(now) {
   if (key && (key !== SG.candles.key || now - SG.candles.at >= SG_CANDLES_MS)) {
     if (key !== SG.candles.key) SG.candles = { key, bars: [], at: now };
     else SG.candles.at = now;
-    api(sgCandlesPath(feed.venue.id, focus.symbol), { ttl: 30_000 }).then((b) => {
+    // the chart's own first view of this market asks the same path, so it is waited for as the chart waits for it (core HISTORY_TIMEOUT_MS)
+    api(sgCandlesPath(feed.venue.id, focus.symbol), { ttl: 30_000, timeout: HISTORY_TIMEOUT_MS }).then((b) => {
       if (SG.candles.key !== key) return;
       SG.candles = { key, bars: b && b.ok !== false && Array.isArray(b.candles) ? b.candles : SG.candles.bars, at: SG.candles.at };
     });
@@ -1994,11 +2125,60 @@ function sgSlow(now) {
       if (t.length || !SG.ticker.length) SG.ticker = t;
     });
   }
+  // the floor's markets followed on the push channel; the open leads' prices read only while the stream does not carry them all
+  sgFollow();
   if (now - SG.quotesAt >= SG_QUOTES_MS) {
     SG.quotesAt = now;
-    sgQuotes(now);
+    if (sgPushedEquity() === null) sgQuotes(now);
   }
 }
+
+/* THE MARKETS THE FLOOR SHOWS, FOLLOWED ON THE PUSH CHANNEL (ui/stream.js stFollow) while the floor shows: its focus market whole — the
+   chart and the book it mounts move as that market's stream moves, as the trading area's do — and each open lead's for its price alone, so
+   the floor's live balance follows every pushed quote (sgPushedEquity). The leads' prices read over REST (sgQuotes) stay the fallback while
+   the stream does not carry them */
+function sgFollow() {
+  if (typeof stFollow !== "function" || ROUTE.tab !== "superagent") return;
+  const feed = SG.desk;
+  const focus = feed && feed.venue ? sgFocus(feed) : null;
+  const main = focus ? [`${feed.venue.id}:${focus.symbol}`] : [];
+  const view = SG.view;
+  const leads = view && Array.isArray(view.open) ? view.open.filter((l) => l.entry).map((l) => `${l.venue}:${l.symbol}`) : [];
+  stFollow(main, [...new Set(leads)].filter((k) => !main.includes(k)));
+}
+/* the balance's live point from the pushed quotes (sgLiveEquity), while the stream carries every open lead's market live; null otherwise */
+function sgPushedEquity() {
+  const view = SG.view;
+  if (!view || !Array.isArray(view.open) || typeof stQuoteOf !== "function" || typeof stPrice !== "function") return null;
+  const held = view.open.filter((l) => l.entry);
+  if (!held.length) return null;
+  const quotes = new Map();
+  for (const l of held) {
+    const q = stQuoteOf(l.venue, l.symbol);
+    const p = q && q.live === true ? stPrice(q, l.kind === "perp" || l.kind === "future") : undefined;
+    if (!(p > 0)) return null;
+    quotes.set(`${l.venue}|${l.symbol}`, p);
+  }
+  return sgLiveEquity(view, quotes);
+}
+/* A PUSHED QUOTE OF AN OPEN LEAD'S MARKET: the live balance worked out again at it, drawn in a frame — at most every SG_PUSH_DRAW_MS
+   through a burst of quotes */
+const SG_PUSH_DRAW_MS = 250;
+function sgQuoted(x) {
+  if (!x || !sgShowing() || SG.pushDue) return;
+  const view = SG.view;
+  if (!view || !Array.isArray(view.open) || !view.open.some((l) => l.venue === x.venue && l.symbol === x.symbol)) return;
+  SG.pushDue = true;
+  setTimeout(() => {
+    SG.pushDue = false;
+    const usd = sgPushedEquity();
+    if (usd === null) return;
+    SG.live = { at: Date.now(), usd };
+    sgAgain([]);
+  }, Math.max(0, SG_PUSH_DRAW_MS - (Date.now() - num(SG.pushedAt))));
+  SG.pushedAt = Date.now();
+}
+if (typeof stOn === "function") stOn("quote", sgQuoted);
 
 /** the balance's live point: the open leads' fresh prices summed as the desk sums them at each cycle — its equity now, less the open leads'
  * unrealised results as it last marked them, plus each one's side × (fresh price − entry) × qty × contract size */
@@ -2030,6 +2210,8 @@ function sgQuotes(now) {
     }
     const usd = sgLiveEquity(SG.view, quotes);
     SG.live = { at: usd === null ? 0 : now, usd };
+    // drawn as it comes, not at the next beat (a slow one while the stream is connected)
+    sgAgain([]);
   });
 }
 
@@ -2111,6 +2293,7 @@ async function sgAct(act, d) {
   if (!owns()) return;
   const feed = SG.desk;
   if (act === "move") return void sgMoveSheet(d.v);
+  if (act === "renew") return void sgRenew();
   if (act === "card") {
     // the one signature the Agents pane and the Portfolio ask for a card: its hash, approve or reject
     const c = (A.cards || []).find((x) => x.id === d.card);

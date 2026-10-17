@@ -7,7 +7,7 @@ import { byAsset } from "../../src/portfolio/account/holdings.ts";
 import { liveAccount } from "../../src/portfolio/adapters/live.ts";
 import { ALPACA_PAPER_KEY, alpacaSource } from "../../src/portfolio/live/alpaca.ts";
 import { CONNECTORS, KEY_SHAPES, keyFileStatus, liveOptions, openLive, type LiveDeps } from "../../src/portfolio/live/index.ts";
-import type { Candle, CandleInterval, LiveTrader, Market, MarketStats, OrderRequest, OrderState } from "../../src/portfolio/live/trade.ts";
+import type { Candle, CandleInterval, CandlePage, LiveTrader, Market, MarketStats, OrderRequest, OrderState } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply, LiveSource } from "../../src/portfolio/live/types.ts";
 
 /** TRADING at Alpaca, against a stand-in for its Trading and Market Data APIs that records every request and answers what each test says.
@@ -1007,12 +1007,14 @@ describe("reading the market: price history (bars)", () => {
   const SINCE = Date.parse("2026-10-05T16:53:20.000Z");
   const START = encodeURIComponent("2026-10-05T16:53:20Z");
 
-  it("a stock's hourly bars: GET /v2/stocks/bars, the latest 300 since the start (sort desc, no end and no feed: Alpaca's own for the key), oldest first, volume in shares", async () => {
-    const url = `${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Hour&start=${START}&limit=300&sort=desc`;
+  it("a stock's hourly bars: GET /v2/stocks/bars, the latest since the start (sort desc, no end and no feed: Alpaca's own for the key), split-adjusted, oldest first, volume in shares", async () => {
+    const url = `${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Hour&start=${START}&limit=5000&sort=desc&adjustment=split`;
     const { t, seen } = await alpaca({ [`GET ${url}`]: json({ bars: { AAPL: [bar("2026-10-05T19:00:00Z", 201.2, 201.8, 201.1, 201.62, 1500000), bar("2026-10-05T18:00:00Z", 200.9, 201.4, 200.7, 201.2, 1800000), bar("2026-10-05T17:00:00Z", 200.5, 201, 200.4, 200.9, 2100000)] }, next_page_token: null, currency: "USD" }) });
-    const bars = ok(await t.candles!("aapl", "1h", SINCE));
+    const page = ok(await t.candles!("aapl", "1h", { since: SINCE })) as CandlePage;
+    const bars = page.bars;
     expect(calls(seen)).toEqual([`GET ${url}`]);
     expect(seen[0]!.headers).toMatchObject(AUTH);
+    expect([page.more, page.source, page.adjustment]).toEqual([true, "Alpaca · AAPL", "split-adjusted, not dividend-adjusted"]);
     expect(bars).toEqual([
       { t: Date.parse("2026-10-05T17:00:00Z"), o: 200.5, h: 201, l: 200.4, c: 200.9, v: 2100000 },
       { t: Date.parse("2026-10-05T18:00:00Z"), o: 200.9, h: 201.4, l: 200.7, c: 201.2, v: 1800000 },
@@ -1021,22 +1023,49 @@ describe("reading the market: price history (bars)", () => {
   });
 
   it("a pair's five-minute and daily bars: GET /v1beta3/crypto/us/bars, the pair keeping its slash, volume in coins", async () => {
-    const five = `${DATA}/v1beta3/crypto/us/bars?symbols=BTC/USD&timeframe=5Min&start=${START}&limit=300&sort=desc`;
-    const day = `${DATA}/v1beta3/crypto/us/bars?symbols=BTC/USD&timeframe=1Day&start=${START}&limit=300&sort=desc`;
+    const five = `${DATA}/v1beta3/crypto/us/bars?symbols=BTC/USD&timeframe=5Min&start=${START}&limit=5000&sort=desc`;
+    const day = `${DATA}/v1beta3/crypto/us/bars?symbols=BTC/USD&timeframe=1Day&start=${START}&limit=5000&sort=desc`;
     const { t, seen } = await alpaca({ [`GET ${five}`]: json({ bars: { "BTC/USD": [bar("2026-10-05T19:50:00Z", 85560, 85580, 85550, 85573.7, 0.42)] }, next_page_token: null }), [`GET ${day}`]: json({ bars: {}, next_page_token: null }) });
-    expect(ok(await t.candles!("BTC/USD", "5m", SINCE))).toEqual([{ t: Date.parse("2026-10-05T19:50:00Z"), o: 85560, h: 85580, l: 85550, c: 85573.7, v: 0.42 }]);
-    expect(ok(await t.candles!("BTC/USD", "1d", SINCE))).toEqual([]);
+    expect((ok(await t.candles!("BTC/USD", "5m", { since: SINCE })) as CandlePage).bars).toEqual([{ t: Date.parse("2026-10-05T19:50:00Z"), o: 85560, h: 85580, l: 85550, c: 85573.7, v: 0.42 }]);
+    expect(ok(await t.candles!("BTC/USD", "1d", { since: SINCE }))).toMatchObject({ bars: [], more: false });
     expect(calls(seen)).toEqual([`GET ${five}`, `GET ${day}`]);
   });
 
+  it("4h and 1w are folded from Alpaca's hourly and daily bars (its own 4Hour and 1Week align as its docs do not say); a page before a bar ends a second before it", async () => {
+    const until = Date.parse("2026-10-05T20:00:00Z");
+    const hours = `${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Hour&start=${encodeURIComponent("2026-10-05T16:00:00Z")}&end=${encodeURIComponent("2026-10-05T19:59:59Z")}&limit=4&sort=desc&adjustment=split`;
+    const { t, seen } = await alpaca({ [`GET ${hours}`]: json({ bars: { AAPL: [bar("2026-10-05T19:00:00Z", 201.2, 201.8, 201.1, 201.62, 1500000), bar("2026-10-05T18:00:00Z", 200.9, 201.4, 200.7, 201.2, 1800000), bar("2026-10-05T17:00:00Z", 200.5, 201, 200.4, 200.9, 2100000)] }, next_page_token: null }) });
+    const page = ok(await t.candles!("AAPL", "4h", { since: Date.parse("2026-10-05T16:00:00Z"), until, limit: 1 })) as CandlePage;
+    expect(calls(seen)).toEqual([`GET ${hours}`]);
+    // New York's four-hour buckets from 04:00: 12:00–16:00 New York is 16:00–20:00 UTC in October
+    expect(page.bars).toEqual([{ t: Date.parse("2026-10-05T16:00:00Z"), o: 200.5, h: 201.8, l: 200.4, c: 201.62, v: 5400000 }]);
+    expect(page.folded).toBe("4-hour bars folded from Alpaca's hourly bars");
+  });
+
+  it("a stock's 1D and 5D are its latest session and its latest five, as the keyless reader counts them: a Sunday evening's 1D is Friday's session from 04:00 New York, never the empty calendar day before; a pair's 1D is the calendar's", async () => {
+    // Sunday 18 October 2026, 20:30 New York (Monday morning in Hong Kong)
+    const sunday = Date.parse("2026-10-19T00:30:00Z");
+    const fri = encodeURIComponent("2026-10-16T08:00:00Z");
+    const mon = encodeURIComponent("2026-10-12T08:00:00Z");
+    const day = `${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Min&start=${fri}&limit=5000&sort=desc&adjustment=split`;
+    const week = `${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=5Min&start=${mon}&limit=5000&sort=desc&adjustment=split`;
+    const pair = `${DATA}/v1beta3/crypto/us/bars?symbols=BTC/USD&timeframe=1Min&start=${encodeURIComponent("2026-10-18T00:30:00Z")}&limit=5000&sort=desc`;
+    const none = json({ bars: {}, next_page_token: null });
+    const { t, seen } = await alpaca({ [`GET ${day}`]: none, [`GET ${week}`]: none, [`GET ${pair}`]: none }, { clock: sunday });
+    ok(await t.candles!("AAPL", "1m", { since: sunday - 86_400_000, limit: 5_000, range: "1D" }));
+    ok(await t.candles!("AAPL", "5m", { since: sunday - 5 * 86_400_000, limit: 5_000, range: "5D" }));
+    ok(await t.candles!("BTC/USD", "1m", { since: sunday - 86_400_000, limit: 5_000, range: "1D" }));
+    expect(calls(seen).filter((c) => c.includes("/bars?"))).toEqual([`GET ${day}`, `GET ${week}`, `GET ${pair}`]);
+  });
+
   it("refused before anything is asked: a bar size not offered, a start that is not a time, a pair priced in a coin, a symbol that is none; Alpaca's own no in its words", async () => {
-    const { t, seen } = await alpaca({ [`GET ${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Day&start=${START}&limit=300&sort=desc`]: json({ code: 40310000, message: "subscription does not permit querying recent SIP data" }, 403) });
-    const size = refusal(await t.candles!("AAPL", "1w" as CandleInterval, SINCE));
-    const start = refusal(await t.candles!("AAPL", "1h", -1));
-    const coin = refusal(await t.candles!("ETH/BTC", "1h", SINCE));
-    const none = refusal(await t.candles!("not a symbol", "1h", SINCE));
-    expect([size.message, start.message, coin.code, none.message, seen.length]).toEqual(["Alpaca: price history comes in bars of 5m, 1h, 1d, not 1w", "Alpaca: a price history starts at a time, in milliseconds", "E_ACCOUNT_UNPRICED", 'Alpaca lists no market "not a symbol": a stock is its ticker (AAPL), a coin a pair (BTC/USD)', 0]);
-    const theirs = refusal(await t.candles!("AAPL", "1d", SINCE));
+    const { t, seen } = await alpaca({ [`GET ${DATA}/v2/stocks/bars?symbols=AAPL&timeframe=1Day&start=${START}&limit=5000&sort=desc&adjustment=split`]: json({ code: 40310000, message: "subscription does not permit querying recent SIP data" }, 403) });
+    const size = refusal(await t.candles!("AAPL", "2h" as CandleInterval, { since: SINCE }));
+    const start = refusal(await t.candles!("AAPL", "1h", { since: -1 }));
+    const coin = refusal(await t.candles!("ETH/BTC", "1h", { since: SINCE }));
+    const none = refusal(await t.candles!("not a symbol", "1h", { since: SINCE }));
+    expect([size.message, start.message, coin.code, none.message, seen.length]).toEqual(['Alpaca: price history comes in bars of 1m, 5m, 15m, 1h, 4h, 1d, 1w, not "2h"', "Alpaca: price history starts before now", "E_ACCOUNT_UNPRICED", 'Alpaca lists no market "not a symbol": a stock is its ticker (AAPL), a coin a pair (BTC/USD)', 0]);
+    const theirs = refusal(await t.candles!("AAPL", "1d", { since: SINCE }));
     expect([theirs.code, theirs.message]).toEqual(["E_VENUE_PERMISSION", "Alpaca: subscription does not permit querying recent SIP data"]);
   });
 });

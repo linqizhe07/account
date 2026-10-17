@@ -32,6 +32,9 @@ export interface StatementLine {
   /** a trade: what the whole order is worth, at its limit or the price it was valued at */
   worthUsd?: number | undefined;
   feeUsd?: number | undefined;
+  /** a close: what it realised, where its venue says it (a paper account's: a perpetual reduced at its price, a holding sold less its fee
+   * and what that part cost) — the trade's closed P&L */
+  realizedUsd?: number | undefined;
   status: string;
   /** who did it: you, or an agent — on your yes, or inside its limit */
   by: string;
@@ -58,6 +61,11 @@ export function figure(x: number): string {
 }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** what a close realised, as its venue's answer says it (a paper account's state: native.realizedUsd), to the cent */
+const realizedOf = (native: unknown): number | undefined => {
+  const r = (native as { realizedUsd?: unknown } | null | undefined)?.realizedUsd;
+  return typeof r === "number" && Number.isFinite(r) ? Number(r.toFixed(2)) : undefined;
+};
 /** an order, as one line */
 export function orderLine(o: LiveOrder, agentName: (address: string) => string): StatementLine {
   const filled = o.filledQty > 0 ? notionalOf(o, o.filledQty, o.avgPrice ?? o.price) : 0;
@@ -79,6 +87,7 @@ export function orderLine(o: LiveOrder, agentName: (address: string) => string):
     amountUsd: Number((sign * filled).toFixed(2)) || 0,
     worthUsd: Number(notionalOf(o, o.qty, o.limitPrice ?? o.price).toFixed(2)),
     ...(o.feeUsd !== undefined ? { feeUsd: o.feeUsd } : {}),
+    ...(realizedOf(o.native) !== undefined ? { realizedUsd: realizedOf(o.native) } : {}),
     // an order the account stopped following says so: its venue did not come back after a restart and the owner asked to cancel it — or the
     // owner let it go when the venue refused this network's cancel, or never confirmed the order (its note says which)
     status: o.unfollowed ? (!o.note || o.note.startsWith("not followed since a restart") ? "not followed since a restart" : "not followed") : o.walletTxs && !o.ref && o.status === "pending" ? "waiting for wallet" : o.status,
@@ -120,7 +129,7 @@ export function paymentLine(p: Payment, run: string, name: (venue: string) => st
 
 /** A fill a paper account the account keeps itself made with no order of the account's (live/paper.ts) — a liquidation, an event contract's
  * settlement — as one line: it went through no door, so it is read from the book */
-export function paperFillLine(f: { venue: string; venueName: string; ref: string; clientId: string; symbol: string; name: string; base: string; side: "buy" | "sell"; type: string; qty: number; avgPrice: number; feeUsd: number; at: string; filledAt: string; note?: string | undefined }): StatementLine {
+export function paperFillLine(f: { venue: string; venueName: string; ref: string; clientId: string; symbol: string; name: string; base: string; side: "buy" | "sell"; type: string; qty: number; avgPrice: number; feeUsd: number; at: string; filledAt: string; note?: string | undefined; realizedUsd?: number | undefined }): StatementLine {
   const sign = f.side === "buy" ? -1 : 1;
   const amount = f.qty * f.avgPrice;
   const what = f.clientId.startsWith("liquidation-") ? "liquidated" : f.clientId.startsWith("settlement-") ? "settled" : f.type;
@@ -137,6 +146,7 @@ export function paperFillLine(f: { venue: string; venueName: string; ref: string
     amountUsd: Number((sign * amount).toFixed(2)) || 0,
     worthUsd: Number(amount.toFixed(2)),
     feeUsd: f.feeUsd,
+    ...(realizedOf(f) !== undefined ? { realizedUsd: realizedOf(f) } : {}),
     status: "filled",
     by: "The paper account",
     ref: f.ref,

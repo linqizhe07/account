@@ -83,7 +83,9 @@ import type { KeyFile, KeyShape } from "./credentials.ts";
 import { thrownHttp } from "./exchange.ts";
 import { heldTo, HYPERLIQUID_RULE, type Locator } from "./location.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, preIpoOf } from "./preipo.ts";
-import { badOrder, CANDLE_INTERVALS, ceilTo, DONE, floorTo, inDollars, onStep, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { hyperliquidHistory } from "./history-crypto.ts";
+import { hostLane } from "./history.ts";
+import { badOrder, CANDLE_INTERVALS, ceilTo, DONE, floorTo, inDollars, onStep, pick, plain, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeTitle, edgeWords, freePart, isStable, notTheApiWords, redact, REGION, type LiveBalance, type LiveSource, type MarginMode } from "./types.ts";
 
 type Dict = Record<string, unknown>;
@@ -382,8 +384,6 @@ const ROOM = 0.02;
 /** the smallest order Hyperliquid takes ("Order must have minimum value of $10") */
 const MIN_USD = 10;
 const STATS_MAX = 40;
-const BARS = 300;
-const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
 const TIFS: TimeInForce[] = ["gtc", "ioc"];
 /** Hyperliquid pays funding every hour, on the hour */
 const nextHour = (now: number): string => new Date((Math.floor(now / 3_600_000) + 1) * 3_600_000).toISOString();
@@ -1141,6 +1141,8 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
             leverage: pos(lev.value),
             marginMode: mode,
             liquidationPrice: pos(p.liquidationPx),
+            // the margin Hyperliquid holds against it (marginUsed); its cumFunding is kept as it came, in native, its sign not said here
+            marginUsd: pos(p.marginUsed),
             native: { coin: p.coin ?? null, szi: p.szi ?? null, entryPx: p.entryPx ?? null, positionValue: p.positionValue ?? null, unrealizedPnl: p.unrealizedPnl ?? null, returnOnEquity: p.returnOnEquity ?? null, liquidationPx: p.liquidationPx ?? null, marginUsed: p.marginUsed ?? null, leverage: p.leverage ?? null, maxLeverage: p.maxLeverage ?? null, cumFunding: p.cumFunding ?? null },
           });
         }
@@ -1208,26 +1210,22 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
       return !out.size && refused ? refused : out;
     },
 
-    async candles(symbol, interval, sinceMs) {
-      if (!CANDLE_INTERVALS.includes(interval)) return no("E_VENUE_REJECTED", { venue, message: `${name}: price history comes in bars of 5m, 1h and 1d, not ${String(interval)}` });
-      if (!(Number.isFinite(sinceMs) && sinceMs >= 0)) return no("E_VENUE_REJECTED", { venue, message: `${name}: a price history starts at a time, in milliseconds` });
+    /** price history in a window, as live/history-crypto.ts hyperliquidHistory reads it from this connection's own info endpoint (mainnet
+     * or testnet): everything in the window from Hyperliquid's latest 5,000 bars at the size, a bar with no trade left out, a week folded from
+     * days (Monday), a range those 5,000 do not reach drawn coarser, and where the history ends said */
+    async candles(symbol, interval, w) {
+      if (!CANDLE_INTERVALS.includes(interval)) return no("E_VENUE_REJECTED", { venue, message: `${name}: price history comes in bars of ${CANDLE_INTERVALS.join(", ")}, not ${String(interval)}` });
+      if (!w || typeof w !== "object" || (w.since !== undefined && !(Number.isFinite(w.since) && w.since >= 0)) || (w.until !== undefined && !(Number.isFinite(w.until) && w.until > 0))) return no("E_VENUE_REJECTED", { venue, message: `${name}: a price history starts at a time, in milliseconds` });
       const e = await b.find(symbol);
       if (isRefusal(e)) return e;
-      const now = c.clock();
-      const from = Math.max(Math.floor(sinceMs), now - BARS * BAR_MS[interval]);
-      let rows: unknown[];
-      try {
-        rows = arr(await b.info({ type: "candleSnapshot", req: { coin: e.coin, interval, startTime: from, endTime: now } }));
-      } catch (err) {
-        return b.fail(err);
-      }
-      const bars = new Map<number, Candle>();
-      for (const r of rows.map(obj)) {
-        const [t, o, h, l, cl, v] = [fin(r.t), pos(r.o), pos(r.h), pos(r.l), pos(r.c), fin(r.v)];
-        if (t === undefined || t < from || o === undefined || h === undefined || l === undefined || cl === undefined) continue;
-        bars.set(t, { t, o, h, l, c: cl, ...(v !== undefined && v >= 0 ? { v } : {}) });
-      }
-      return [...bars.values()].sort((a, z) => a.t - z.t).slice(-BARS);
+      const ask = async (req: { coin: string; interval: CandleInterval; startTime: number; endTime: number }): Promise<unknown> => {
+        try {
+          return arr(await b.info({ type: "candleSnapshot", req }));
+        } catch (err) {
+          return b.fail(err);
+        }
+      };
+      return hyperliquidHistory(ask, hostLane, c.clock, name, e.coin, interval, w);
     },
   };
   return trader;

@@ -46,10 +46,12 @@ import type { EarnPosition, EarnProduct, EarnState, LiveEarner } from "../../src
 import { CHAINS, type ChainName, type ChainReader, type ChainSender } from "../../src/portfolio/live/chain.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, PRE_IPO_ISSUERS, PRE_IPO_PER_POINT } from "../../src/portfolio/live/preipo.ts";
 import type { Listing, PublicSource } from "../../src/portfolio/live/public-markets.ts";
-import { badOrder, DONE, notionalOf, onStep, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "../../src/portfolio/live/trade.ts";
+import type { HubBook, HubQuote, HubRange, HubTick, MarketHub } from "../../src/portfolio/live/stream-hub.ts";
+import type { PublicTrade } from "../../src/portfolio/live/trade.ts";
+import { badOrder, DONE, INTERVAL_MS, notionalOf, onStep, type Candle, type CandleInterval, type CandlePage, type CandleWindow, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "../../src/portfolio/live/trade.ts";
 import { isStable, type LiveBalance, type LiveSource } from "../../src/portfolio/live/types.ts";
 import { tokenOn, type LiveWriter } from "../../src/portfolio/live/writes.ts";
-import { DAY, PriceBook, seedOf, toStep } from "./model.ts";
+import { DAY, PriceBook, seedOf, spanOf, STANDIN_HISTORY_MS, standinMost, standinPage, toStep } from "./model.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -528,11 +530,15 @@ export class ExchangeBook extends Book {
     return out;
   }
 
-  candles(venue: string, symbol: string, interval: CandleInterval, since: number): Candle[] | Refusal {
+  /** its markets' price history, as many bars as the window asks (standinMost), from the start of the stand-in's history: a page that says
+   * whether older bars exist and, at that start, where it is */
+  candles(venue: string, symbol: string, interval: CandleInterval, win: CandleWindow): CandlePage | Refusal {
     const s = this.specs.find((x) => x.symbol === symbol);
     if (!s) return notFound(venue, this.name, symbol);
     const b = s.perp?.basis ?? 1;
-    return w().prices.candles(s.key, interval, since, s.volume).map((c) => ({ t: c.t, o: toStep(c.o * b, s.priceStep), h: toStep(c.h * b, s.priceStep), l: toStep(c.l * b, s.priceStep), c: toStep(c.c * b, s.priceStep), ...(c.v !== undefined ? { v: c.v } : {}) }));
+    const { since, until } = spanOf(win, interval, w().clock());
+    const bars = w().prices.candles(s.key, interval, since, s.volume, until, standinMost(win)).map((c) => ({ t: c.t, o: toStep(c.o * b, s.priceStep), h: toStep(c.h * b, s.priceStep), l: toStep(c.l * b, s.priceStep), c: toStep(c.c * b, s.priceStep), ...(c.v !== undefined ? { v: c.v } : {}) }));
+    return standinPage(bars, interval, w().prices.t0 - STANDIN_HISTORY_MS, symbol);
   }
 
   // ---- money between its own ledgers, a stablecoin swap, a withdrawal to an agent wallet of the account's ----
@@ -600,7 +606,7 @@ export class ExchangeBook extends Book {
       status: async (ref) => this.status(venue, ref),
       amend: async (ref, _symbol, change) => this.amend(venue, ref, change),
       stats: async (symbols) => this.stats(symbols),
-      candles: async (symbol, interval, since) => this.candles(venue, symbol, interval, since),
+      candles: async (symbol, interval, win) => this.candles(venue, symbol, interval, win),
     };
     if (hasPerps) {
       t.positions = async () => this.positionsView();
@@ -767,18 +773,19 @@ export class EventBook extends Book {
     return legs.filter((m) => groups.includes(m.group!.id));
   }
 
-  candles(venue: string, symbol: string, interval: CandleInterval, since: number): Candle[] | Refusal {
+  candles(venue: string, symbol: string, interval: CandleInterval, win: CandleWindow): Candle[] | Refusal {
     const m = this.market(symbol);
     if (!m) return notFound(venue, this.name, symbol);
     const id = symbol.slice(0, symbol.lastIndexOf(":"));
     const flip = symbol.endsWith(":NO") || symbol.endsWith(":DOWN");
+    const { since, until } = spanOf(win, interval, w().clock());
     let bars: Candle[];
-    if (w().prices.has(`ev:${id}`)) bars = w().prices.candles(`ev:${id}`, interval, since);
+    if (w().prices.has(`ev:${id}`)) bars = w().prices.candles(`ev:${id}`, interval, since, 0, until);
     else {
       // a fifteen-minute market: its own short life, read off bitcoin's curve
       const start = Date.parse(m.closeTime!) - ROLL_MS;
-      const size = interval === "5m" ? 5 * MINUTE : interval === "1h" ? HOUR : DAY;
-      const now = Math.min(w().clock(), start + ROLL_MS);
+      const size = INTERVAL_MS[interval];
+      const now = Math.min(w().clock(), start + ROLL_MS, until - 1);
       bars = [];
       for (let t = Math.max(start, Math.floor(since / size) * size); t <= now; t += size) {
         const end = Math.min(t + size, now);
@@ -804,7 +811,7 @@ export class EventBook extends Book {
       amend: async (ref, _symbol, change) => this.amend(venue, ref, change),
       positions: async () => this.positionsView(),
       events: async (o) => this.eventsList(o),
-      candles: async (symbol, interval, since) => this.candles(venue, symbol, interval, since),
+      candles: async (symbol, interval, win) => this.candles(venue, symbol, interval, win),
     };
   }
 }
@@ -890,10 +897,11 @@ export class WalletBook extends Book {
       cancel: async (ref) => this.cancel(venue, ref),
       status: async (ref) => this.status(venue, ref),
       stats: async (symbols) => new Map(this.markets().filter((m) => !symbols || symbols.includes(m.symbol)).map((m) => [m.symbol, { price: m.price, changePct24h: m.changePct24h, volumeUsd24h: m.volumeUsd24h }] as const)),
-      candles: async (symbol, interval, since) => {
+      candles: async (symbol, interval, win) => {
         const t = this.tokens.find((x) => `${x.symbol}/USDC@${x.chain}` === symbol);
         if (!t) return notFound(venue, name, symbol);
-        return w().prices.candles(t.key, interval, since, t.volume).map((c) => ({ t: c.t, o: c.o * t.factor, h: c.h * t.factor, l: c.l * t.factor, c: c.c * t.factor }));
+        const { since, until } = spanOf(win, interval, w().clock());
+        return w().prices.candles(t.key, interval, since, t.volume, until).map((c) => ({ t: c.t, o: c.o * t.factor, h: c.h * t.factor, l: c.l * t.factor, c: c.c * t.factor }));
       },
     };
   }
@@ -1050,10 +1058,13 @@ export class BrokerBook extends Book {
     return out;
   }
 
-  candles(venue: string, symbol: string, interval: CandleInterval, since: number): Candle[] | Refusal {
+  /** its shares' price history, as the exchange's is (a page from the start of the stand-in's history) */
+  candles(venue: string, symbol: string, interval: CandleInterval, win: CandleWindow): CandlePage | Refusal {
     const s = this.spec(symbol);
     if (!s) return notFound(venue, this.name, symbol);
-    return w().prices.candles(s.key, interval, since, s.volume).map((c) => ({ t: c.t, o: toStep(c.o, 0.01), h: toStep(c.h, 0.01), l: toStep(c.l, 0.01), c: toStep(c.c, 0.01), ...(c.v !== undefined ? { v: c.v } : {}) }));
+    const { since, until } = spanOf(win, interval, w().clock());
+    const bars = w().prices.candles(s.key, interval, since, s.volume, until, standinMost(win)).map((c) => ({ t: c.t, o: toStep(c.o, 0.01), h: toStep(c.h, 0.01), l: toStep(c.l, 0.01), c: toStep(c.c, 0.01), ...(c.v !== undefined ? { v: c.v } : {}) }));
+    return standinPage(bars, interval, w().prices.t0 - STANDIN_HISTORY_MS, symbol);
   }
 
   /** a cash broker's trader: no positions call, no leverage, no order changed in place */
@@ -1070,7 +1081,7 @@ export class BrokerBook extends Book {
       cancel: async (ref) => this.cancel(venue, ref),
       status: async (ref) => this.status(venue, ref),
       stats: async (symbols) => this.stats(symbols),
-      candles: async (symbol, interval, since) => this.candles(venue, symbol, interval, since),
+      candles: async (symbol, interval, win) => this.candles(venue, symbol, interval, win),
     };
   }
 }
@@ -1384,6 +1395,106 @@ export function registerStandins(): void {
 /** a listing carries no order types: nothing is ordered through one */
 const listed = (m: Market): Listing => ({ ...m, types: [] });
 
+// ---- a stand-in for the venues' live streams (live/stream-hub.ts) ------------------------------------------------------------------------
+
+/** THE STAND-IN'S LIVE STREAMS (the hub's MarketHub, over the stand-in world: test/standin only): the public exchange's coins and the perp
+ * exchange's perpetuals, each "streamed" while it is wanted — its best bid and ask and price as the world has them at the last pulse — so
+ * the stand-in page's paper accounts and its push channel move with the world's prices as the real ones move with a venue's. `venues`: the
+ * stand-in's own connected venues streamed under their own ids too (by the book each trades on), as the real hub streams a venue connected
+ * with a key under its own id (service.ts streamAt): the page's quote, book and trades then move for whichever account the trading area
+ * opens on. pulse() is the world's tick (the stand-in's own timer calls it): each market wanted is told, a print at its price added to its
+ * tape, and the moment of that pulse is its quote's own (`at`, and `priceAt`: the moment its best bid and ask last moved) — while the price
+ * it stands at is confirmed as it is read (`seenAt`: the world's price changes only at a pulse, so it stands until the next). Every price
+ * here is made up, as every stand-in price is */
+export function standinHub(world: World, venues: Record<string, () => ExchangeBook> = {}): MarketHub & { pulse(): void } {
+  const books: Record<string, () => ExchangeBook> = { ...venues, "standin-pubex-public": () => world.pubex, "standin-pubperps-public": () => world.pubperps };
+  const wanted = new Map<string, { source: string; symbol: string; holds: number; until: number; seq: number; at: number; tape: Array<PublicTrade & { seq: number }> }>();
+  const listeners = new Set<(t: HubTick) => void>();
+  const marketOf = (source: string, symbol: string): Market | undefined => books[source]?.().market(symbol);
+  const entry = (source: string, symbol: string) => {
+    const k = `${source}|${symbol}`;
+    const had = wanted.get(k);
+    if (had) return had;
+    const made = { source, symbol, holds: 0, until: 0, seq: 0, at: world.clock(), tape: [] as Array<PublicTrade & { seq: number }> };
+    wanted.set(k, made);
+    return made;
+  };
+  const tell = (t: HubTick) => {
+    for (const fn of [...listeners]) {
+      try {
+        fn(t);
+      } catch {
+        // a listener's fault is its own
+      }
+    }
+  };
+  const quote = (source: string, symbol: string): HubQuote | undefined => {
+    const e = wanted.get(`${source}|${symbol}`);
+    const m = e ? marketOf(source, symbol) : undefined;
+    if (!e || !m) return undefined;
+    return { ...(m.bid !== undefined ? { bid: m.bid, bidSz: 2 } : {}), ...(m.ask !== undefined ? { ask: m.ask, askSz: 2 } : {}), ...(m.price !== undefined ? { last: m.price } : {}), ...(m.kind === "perp" && m.price !== undefined ? { mark: m.price, funding: m.fundingRate } : {}), at: e.at, priceAt: e.at, recvAt: e.at, seenAt: world.clock(), src: "Stand-in stream", seq: e.seq, live: true };
+  };
+  return {
+    covers: (source, symbol) => marketOf(source, symbol) !== undefined,
+    want(source, symbol) {
+      if (!marketOf(source, symbol)) return false;
+      entry(source, symbol).until = world.clock() + 60_000;
+      return true;
+    },
+    hold(source, symbol) {
+      if (!marketOf(source, symbol)) return () => undefined;
+      const e = entry(source, symbol);
+      e.holds++;
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        e.holds = Math.max(0, e.holds - 1);
+        e.until = world.clock() + 60_000;
+      };
+    },
+    quote,
+    book(source, symbol, depth = 10): HubBook | undefined {
+      const q = quote(source, symbol);
+      if (!q || q.bid === undefined || q.ask === undefined) return undefined;
+      const step = Math.max(q.ask - q.bid, q.bid * 0.0001);
+      const side = (from: number, dir: number): Array<[number, number]> => Array.from({ length: Math.min(depth, 10) }, (_, i) => [Number((from + dir * i * step).toPrecision(8)), Number((0.5 + i * 0.75).toFixed(3))]);
+      return { bids: side(q.bid, -1), asks: side(q.ask, 1), at: q.at, recvAt: q.recvAt, seenAt: q.seenAt, src: q.src, live: true };
+    },
+    trades: (source, symbol, limit) => (wanted.get(`${source}|${symbol}`)?.tape ?? []).slice(0, limit).map(({ seq: _s, ...t }) => t),
+    since(source, symbol, seq): HubRange {
+      const e = wanted.get(`${source}|${symbol}`);
+      const t = (e?.tape ?? []).filter((x) => x.seq > seq).map((x) => x.price);
+      return { ...(t.length ? { hi: Math.max(...t), lo: Math.min(...t) } : {}), trades: t.length, seq: e?.seq ?? 0 };
+    },
+    confirmed: async (source, symbol) => quote(source, symbol),
+    onTick(fn) {
+      listeners.add(fn);
+      return () => void listeners.delete(fn);
+    },
+    close() {
+      wanted.clear();
+      listeners.clear();
+    },
+    pulse() {
+      const now = world.clock();
+      for (const [k, e] of [...wanted]) {
+        if (!e.holds && now >= e.until) {
+          wanted.delete(k);
+          continue;
+        }
+        const m = marketOf(e.source, e.symbol);
+        if (!m || m.price === undefined) continue;
+        e.seq++;
+        e.at = now;
+        e.tape.unshift({ price: m.price, size: 0.25, at: new Date(now).toISOString(), seq: e.seq });
+        e.tape.length = Math.min(e.tape.length, 60);
+        for (const what of ["quote", "trades", "book"] as const) tell({ source: e.source, symbol: e.symbol, what });
+      }
+    },
+  };
+}
+
 export function publicSources(): PublicSource[] {
   const pubex: PublicSource = {
     id: "standin-pubex-public",
@@ -1394,7 +1505,7 @@ export function publicSources(): PublicSource[] {
     listings: async (o) => w().pubex.matching(o.q ?? "").slice(0, o.limit).map(listed),
     stats: async (symbols) => w().pubex.stats(symbols),
     // its public price history, as an exchange's keyless OHLCV
-    candles: async (symbol, interval, since) => w().pubex.candles("standin-pubex-public", symbol, interval, since),
+    candles: async (symbol, interval, win) => w().pubex.candles("standin-pubex-public", symbol, interval, win),
   };
   // the public side of the perp exchange, as Hyperliquid's keyless list is: its perpetuals busiest first, each a Perps row to connect to trade
   let shownPerps: { of: number; total: number } | undefined;
@@ -1410,7 +1521,7 @@ export function publicSources(): PublicSource[] {
       if (!o.q) shownPerps = { of: pool.length, total: all.length };
       return pool.map(listed);
     },
-    candles: async (symbol, interval, since) => w().pubperps.candles("standin-pubperps-public", symbol, interval, since),
+    candles: async (symbol, interval, win) => w().pubperps.candles("standin-pubperps-public", symbol, interval, win),
     notes: (o) => (!o.q && shownPerps && shownPerps.of < shownPerps.total ? [`Stand-in Perp Exchange: ${shownPerps.of} of ${shownPerps.total} perpetuals shown · search for the rest`] : []),
   };
   // the public side of the event exchange, as the real Gamma read is (public-markets.ts): each market carries its event's tags, an event
@@ -1430,7 +1541,7 @@ export function publicSources(): PublicSource[] {
     connector: "live:standin-pubevents",
     listings: async (o) => publicLegs(w().pubevents.matching(o.q ?? "")).slice(0, o.limit * 2),
     events: async (o) => publicLegs(w().pubevents.eventsList(o)),
-    candles: async (symbol, interval, since) => w().pubevents.candles("standin-pubevents-public", symbol, interval, since),
+    candles: async (symbol, interval, win) => w().pubevents.candles("standin-pubevents-public", symbol, interval, win),
     notes: () => ["Stand-in Event Exchange: its busiest events, without sports (a stand-in: nothing here is real)."],
   };
   // how much of the token list a listing with nothing searched for shows, for the sentence under it

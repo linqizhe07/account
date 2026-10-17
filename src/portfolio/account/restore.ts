@@ -191,7 +191,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   let s = base;
   const skipped: string[] = [];
   const connections = new Map<string, Connection>();
-  const used = new Map<string, Pick<SpendApproval, "spentMicro" | "last" | "payTo">>();
+  const used = new Map<string, Pick<SpendApproval, "spentMicro" | "last" | "payTo" | "renewedAt">>();
   const orders = new Map<string, LiveOrder>();
   const payments = new Map<string, Payment & { run: string }>();
   const earns = new Map<string, LiveEarn>();
@@ -321,7 +321,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
     }
     if (row.kind === "spend" && row.intentId && row.detail) {
       const d = row.detail as Partial<SpendApproval>;
-      if (typeof d.spentMicro === "number" && d.spentMicro >= 0) used.set(row.intentId, { spentMicro: d.spentMicro, last: d.last ?? {}, payTo: d.payTo ?? {} });
+      if (typeof d.spentMicro === "number" && d.spentMicro >= 0) used.set(row.intentId, { spentMicro: d.spentMicro, last: d.last ?? {}, payTo: d.payTo ?? {}, ...(typeof d.renewedAt === "number" && Number.isFinite(d.renewedAt) ? { renewedAt: d.renewedAt } : {}) });
       continue;
     }
     if (row.kind === "card") {

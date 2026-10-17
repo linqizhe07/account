@@ -874,24 +874,41 @@ server.registerTool(
 server.registerTool(
   "portfolio_asset",
   {
-    description: "One asset, all of it: its holdings row (`key` from portfolio_holdings: crypto:BTC, equity:AAPL, stable:USDC, rwa:…, event:…; coin:/stock: from portfolio_explore are taken too), its price at every connected venue (`compare`), its price history at the first venue that keeps one (`candles`, 5m · 1h · 1d bars), the positions in it, the account's open orders in it, its statement lines, and what was paid for it (`cost`). A read.",
-    inputSchema: { key: z.string().max(140), interval: z.enum(["5m", "1h", "1d"]).optional().describe("the bars of its price history (default 1h)") },
+    description: "One asset, all of it: its holdings row (`key` from portfolio_holdings: crypto:BTC, equity:AAPL, stable:USDC, rwa:…, event:…; coin:/stock: from portfolio_explore are taken too), its price at every connected venue (`compare`), its price history at the first venue that keeps one (`candles`, bars of 1m · 5m · 15m · 1h · 4h · 1d · 1w over `range` where one is named, else over that size's range: a day of 5m, a month of 1h, a year of 1d), the positions in it, the account's open orders in it, its statement lines, and what was paid for it (`cost`). A read.",
+    inputSchema: {
+      key: z.string().max(140),
+      interval: z.enum(["1m", "5m", "15m", "1h", "4h", "1d", "1w"]).optional().describe("the bars of its price history (default 1h)"),
+      range: z.enum(["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"]).optional().describe("how far back its price history reaches from now (default: the range of its bar size)"),
+    },
     annotations: { readOnlyHint: true },
   },
-  async ({ key, interval }) => read(`/api/account/asset?${new URLSearchParams({ key, interval: interval ?? "1h" })}`),
+  async ({ key, interval, range }) => read(`/api/account/asset?${new URLSearchParams({ key, interval: interval ?? "1h", ...(range ? { range } : {}) })}`),
 );
 
 server.registerTool(
   "portfolio_candles",
   {
-    description: "One market's price history: bars of 5m, 1h or 1d (about three hundred, oldest first: {t (ms), o, h, l, c, v? in base units}). `venue` and `symbol` exactly as portfolio_explore lists them in a row's `at` — a venue the owner connected answers from its own data; a venue NOT connected (`public: true` there) answers from its public market data, read without a key. An event contract's prices are its probability in dollars (0.62 = 62¢). Kept a minute. A read.",
-    inputSchema: { venue: z.string().max(60).describe("the venue's id, as an `at` entry of portfolio_explore names it"), symbol: z.string().max(160).describe("the market there: BTC/USDT, KXFED-25DEC-T4.00:YES, <slug>:<outcome>"), interval: z.enum(["5m", "1h", "1d"]).optional().describe("the bars (default 1h)") },
+    description: "One market's price history, oldest first: {t (ms), o, h, l, c, v? in base units}, in bars of 1m, 5m, 15m, 1h, 4h, 1d or 1w. Ask a `range` (1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, MAX — in its own bar size unless `interval` is named: 1D 1m, 5D 5m, 1M 1h, 3M/6M 4h, YTD/1Y 1d, 5Y/MAX 1w; the latest 5,000 bars at most), or the page before a bar (`before`: its start in ms, `limit` bars) to go further back. The answer says `more` (older bars exist: ask `before` the first bar's t; with `partial`, the source refused or did not answer part of what was asked — ask again later, it is not where the history ends) and, where the history ends, why (`ends`: \"Hyperliquid keeps only the latest 5,000 bars at this size\", \"Intraday history starts …\"); `source` names whose bars they are, `adjustment` (US stocks: split-adjusted, not dividend-adjusted), `session` which hours, `folded` a size built from finer bars, `gaps` the stretches with no bars (\"No overnight data\"), `today` a daily bar built from intraday ones (\"Today so far\"); `interval` may come back coarser than asked, with `note` saying why. `venue` and `symbol` exactly as portfolio_explore lists them in a row's `at` — a venue the owner connected answers from its own data (a paper account from its market's public source); a venue NOT connected (`public: true` there) answers from its public market data, read without a key. An event contract's prices are its probability in dollars (0.62 = 62¢). Kept seconds to minutes. A read.",
+    inputSchema: {
+      venue: z.string().max(60).describe("the venue's id, as an `at` entry of portfolio_explore names it"),
+      symbol: z.string().max(160).describe("the market there: BTC/USDT, KXFED-25DEC-T4.00:YES, <slug>:<outcome>"),
+      interval: z.enum(["1m", "5m", "15m", "1h", "4h", "1d", "1w"]).optional().describe("the bars (default: the range's own size; with neither, 1h over a month)"),
+      range: z.enum(["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"]).optional().describe("how far back from now (not with `before`)"),
+      before: z.number().int().positive().optional().describe("the start (ms) of the first bar already held: the page before it (not with `range`)"),
+      limit: z.number().int().min(1).max(5_000).optional().describe("the most bars (a page: 1,000 at most)"),
+    },
     annotations: { readOnlyHint: true },
   },
-  async ({ venue: venueAsked, symbol, interval }) => {
+  async ({ venue: venueAsked, symbol, interval, range, before, limit }) => {
     const venue = await venueOf(venueAsked);
     if (typeof venue !== "string") return noVenue(venue);
-    return read(`/api/account/candles?${new URLSearchParams({ venue, symbol, interval: interval ?? "1h" })}`);
+    const q = new URLSearchParams({ venue, symbol });
+    if (interval) q.set("interval", interval);
+    else if (!range && before === undefined) q.set("interval", "1h");
+    if (range) q.set("range", range);
+    if (before !== undefined) q.set("before", String(before));
+    if (limit !== undefined) q.set("limit", String(limit));
+    return read(`/api/account/candles?${q}`);
   },
 );
 

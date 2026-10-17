@@ -247,6 +247,21 @@ const keyCommand = (path, fields) => {
   return `mkdir -p ${shq(dir)} && cd ${shq(dir)} && ( [ -e ${shq(file)} ] || printf '%s\\n' ${shq(template)} > ${shq(file)} ) && chmod 600 ${shq(file)} && nano ${shq(file)}`;
 };
 
+/* THE PAPER BOOKS KEPT ON THIS MACHINE that no connection has open (GET /api/account/paper/books, read as a paper account's form opens):
+   connecting one of their ids continues it. Null until read; a read that failed is asked again the next time */
+let CN_BOOKS = null;
+async function cnReadBooks() {
+  const got = await api("/api/account/paper/books");
+  CN_BOOKS = got && got.ok !== false && Array.isArray(got.books) ? got.books : null;
+  return CN_BOOKS;
+}
+const cnBookOf = (venue) => ((CN_BOOKS || []).find((b) => b.venue === venue) || null);
+/* what connecting would do with a book kept here, in plain words, and the one choice beside it: start it again instead */
+function cnBookWords(b) {
+  const held = [b.holdings ? plural(b.holdings, "holding") : "", b.positions ? plural(b.positions, "position") : "", b.open ? plural(b.open, "open order") : ""].filter(Boolean).join(", ");
+  return `<div><b>Connecting continues the paper account kept on this machine as “${esc(b.name)}”</b> — ${esc(money(b.cashUsd))} paper cash${held ? `, ${esc(held)}` : ""}, started with ${esc(money(b.startCashUsd))} on ${esc(nyDay(b.createdAt))}${b.addedUsd ? `, ${esc(money(b.addedUsd))} added since` : ""}. The starting money above is not used.</div><label class="chk1"><input type="checkbox" name="fresh" /> Start it again instead, with the starting money above. Its book is archived beside it, not deleted.</label>`;
+}
+
 /** every way of connecting an account, as tiles, in the dialog */
 function openPicker() {
   if (!A.connectLive) return;
@@ -501,9 +516,25 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
       poll();
     });
   } else if (o.needs === "none") {
-    // a paper account: a name and the paper money it starts with; nothing is asked of any venue
-    $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><div class="row">${field("Name", '<input name="label" maxlength="40" autocomplete="off" placeholder="Momentum" />')}${field("Starting paper money", '<input name="ref" maxlength="14" inputmode="decimal" autocomplete="off" placeholder="10000" />')}</div>`;
+    // a paper account: a name and the paper money it starts with; nothing is asked of any venue. A book kept on this machine under the id
+    // the name gives (a paper account connected before, then disconnected) would be CONTINUED by connecting — its cash and holdings, not
+    // the sum typed here: the form says so plainly, and offers to start it again instead (a signed resetPaper: the old book archived
+    // beside it, never deleted), as the account's own words (GET /api/account/paper/books)
+    $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><div class="row">${field("Name", '<input name="label" maxlength="40" autocomplete="off" placeholder="Momentum" />')}${field("Starting paper money", '<input name="ref" maxlength="14" inputmode="decimal" autocomplete="off" placeholder="10000" />')}</div><div class="msg wait cn-book" data-cn-book hidden></div>`;
     form.elements.label.value = shownAs || "";
+    const note = body.querySelector("[data-cn-book]");
+    const draw = () => {
+      if (!note || body.isConnected === false) return;
+      const b = cnBookOf(venueId());
+      note.hidden = !b;
+      // the choice is kept across a redraw: drawn again only when the book it is about changed
+      if (!b) return void (note.innerHTML = "", (note.dataset.venue = ""));
+      if (note.dataset.venue === b.venue) return;
+      note.dataset.venue = b.venue;
+      note.innerHTML = cnBookWords(b);
+    };
+    form.elements.label.addEventListener("input", draw);
+    cnReadBooks().then(draw);
   } else {
     $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><input type="hidden" name="ref" value="" /><input type="hidden" name="label" value="" />`;
   }
@@ -518,8 +549,23 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
     if (o.needs === "address" && !/^0x[0-9a-fA-F]{40}$/.test(ref)) return say("An address is 0x and 40 hex digits.", "no");
     if (o.needs === "none" && ref && !/^\$?\d{1,9}(\.\d{1,2})?$/.test(ref.replace(/,/g, ""))) return say("Starting paper money is a number of dollars, like 25000; leave it empty for $10,000.", "no");
     $("modal-go").disabled = true;
+    // a paper book kept on this machine under this id, and the owner chose to start it again: the reset first (signed on its own), then the
+    // connection, which opens the new book. Left unchosen, the connection continues the book as the note said
+    const book = o.needs === "none" ? cnBookOf(venueId()) : null;
+    if (book && form.elements.fresh && form.elements.fresh.checked) {
+      say(`Starting ${book.name} again…`, "wait");
+      const reset = await Owner.act({ type: "resetPaper", venue: book.venue, usd: ref });
+      if (reset.status >= 400) {
+        $("modal-go").disabled = Owner.role !== "owner";
+        return say(Owner.why(reset) || "Refused", "no");
+      }
+      CN_BOOKS = (CN_BOOKS || []).filter((x) => x.venue !== book.venue);
+    }
     say("Asking the venue…", "wait");
-    const r = await Owner.act({ type: "connectVenue", venue: venueId(), connector: o.kind === "exchange" ? `live:exchange:${exchangeId()}` : `live:${o.kind}`, label, credentialRef: ref });
+    // a kept book continued, as its note says: no starting money is signed for it (the account refuses one named for a book it would only
+    // continue — service.ts paperKeptRule — so a sum typed here is never silently dropped)
+    const continues = book && !(form.elements.fresh && form.elements.fresh.checked);
+    const r = await Owner.act({ type: "connectVenue", venue: venueId(), connector: o.kind === "exchange" ? `live:exchange:${exchangeId()}` : `live:${o.kind}`, label, credentialRef: continues ? "" : ref });
     $("modal-go").disabled = Owner.role !== "owner";
     if (r.status >= 400) return say(Owner.why(r) || "Refused", "no");
     $("modal").close();

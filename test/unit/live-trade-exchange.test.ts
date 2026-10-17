@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { exchangeTrader } from "../../src/portfolio/live/exchange-trade.ts";
 import { exchangeSource, type ExchangeClient } from "../../src/portfolio/live/exchange.ts";
-import { DONE, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderState } from "../../src/portfolio/live/trade.ts";
+import { DONE, type Candle, type CandleInterval, type CandlePage, type LiveTrader, type Market, type MarketStats, type OrderState } from "../../src/portfolio/live/trade.ts";
 import type { LiveSource, MarketExtras } from "../../src/portfolio/live/types.ts";
 
 /** TRADING at an exchange through the unified exchange library. Each exchange here is the REAL installed library with its network call
@@ -61,6 +61,12 @@ function venue(id: string, creds: Record<string, string>, markets: Dict[], optio
   return { x, seen, answer };
 }
 
+/** a price history's answer that is a page (live/trade.ts CandlePage), as the library's reader gives it */
+const paged = (x: Candle[] | CandlePage | Refusal): CandlePage => {
+  const p = ok(x);
+  if (Array.isArray(p)) throw new Error("expected a page, got a plain list");
+  return p;
+};
 const ok = <T>(x: T | Refusal): T => {
   if (isRefusal(x)) throw new Error(`expected an answer, got ${x.code}: ${x.message} ${JSON.stringify(x.native)}`);
   return x;
@@ -1495,9 +1501,10 @@ describe("reading the market: price history (candles)", () => {
     const { t, seen, answer } = okx();
     answer(okxData([okxBar(hour(0), "85500", "85700", "85400", "85573.7", "12.5", "1069671.25") as unknown as Dict, okxBar(hour(1), "85300", "85600", "85200", "85500", "10", "854000") as unknown as Dict, okxBar(hour(2), "85000", "85400", "84900", "85300", "8", "681600") as unknown as Dict]));
     const since = NOW - 3 * H;
-    const bars = ok(await t.candles!("BTC/USDT", "1h", since));
+    const bars = paged(await t.candles!("BTC/USDT", "1h", { since })).bars;
     const url = new URL(seen[0]!.url);
-    expect([url.origin + url.pathname, url.searchParams.get("instId"), url.searchParams.get("bar"), url.searchParams.get("limit"), url.searchParams.get("before")]).toEqual(["https://www.okx.com/api/v5/market/candles", "BTC-USDT", "1H", "300", String(since - 1)]);
+    // the window's three whole hours (17:00 to the one forming now), from the first of them
+    expect([url.origin + url.pathname, url.searchParams.get("instId"), url.searchParams.get("bar"), url.searchParams.get("limit"), url.searchParams.get("before")]).toEqual(["https://www.okx.com/api/v5/market/candles", "BTC-USDT", "1H", "3", String(Math.ceil(since / H) * H - 1)]);
     expect(bars).toEqual([
       { t: hour(2), o: 85000, h: 85400, l: 84900, c: 85300, v: 8 },
       { t: hour(1), o: 85300, h: 85600, l: 85200, c: 85500, v: 10 },
@@ -1505,21 +1512,26 @@ describe("reading the market: price history (candles)", () => {
     ] satisfies Candle[]);
   });
 
-  it("an OKX perpetual's volume is in the coin, not in contracts; a history asked from long ago is the latest 300 bars", async () => {
+  it("an OKX perpetual's volume is in the coin, not in contracts; a history asked from its start is asked page by page from now back, and ends where a page brings none", async () => {
     const { t, seen, answer } = okxPerp();
-    answer(okxData([okxBar(hour(0), "85500", "85700", "85400", "85580.1", "1250", "12.5") as unknown as Dict]));
-    const bars = ok(await t.candles!("BTC/USDT:USDT", "1d", 0));
-    expect(new URL(seen[0]!.url).searchParams.get("before")).toBe(String(NOW - 300 * 86_400_000 - 1));
-    expect(bars).toEqual([{ t: hour(0), o: 85500, h: 85700, l: 85400, c: 85580.1, v: 12.5 }]);
+    const day = Date.parse("2026-10-05T00:00:00.000Z");
+    // the newest page answers today's bar, the one before it nothing: where the history starts
+    answer(okxData([okxBar(day, "85500", "85700", "85400", "85580.1", "1250", "12.5") as unknown as Dict]), okxData([]));
+    const page = paged(await t.candles!("BTC/USDT:USDT", "1d", { since: 0 }));
+    // the newest page first: three hundred days back from today
+    expect(new URL(seen[0]!.url).searchParams.get("before")).toBe(String(day - 299 * 86_400_000 - 1));
+    expect(page.bars).toEqual([{ t: day, o: 85500, h: 85700, l: 85400, c: 85580.1, v: 12.5 }]);
+    expect([page.more, page.ends]).toEqual([false, "OKX's BTC/USDT:USDT history starts Mon 5 Oct 2026"]);
   });
 
   it("Binance futures, five-minute bars (GET /fapi/v1/klines); a key that may not trade them still reads their history", async () => {
     const { t, seen, answer } = binance(["read", "trade spot and margin"]);
     const at = Date.parse("2026-10-05T19:50:00.000Z");
     answer({ body: [[at - 300_000, "118400.0", "118450.0", "118350.0", "118420.0", "12.345", at - 1, "1461728.39", 120, "6.1", "722000.1", "0"], [at, "118420.0", "118460.0", "118400.0", "118400.1", "3.2", at + 299_999, "378880.3", 40, "1.6", "189440.1", "0"]] });
-    const bars = ok(await t.candles!("BTC/USDT:USDT", "5m", at - 600_000));
+    const bars = paged(await t.candles!("BTC/USDT:USDT", "5m", { since: at - 600_000 })).bars;
     const url = new URL(seen[0]!.url);
-    expect([url.origin + url.pathname, url.searchParams.get("symbol"), url.searchParams.get("interval"), url.searchParams.get("startTime"), url.searchParams.get("limit")]).toEqual(["https://fapi.binance.com/fapi/v1/klines", "BTCUSDT", "5m", String(at - 600_000), "300"]);
+    // the window's three five-minute bars, to the one forming now, in one request
+    expect([url.origin + url.pathname, url.searchParams.get("symbol"), url.searchParams.get("interval"), url.searchParams.get("startTime"), url.searchParams.get("limit")]).toEqual(["https://fapi.binance.com/fapi/v1/klines", "BTCUSDT", "5m", String(at - 600_000), "3"]);
     expect(bars).toEqual([
       { t: at - 300_000, o: 118400, h: 118450, l: 118350, c: 118420, v: 12.345 },
       { t: at, o: 118420, h: 118460, l: 118400, c: 118400.1, v: 3.2 },
@@ -1528,10 +1540,10 @@ describe("reading the market: price history (candles)", () => {
 
   it("refused before anything is asked: a bar size not offered, a start that is not a time, a market priced in a coin, a bar size the exchange does not keep", async () => {
     const { t, seen } = okx();
-    const size = said(await t.candles!("BTC/USDT", "15m" as CandleInterval, NOW), ALL_SECRETS);
-    const start = said(await t.candles!("BTC/USDT", "1h", Number.NaN), ALL_SECRETS);
-    const coin = said(await t.candles!("ETH/BTC", "1h", NOW), ALL_SECRETS);
-    expect([size.message, start.message, coin.code, seen.length]).toEqual(["OKX: price history comes in bars of 5m, 1h and 1d, not 15m", "OKX: a price history starts at a time, in milliseconds", "E_ACCOUNT_UNPRICED", 0]);
+    const size = said(await t.candles!("BTC/USDT", "2h" as CandleInterval, { since: NOW }), ALL_SECRETS);
+    const start = said(await t.candles!("BTC/USDT", "1h", { since: Number.NaN }), ALL_SECRETS);
+    const coin = said(await t.candles!("ETH/BTC", "1h", { since: NOW }), ALL_SECRETS);
+    expect([size.message, start.message, coin.code, seen.length]).toEqual(["OKX: price history comes in bars of 1m, 5m, 15m, 1h, 4h, 1d and 1w, not 2h", "OKX: a price history starts at a time, in milliseconds", "E_ACCOUNT_UNPRICED", 0]);
     const x = {
       id: "someex",
       timeframes: { "1h": "60", "1d": "1440" },
@@ -1545,11 +1557,11 @@ describe("reading the market: price history (candles)", () => {
       },
     } satisfies ExchangeClient;
     const other = exchangeTrader(x, "someex", "Someex", [], { can: [] });
-    const r = said(await other.candles!("BTC/USDT", "5m", NOW - H), ALL_SECRETS);
+    const r = said(await other.candles!("BTC/USDT", "5m", { since: NOW - H }), ALL_SECRETS);
     expect([r.code, r.message]).toEqual(["E_VENUE_RAIL_CLOSED", "Someex keeps no 5m bars"]);
     // an exchange the trader has not read: a spot bar's volume is in the coin; a contract's may be in contracts, so none is said
-    expect(ok(await other.candles!("BTC/USDT", "1h", hour(1)))).toEqual([{ t: hour(0), o: 85500, h: 85700, l: 85400, c: 85573.7, v: 1250 }]);
-    expect(ok(await other.candles!("BTC/USDT:USDT", "1h", hour(1)))).toEqual([{ t: hour(0), o: 85500, h: 85700, l: 85400, c: 85573.7 }]);
+    expect(paged(await other.candles!("BTC/USDT", "1h", { since: hour(1) })).bars).toEqual([{ t: hour(0), o: 85500, h: 85700, l: 85400, c: 85573.7, v: 1250 }]);
+    expect(paged(await other.candles!("BTC/USDT:USDT", "1h", { since: hour(1) })).bars).toEqual([{ t: hour(0), o: 85500, h: 85700, l: 85400, c: 85573.7 }]);
   });
 
   it("each exchange here reads the market — stats and price history — and lists no events (it has no event contracts)", () => {

@@ -11,7 +11,7 @@ import { liveScope, polymarketSimAccount, scopeOf } from "../../src/portfolio/ad
 import { eventMark, eventState, EVENTS, findEvent, isEventSymbol, levelsFor, parseEventSymbol, rawEvent } from "../../src/portfolio/events.ts";
 import { okxAccount } from "../../src/portfolio/adapters/okx.ts";
 import { ondoAccount } from "../../src/portfolio/adapters/ondo.ts";
-import { compileOpenness, effectiveReach, evaluate, parseOpenness } from "../../src/portfolio/openness.ts";
+import { compileOpenness, effectiveReach, evaluate, parseOpenness, SESSION_DAYS, sessionFrom } from "../../src/portfolio/openness.ts";
 import { aggregate, liquidity } from "../../src/portfolio/portfolio.ts";
 import { bridgeQuotes, etaLabel, ladder, pick, routesToHub } from "../../src/portfolio/rails.ts";
 import { orderPlan } from "../../src/portfolio/router.ts";
@@ -117,6 +117,28 @@ describe("openness.evaluate (layer 2)", () => {
     expect(rows[0]!.layer2.walletKeeps[0]).toMatch(/no cards/);
     expect(rows[1]!.layer2.walletKeeps[0]).toMatch(/new address/);
     expect(rows[1]!.layer3).toMatch(/KYC allowlist/);
+  });
+  it("the agents' session is measured from when it is asked: thirty days from then unless the dial's own runs later — the fixture's fixed date, which passes, never ends a session started after it", async () => {
+    const at = Date.parse("2026-10-16T12:00:00.000Z");
+    const month = new Date(at + SESSION_DAYS * 86_400_000).toISOString();
+    expect(SESSION_DAYS).toBe(30);
+    // the fixture's date (passed, or not yet but sooner): thirty days from now
+    expect(sessionFrom({ mode: "open", sessionExpiresAt: "2026-10-16T00:00:00Z" }, at)).toEqual({ mode: "open", sessionExpiresAt: month });
+    expect(sessionFrom({ sessionExpiresAt: "2026-10-20T00:00:00Z" }, at).sessionExpiresAt).toBe(month);
+    // none at all, or not a date: thirty days
+    expect(sessionFrom({}, at).sessionExpiresAt).toBe(month);
+    expect(sessionFrom({ sessionExpiresAt: "soon" }, at).sessionExpiresAt).toBe(month);
+    // a session that already runs later stays as it is
+    expect(sessionFrom({ sessionExpiresAt: "2027-01-01T00:00:00Z" }, at).sessionExpiresAt).toBe("2027-01-01T00:00:00Z");
+    // a service given no dial takes the fixture's with its session from its own clock, so an agent's write is not refused as expired
+    const h = mkdtempSync(join(tmpdir(), "portfolio-session-"));
+    try {
+      const svc = await PortfolioService.create({ home: h, now: () => new Date(at).toISOString() });
+      expect(svc.policy().sessionExpiresAt).toBe(month);
+      expect(isRefusal(await svc.execute("binance", { kind: "trade", symbol: "BTCUSDT", side: "sell", qty: 0.05 }))).toBe(false);
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
   });
 });
 

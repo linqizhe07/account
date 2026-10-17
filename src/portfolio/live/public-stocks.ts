@@ -40,13 +40,19 @@
  *   GET …/charts/intraday/{symbol}.json                                       the last market day's regular-session minutes, each with its
  *                       real open, high, low, close and volume, {datetime (New York), price: {open, high, low, close}, volume:
  *                       {stock_volume}}, fifteen minutes behind; …/charts/historical/{symbol}.json every day since 2004 (600 KB, kept ten
- *                       minutes), the last 300 for 1d bars
- * PRICE HISTORY in 5m and 1h bars is the minutes of both, asked at once and merged by time: Cboe's real minute bars wherever Cboe has the
- * minute (the regular session, to fifteen minutes ago), and Nasdaq's one-price-a-minute SAMPLES (us-quotes.ts Nasdaq.chart: open, high, low
- * and close the same, no volume) for the minutes Cboe has none of — pre-market, the last fifteen minutes of a session under way, after-hours.
- * A bar with any sampled minute in it understates its range, and carries no volume (a bar's volume is said only where every minute in it has
- * one); the bar itself cannot say so (live/trade.ts Candle has no field for it). Only what each source says is carried. Cboe's volume is in
- * shares, so no dollar volume is said (nothing here is estimated). The trading session is the account's own US market calendar
+ *                       minutes), its rows on days the market was closed (2025-05-26 copies 05-23) and its repeated dates (SPY 2024-12-31)
+ *                       left out
+ * PRICE HISTORY (feat/paper-live phase H, live/history-stocks.ts): Robinhood's real bars in bars of 1m to 1h for the windows it keeps — the
+ * latest session in minutes, five sessions in five minutes, a month of hours with pre-market and after-hours, three of the regular session —
+ * folded into 15m and 4h; Robinhood's daily bars for a year or five, Nasdaq's by dates for all of it and for every page scrolled left, today's
+ * bar built from the session's minutes ("Today so far"), weeks folded from days; Cboe's days where both refuse. Every page says its source, that
+ * its prices are split-adjusted and not dividend-adjusted, which hours it covers, and each night it has no bars of ("No overnight data").
+ * Where Robinhood does not answer the minutes, the latest session's minutes of both Cboe and Nasdaq, asked at once and merged by time: Cboe's
+ * real minute bars wherever Cboe has the minute (the regular session, to fifteen minutes ago), and Nasdaq's one-price-a-minute SAMPLES
+ * (us-quotes.ts Nasdaq.chart: open, high, low and close the same, no volume) for the minutes Cboe has none of — pre-market, the last fifteen
+ * minutes of a session under way, after-hours. A bar with any sampled minute in it understates its range, and carries no volume (a bar's
+ * volume is said only where every minute in it has one); the page names both sources. Only what each source says is carried. Cboe's volume
+ * is in shares, so no dollar volume is said (nothing here is estimated). The trading session is the account's own US market calendar
  * (account/calendar.ts usSessionFull): the regular session 09:30–16:00 New York on market days (13:00 on an early close), and which phase is on
  * — pre-market, after-hours, overnight — with whether a limit order may be sent for it (extendedHours): in pre-market and after-hours where a
  * real-time source priced the line (a paper account fills only at a quote stamped in the phase that is on, and Cboe's never is); overnight
@@ -54,15 +60,24 @@
  * (`sessions`) for a paper account to judge a quote's own time by. Out of the regular session the line says so, and says when a real-time
  * price is not from the phase that is on.
  *
+ * A LINE THE CHAIN PRICED NEVER WAITS FOR CBOE (feat/paper-live phase 3): Cboe is asked beside the chain, and waited for only for the lines
+ * the chain did not price; the previous close beside a Robinhood price is taken where Cboe has already answered, and the day's change is
+ * left out where it has not (the next read has it). ONE SHARE'S LINE (line: a paper account pricing a share it knows) asks the chain and
+ * Cboe for that share alone — one GET of Cboe at most, where a search of a short ticker reads forty — and THE BACKGROUND READER (feed:
+ * live/us-quotes.ts UsQuoteFeed) reads the shares someone is looking at as Robinhood and Nasdaq write them, sharing this line's one answer of
+ * each; usLineAt says a line again at the reader's newer quote.
+ *
  * Every GET goes through the fixed-host guard (public-markets.ts PUBLIC_HOSTS); a 451, a 429, an edge's 403 page or no answer from Cboe is
  * its answer for the whole listing when no real-time source priced anything either, held back as any public source's is (holdBackMs). */
 import { isRefusal, type Refusal } from "../../core/errors.ts";
-import { et, etDate, fromEt, nextRegularSession, regularSession, usClock, usPhaseAt, usSessionFull } from "../account/calendar.ts";
+import { et, etDate, fromEt, isMarketDay, nextRegularSession, regularSession, usClock, usPhaseAt, usSessionFull } from "../account/calendar.ts";
 import { no } from "../refuse.ts";
-import { fin, fixedHosts, has, keeper, LIST_MS, list, nonNeg, pos, PUBLIC_HOSTS, publicNo, rec, round, str, type Listing, type PublicDeps, type PublicSource } from "./public-markets.ts";
-import { CANDLE_INTERVALS, type Candle, type CandleInterval, type MarketSession } from "./trade.ts";
+import { hostLane } from "./history.ts";
+import { stockHistory } from "./history-stocks.ts";
+import { badHistory, fin, fixedHosts, has, keeper, LIST_MS, list, nonNeg, pos, PUBLIC_HOSTS, publicNo, rec, round, str, type Listing, type PublicDeps, type PublicSource } from "./public-markets.ts";
+import type { Candle, MarketSession } from "./trade.ts";
 import { realHttp, unreachable, type HttpReply } from "./types.ts";
-import { FRESH_MS, NASDAQ_FROM, nasdaqSource, ROBINHOOD_FROM, ROBINHOOD_OVERNIGHT, usQuote, type UsQuote } from "./us-quotes.ts";
+import { FRESH_MS, NASDAQ_FROM, nasdaqSource, ROBINHOOD_FROM, ROBINHOOD_OVERNIGHT, usQuote, UsQuoteFeed, type UsQuote } from "./us-quotes.ts";
 
 /** whether Robinhood's quotes are taken in the overnight session (us-quotes.ts, where it is set): a share Robinhood priced is then offered
  * for an extended-hours limit order overnight */
@@ -86,7 +101,8 @@ export const US_STOCKS_READ_ONLY = "Real-time quotes from Robinhood or Nasdaq, e
 /** a share priced by a source that gives no day's change (Robinhood) carries its change from Cboe's previous close, read from Cboe's file
  * beside it while that file is from the regular session the quote is in (see the top of this file). False: such a line carries no change */
 export const DAY_CHANGE_FROM_CBOE = true;
-/** a plain ticker: one to five letters, a class letter after a dot (BRK.B) */
+/** a plain ticker: one to five letters, a class letter after a dot (BRK.B) — the same as us-quotes.ts US_TICKER, written out here: this file
+ * and that one import each other (through public-markets.ts), so neither reads the other's values while it is being loaded */
 const TICKER = /^[A-Z]{1,5}(\.[A-Z])?$/;
 /** a company in Cboe's book whose name says it is likely a fund (an ETF or the like), not a company that is a REIT trust (…Trust Inc) */
 const FUND = /\b(ETF|ETN|Fund|Trust)\b/i;
@@ -104,8 +120,6 @@ const CBOE_WAIT_MS = 2_500;
 const SAID_LIVE_MS = FRESH_MS + 60_000;
 const HISTORY_MS = 60_000;
 const TIMEOUT_MS = 8_000;
-const BARS = 300;
-const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
 /** the store behind Cboe's CDN answering for a symbol it has no file for */
 const NOT_LISTED = /<Code>\s*AccessDenied\s*<\/Code>/;
 
@@ -192,6 +206,41 @@ function robinhoodDay(rt: UsQuote, cb: Quote | undefined): { change: number; cha
   return { change: round(change, 6), changePct: round((change / cb.prevClose) * 100, 4) };
 }
 
+/** A US LINE SAID AGAIN AT A NEWER REAL-TIME QUOTE — the background reader's (live/us-quotes.ts UsQuoteFeed), which a paper account prices a
+ * share it knows from (live/paper.ts): the listing's own figures, what the market is, under that quote's price, bid, ask, stamp, delay and
+ * source (never one source's price beside another's bid: a side the quote does not give is none); the session at `now` as the line says it
+ * with that quote (an extended-hours order offered where a real-time source priced it — overnight only Robinhood) and its words; the day's
+ * change the quote's own (Nasdaq's), else at this price from the close the listing's change was measured from (its price less its change),
+ * while the listing's price and this quote are of one regular session — none otherwise, as robinhoodDay says none */
+export function usLineAt(m: Listing, rt: UsQuote, now: number): Listing {
+  const session = usSessionFull(now, ROBINHOOD_OVERNIGHT && rt.from === ROBINHOOD_FROM);
+  const note = usSessionWords(session, rt.from, rt.at, now);
+  const { price: p0, bid: _b, ask: _a, quoteAt: q0, delayMs: _d, quoteFrom: _f, session: _s, note: _n, change24h: c0, changePct24h: _c, ...rest } = m;
+  let change = rt.change;
+  let changePct = rt.changePct;
+  if (change === undefined && changePct === undefined && rt.price !== undefined && p0 !== undefined && c0 !== undefined) {
+    const was = q0 ? Date.parse(q0) : NaN;
+    const ref = p0 - c0;
+    if (ref > 0 && Number.isFinite(was) && usPhaseAt(rt.at) === "regular" && usPhaseAt(was) === "regular" && etDate(rt.at) === etDate(was)) {
+      change = round(rt.price - ref, 6);
+      changePct = round(((rt.price - ref) / ref) * 100, 4);
+    }
+  }
+  return {
+    ...rest,
+    ...(rt.price !== undefined ? { price: rt.price } : {}),
+    ...(rt.bid !== undefined ? { bid: rt.bid } : {}),
+    ...(rt.ask !== undefined ? { ask: rt.ask } : {}),
+    quoteAt: new Date(rt.at).toISOString(),
+    delayMs: rt.delayMs,
+    quoteFrom: rt.from,
+    session,
+    ...(note ? { note } : {}),
+    ...(change !== undefined ? { change24h: change } : {}),
+    ...(changePct !== undefined ? { changePct24h: changePct } : {}),
+  };
+}
+
 /** the minutes of both sources, merged by time (see the top of this file): every one of Cboe's minute bars, and Nasdaq's samples for the
  * minutes outside Cboe's — after Cboe's last minute, and before its first where that is not the regular session (Cboe's first bar of a
  * session is stamped 09:31) */
@@ -204,24 +253,6 @@ function mergeMinutes(cboe: Candle[], nasdaq: Candle[]): Candle[] {
     last = Math.max(last, b.t);
   }
   return [...cboe, ...nasdaq.filter((b) => b.t > last || (b.t < first && usPhaseAt(b.t) !== "regular"))];
-}
-
-/** a few minutes' bars (`t` ms, oldest first) folded into bars of `step` ms; a bar's volume only where every minute in it has one */
-function foldBars(bars: Candle[], step: number): Candle[] {
-  const out = new Map<number, Candle>();
-  for (const b of [...bars].sort((a, c) => a.t - c.t)) {
-    const at = Math.floor(b.t / step) * step;
-    const x = out.get(at);
-    if (!x) out.set(at, { t: at, o: b.o, h: b.h, l: b.l, c: b.c, ...(b.v !== undefined ? { v: b.v } : {}) });
-    else {
-      x.h = Math.max(x.h, b.h);
-      x.l = Math.min(x.l, b.l);
-      x.c = b.c;
-      if (x.v !== undefined && b.v !== undefined) x.v = round(x.v + b.v, 2);
-      else delete x.v;
-    }
-  }
-  return [...out.values()];
 }
 
 /** at most `ms` waiting for `p` (it goes on after) */
@@ -243,6 +274,26 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
   const book = keeper<BookEntry[]>(clock, LIST_MS);
   const minutes = keeper<Candle[]>(clock, HISTORY_MS);
   const days = keeper<Candle[]>(clock, LIST_MS);
+  const months = keeper<Candle[]>(clock, HISTORY_MS);
+  // the long history (live/history-stocks.ts), its pages through the same guard with a longer deadline for Nasdaq's whole history
+  const history = stockHistory(
+    {
+      http: fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, deps.timeoutMs ?? TIMEOUT_MS),
+      pace: deps.pace ?? hostLane,
+      clock,
+      nasdaq,
+      cboeDaily: (sym) => cboeDays(sym),
+      month: (sym) => cboeMonth(sym),
+      minutes: async (sym) => {
+        // both at once; either refusing leaves the other's minutes, and both refusing is Cboe's refusal
+        const [nq, cb] = await Promise.all([nasdaq.chart(sym), cboeMinutes(sym)]);
+        const sampled = nq && !isRefusal(nq) ? nq : undefined;
+        if (isRefusal(cb) && !sampled) return cb;
+        return mergeMinutes(isRefusal(cb) ? [] : cb, sampled ?? []);
+      },
+    },
+    id,
+  );
   const ask = async (url: string): Promise<HttpReply | Refusal> => {
     try {
       return await http(url);
@@ -280,6 +331,49 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
       }
       return out;
     });
+  /** Cboe's last month of ten-minute regular-session bars (…/charts/one_month/{symbol}.json, the intraday file's shape, 874 bars from
+   * 2026-09-16 09:40 to 10-16 15:50 read live 2026-10-17), kept a minute. Each bar is stamped at its START, ten minutes before its label: a
+   * day's first label is 09:40 and its last 15:50, as the intraday file's first minute is labelled 09:31 and carries the opening cross — a
+   * label is where the bar ends (inferred from both files; Cboe does not say) */
+  const cboeMonth = (sym: string): Promise<Candle[] | Refusal> =>
+    months(sym, async () => {
+      const r = await ask(`${CBOE}/charts/one_month/${encodeURIComponent(sym)}.json`);
+      if (isRefusal(r)) return r;
+      if (r.status === 403 && NOT_LISTED.test(r.text)) return no("E_VENUE_REJECTED", { venue: id, message: `${CBOE_NAME} keeps no history of ${sym}` });
+      if (r.status !== 200 || r.body === undefined) return publicNo(id, CBOE_NAME, r);
+      const out: Candle[] = [];
+      for (const x of list(rec(r.body).data).map(rec)) {
+        const end = cboeTimeMs(x.datetime);
+        const p = rec(x.price);
+        const [o, h, l, c, v] = [pos(p.open), pos(p.high), pos(p.low), pos(p.close), nonNeg(rec(x.volume).stock_volume)];
+        if (end === undefined || o === undefined || h === undefined || l === undefined || c === undefined) continue;
+        out.push({ t: end - 10 * 60_000, o, h, l, c, ...(v !== undefined ? { v } : {}) });
+      }
+      return out.sort((a, b) => a.t - b.t);
+    });
+  /** every day Cboe keeps since 2004, oldest first, each at its session's open: its rows on days the market was closed (a holiday's row
+   * copies the day before) and a date it repeats left out (see the top of this file) */
+  const cboeDays = (sym: string): Promise<Candle[] | Refusal> =>
+    days(sym, async () => {
+      const r = await ask(`${CBOE}/charts/historical/${encodeURIComponent(sym)}.json`);
+      if (isRefusal(r)) return r;
+      if (r.status === 403 && NOT_LISTED.test(r.text)) return no("E_VENUE_REJECTED", { venue: id, message: `${CBOE_NAME} keeps no history of ${sym}` });
+      if (r.status !== 200 || r.body === undefined) return publicNo(id, CBOE_NAME, r);
+      const out = new Map<number, Candle>();
+      for (const x of list(rec(r.body).data).map(rec)) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(x.date ?? ""));
+        const [o, h, l, c, v] = [pos(x.open), pos(x.high), pos(x.low), pos(x.close), nonNeg(x.volume)];
+        if (!m || o === undefined || h === undefined || l === undefined || c === undefined) continue;
+        // a day's bar at its session's open, New York
+        const t = fromEt(Number(m[1]), Number(m[2]), Number(m[3]), 9, 30);
+        if (!isMarketDay(t) || out.has(t)) continue;
+        out.set(t, { t, o, h, l, c, ...(v !== undefined ? { v } : {}) });
+      }
+      return [...out.values()].sort((a, b) => a.t - b.t);
+    });
+  // the symbol book as last read, its tickers by their companies — kept beside the keeper, so a share's line and the background reader know
+  // the tickers the market lists at once while the book is read again
+  let bookNames: Map<string, string> | undefined;
   /** every plain ticker Cboe quotes, with its company, kept ten minutes */
   const symbols = (): Promise<BookEntry[] | Refusal> =>
     book("book", async () => {
@@ -292,8 +386,30 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
         if (!sym || !TICKER.test(sym)) continue;
         out.push({ symbol: sym, company: str(rec(x).company_name) ?? sym });
       }
+      bookNames = new Map(out.map((e) => [e.symbol, e.company]));
       return out;
     });
+  /** the tickers the market lists as the book last said them: a book read before answers at once (read again in the background once it is
+   * ten minutes old); none read yet, the book waited for BOOK_WAIT_MS at most (it finishes loading for the next ask) */
+  const namesNow = async (): Promise<Map<string, string> | undefined> => {
+    if (bookNames) {
+      void symbols().catch(() => undefined);
+      return bookNames;
+    }
+    await within(symbols(), BOOK_WAIT_MS);
+    return bookNames;
+  };
+  /** THE BACKGROUND READER (live/us-quotes.ts UsQuoteFeed) of the shares someone is looking at, on this line's own chain: Robinhood's quote
+   * taken for a ticker the book lists — before the book has answered, for the well-known few this file names itself (as a listing takes it) */
+  const feed = new UsQuoteFeed({
+    source: id,
+    quotes: live,
+    listed: (s) => {
+      if (!bookNames) void symbols().catch(() => undefined);
+      return bookNames ? bookNames.has(s) : US_SHARES.includes(s);
+    },
+    clock,
+  });
   // how much of the list a listing with nothing searched for shows, for the sentence under it
   let shown: { of: number; total: number } | undefined;
   /** one line: the real-time source's price, bid, ask, stamp and delay where one priced it, else Cboe's — never one source's price beside
@@ -340,12 +456,40 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
     connector: "live:alpaca",
     readOnly: US_STOCKS_READ_ONLY,
     sessions: usClock,
+    feed,
+    /** ONE SHARE'S LINE, asked alone (live/paper.ts Pricer.find: a paper account pricing a share it knows): the real-time chain for it and
+     * Cboe's quote for it AT THE SAME TIME — one GET of Cboe at most (P16: a search of a short ticker reads forty) — and a line the chain
+     * priced never waits for Cboe: the previous close beside a Robinhood price is Cboe's answer where it has come, and the day's change is
+     * left out where it has not. Cboe's delayed quote is the line only where the chain priced nothing. A ticker the loaded book does not list
+     * is asked of Nasdaq alone (Cboe's store keeps files of tickers that no longer trade). Null: not a plain ticker, or no source prices it;
+     * Cboe's refusal where nothing priced it and Cboe refused */
+    async line(symbol) {
+      live.warm();
+      const sym = symbol.trim().toUpperCase();
+      if (!TICKER.test(sym)) return null;
+      const names = await namesNow();
+      const company = names?.get(sym);
+      const unlisted = !!names && !names.has(sym);
+      if (FUND.test(company ?? "") && !COMPANY.test(company ?? "")) nasdaq.hint(sym, "etf");
+      const cbP = unlisted ? undefined : quote(sym);
+      const rt = (await live.many([sym], { listed: names ? (s) => names.has(s) : (s) => US_SHARES.includes(s) })).get(sym);
+      const now = clock();
+      if (rt) {
+        // Cboe's quote where it has already answered, and nothing waited for where it has not
+        const cb = cbP ? await Promise.race([cbP, Promise.resolve(undefined)]) : undefined;
+        return listing(sym, rt, cb && !isRefusal(cb) ? cb : undefined, company, now);
+      }
+      const cb = cbP ? await cbP : null;
+      if (isRefusal(cb)) return cb;
+      return cb ? listing(sym, undefined, cb, company, clock()) : null;
+    },
     reset: () => {
       live.clear();
       quotes.clear();
       book.clear();
       minutes.clear();
       days.clear();
+      months.clear();
     },
     async listings(o) {
       // Robinhood's one answer for every share it quotes is on its way while the symbol book is read (it is kept, and asked once)
@@ -415,8 +559,13 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
         pool.map((e) => e.symbol),
         { listed },
       );
-      if (rt.size) await within(cboe, started + CBOE_WAIT_MS - Date.now());
-      else await cboe.catch(() => undefined);
+      // A LINE THE CHAIN PRICED NEVER WAITS FOR CBOE: Cboe is waited for only where a line has no real-time price — in full where the chain
+      // priced nothing, else to CBOE_WAIT_MS from the start at most. What Cboe has answered by then is the previous close beside a Robinhood
+      // price; where it has not, that line carries no day's change this time
+      if (cboeFor.some((e) => !rt.has(e.symbol))) {
+        if (rt.size) await within(cboe, started + CBOE_WAIT_MS - Date.now());
+        else await cboe.catch(() => undefined);
+      }
       const cb = new Map(got);
       // nothing priced and Cboe refused (a place rule, an edge, a ban, no answer): that is the answer, not a list with no prices
       if (!rt.size && !cb.size && refused) return refused;
@@ -429,40 +578,18 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
       o.q?.trim()
         ? [`${name}: real-time quotes from Robinhood or Nasdaq, else Cboe's delayed ones (15 minutes), for any US stock or ETF in Cboe's symbol book.`]
         : [`${name}: real-time quotes (Robinhood, else Nasdaq) for ${shown?.of ?? US_SHARES.length} well-known names, else Cboe's 15 min delayed ones · search any stock or ETF.`],
-    /** price history, keyless (see the top of this file): the last market day's minutes folded into 5m and 1h bars — Cboe's real minute
-     * bars and Nasdaq's samples for the minutes Cboe has none of, merged by time — and Cboe's daily closes for 1d */
-    async candles(symbol, interval, sinceMs) {
+    /** price history, keyless (see the top of this file and live/history-stocks.ts): a plain ticker (AAPL, BRK.B), in bars of 1m to 1w,
+     * for a chart's first view or one page before the first bar it has */
+    async candles(symbol, interval, w) {
       const now = clock();
-      if (!(CANDLE_INTERVALS as readonly string[]).includes(interval)) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `price history comes in bars of ${CANDLE_INTERVALS.join(", ")}, not "${String(interval).slice(0, 12)}"` });
-      if (!(Number.isFinite(sinceMs) && sinceMs >= 0 && sinceMs < now)) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: "price history starts before now" });
+      const bad = badHistory(id, interval, w, now);
+      if (bad) return bad;
       const sym = symbol.trim().toUpperCase();
       if (!TICKER.test(sym)) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a US stock here is its ticker (AAPL, BRK.B), not "${symbol.slice(0, 40)}"` });
-      if (interval === "1d") {
-        const bars = await days(sym, async () => {
-          const r = await ask(`${CBOE}/charts/historical/${encodeURIComponent(sym)}.json`);
-          if (isRefusal(r)) return r;
-          if (r.status === 403 && NOT_LISTED.test(r.text)) return no("E_VENUE_REJECTED", { venue: id, message: `${CBOE_NAME} keeps no history of ${sym}` });
-          if (r.status !== 200 || r.body === undefined) return publicNo(id, CBOE_NAME, r);
-          const out: Candle[] = [];
-          for (const x of list(rec(r.body).data).map(rec)) {
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(x.date ?? ""));
-            const [o, h, l, c, v] = [pos(x.open), pos(x.high), pos(x.low), pos(x.close), nonNeg(x.volume)];
-            if (!m || o === undefined || h === undefined || l === undefined || c === undefined) continue;
-            // a day's bar at its session's open, New York
-            out.push({ t: fromEt(Number(m[1]), Number(m[2]), Number(m[3]), 9, 30), o, h, l, c, ...(v !== undefined ? { v } : {}) });
-          }
-          return out.sort((a, b) => a.t - b.t);
-        });
-        if (isRefusal(bars)) return bars;
-        return bars.filter((b) => b.t >= sinceMs).slice(-BARS);
-      }
-      // both at once; either refusing leaves the other's minutes, and both refusing is Cboe's refusal
-      const [nq, cb] = await Promise.all([nasdaq.chart(sym), cboeMinutes(sym)]);
-      const sampled = nq && !isRefusal(nq) ? nq : undefined;
-      if (isRefusal(cb) && !sampled) return cb;
-      return foldBars(mergeMinutes(isRefusal(cb) ? [] : cb, sampled ?? []), BAR_MS[interval])
-        .filter((b) => b.t >= sinceMs)
-        .slice(-BARS);
+      // a likely fund is asked of Nasdaq as an ETF first (its company's name in the book, where the book has been read)
+      const company = bookNames?.get(sym) ?? "";
+      if (FUND.test(company) && !COMPANY.test(company)) nasdaq.hint(sym, "etf");
+      return history(sym, interval, w);
     },
   };
 }

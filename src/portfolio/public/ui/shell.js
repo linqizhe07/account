@@ -1,6 +1,7 @@
 /* The shell, loaded last: the rail, the top bar and the panes, drawn from what /api/account said, and the page started — the route from
-   the hash, pairing, the first load, and a fresh read every 20 seconds while nothing is being signed, no sheet is open, nothing outside
-   the search is being typed, and the page is in view.
+   the hash, pairing, the first load, the account's push channel (ui/stream.js: what changes applied in place as it happens, below), and a
+   fresh read every 20 seconds (every 80 while the stream is connected: it is the fallback then) while nothing is being signed, no sheet is
+   open, nothing outside the search is being typed, and the page is in view.
    The look is round 7's (the Demo v2 canvas, F1 and F5): a white rail with Markets · Trade and the agents, and the Account at its foot —
    a wallet button with the net worth and the mode — which opens Portfolio · Venues · Memory under the Account's own header (the mode,
    trading on or off, Settings). Markets and Trade keep the search in their top bar.
@@ -14,6 +15,9 @@
 /** the whole page from A: the chrome, the visible pane, whatever sheet or drawer is open, then what was done or refused as a toast */
 function render() {
   if (!A) return;
+  // the orders' states the account pushed, laid again over a read that came back behind them (shAhead)
+  shAhead();
+  SH.late = false;
   const L = connected();
   const owner = owns();
   $("main").removeAttribute("aria-busy");
@@ -35,7 +39,7 @@ function renderChrome(L, owner) {
   // what waits for the owner: the cards to approve, and what the agents asked for (both answered under Portfolio's Waiting for you)
   const waiting = A.cards.length + (A.asks || []).length + (A.memoryAsks || []).length;
   document.title = `${waiting ? `(${waiting}) ` : ""}Account`;
-  $("stamp").textContent = `${ny(A.now, { weekday: "short", day: "numeric", month: "short" }).replace(",", "")} · ${nyTime(A.now)} New York`;
+  drawStamp();
   // trading on or off, and the most one order or move may be worth (round 7's "Trading on · $100 a move"; the sentence is in Settings)
   const cap = A.connectLive && A.connectLive.writes ? Number(A.connectLive.writes.capUsd) : NaN;
   // the pill opens Settings, where the cap is the owner's to change
@@ -57,6 +61,13 @@ function renderChrome(L, owner) {
   $("lens").setAttribute("aria-label", `Showing ${lensNow().name}: choose what the page shows`);
   drawBanner(owner);
   drawRestoreNotice();
+}
+/* the top bar's New York time: the account's own clock as last read, moved on by the time since that read — while the stream is connected
+   the read comes minutes apart, and the stamp is never that far behind */
+function drawStamp() {
+  if (!A) return;
+  const ms = Date.parse(A.now) + (loadedAt > 0 ? Math.max(0, Date.now() - loadedAt) : 0);
+  setText($("stamp"), `${ny(ms, { weekday: "short", day: "numeric", month: "short" }).replace(",", "")} · ${nyTime(ms)} New York`);
 }
 const count = (id, n, label) => {
   const el = $(id);
@@ -435,6 +446,9 @@ document.addEventListener("keydown", (e) => {
 // ---- reading again, and the start ---------------------------------------------------------------
 
 const REFRESH_MS = 20_000;
+/* while the account's stream is connected, the fresh read comes this many times further apart: what changes is pushed, and the read is the
+   fallback (a figure the account does not push — a price — is read by its own pane's poll) */
+const REFRESH_SLOW = 4;
 /* a fresh read may come now: nothing is being signed, no sheet or question is open, the page is in view, and nothing is being typed but
    the search. A button or a toggle with the focus (Buy | Sell, a Where row) holds nothing half-typed, so it does not hold the read back */
 const TYPING = "input:not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable]";
@@ -472,6 +486,199 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && A && Date.now() - loadedAt > REFRESH_MS && quiet()) refresh();
 });
 
+// ---- what the account pushes (ui/stream.js) -----------------------------------------------------
+
+/* THE ACCOUNT TELLS THE PAGE AS IT HAPPENS (ui/stream.js; the account's end, account/stream.ts). Each event is applied at once, in place, to
+   what the page holds — an order's new state over its row in A.orders, a position over its row in the positions read kept (core api), the
+   paper cash over its venue's — and each fill is said as a toast, as Hyperliquid says its own ("Bought 0.5 BTC @ 62,481.7"). What moved is
+   drawn in the next frame: the chrome and, in the trading area, the tabs under the panels (positions, open orders, the history tabs) and
+   the ticket's Available (ui/terminal.js ttPushed) — never a sheet, the ticket's fields or a field being typed in, so quiet() does not hold
+   it back. Then the account is read again, once for a burst (SH_PUSH_MS after its last event): drawn whole when quiet() holds, else only
+   what moved, and whole at the next quiet moment (SH.late). The order states pushed are kept a little while (SH_AHEAD_MS) and laid again
+   over a read that comes back behind them (the account's door hears of a paper fill at its next poll), so a row never steps back */
+const SH_PUSH_MS = 60;
+const SH_AHEAD_MS = 30_000;
+const SH = { timer: 0, frame: false, loading: false, again: false, late: false, ahead: new Map() };
+const SH_DONE = ["filled", "canceled", "rejected", "expired"];
+
+/* an order's new state: its row in A.orders takes it (the account's own record of it, by its id — or by the client id the account gave it,
+   where the book told it before the account recorded it). Its fill is never said from here: every fill comes as a fill of its own — a
+   paper account's book tells its own, and the account tells one for every other order that filled more since it last told of it
+   (service.ts toldFill: a real venue's, a venue's own paper account's, an agent's that filled as it was placed), whatever the page's copy
+   of the order says. Answers whether the account should be read again for it: an order the page did not hold, or one whose status or fill
+   moved (what the read brings with it: the cash, the statement, Available). A change the row alone carries — a trailing stop that moved,
+   a queued order's note — is drawn in place, and nothing is read */
+function shOrder(o) {
+  if (!o || !A || !Array.isArray(A.orders)) return false;
+  const i = A.orders.findIndex((x) => (o.id && x.id === o.id) || (!!o.clientId && x.clientId === o.clientId && x.venue === o.venue));
+  const was = i >= 0 ? A.orders[i] : null;
+  // one the account has no record of yet (the book told it first): left for the read that follows
+  if (!o.id && !was) return true;
+  const next = { ...(was || {}), ...o, ...(was && !o.id ? { id: was.id } : {}) };
+  if (i >= 0) A.orders[i] = next;
+  else A.orders.unshift(next);
+  SH.ahead.set(next.id, { o: next, at: Date.now(), on: A });
+  return !was || was.status !== next.status || num(was.filledQty) !== num(next.filledQty);
+}
+/* the pushed states laid over A.orders as a read brought them: only one further on — more filled, or ended where the read still has it on a
+   book. One a read caught up with (the same state, in an A that is a read's and not the page's own copy it was laid on), or older than a
+   read can lag, is let go */
+function shAhead() {
+  if (!A || !Array.isArray(A.orders) || !SH.ahead.size) return;
+  const now = Date.now();
+  for (const [id, { o, at, on }] of SH.ahead) {
+    if (now - at > SH_AHEAD_MS) {
+      SH.ahead.delete(id);
+      continue;
+    }
+    if (on === A) continue;
+    const i = A.orders.findIndex((x) => x.id === id);
+    const x = i >= 0 ? A.orders[i] : null;
+    if (x && x.status === o.status && num(x.filledQty) === num(o.filledQty)) {
+      SH.ahead.delete(id);
+      continue;
+    }
+    if (x && (num(o.filledQty) > num(x.filledQty) || (SH_DONE.includes(o.status) && !SH_DONE.includes(x.status)))) A.orders[i] = { ...x, status: o.status, filledQty: o.filledQty, ...(o.avgPrice !== undefined ? { avgPrice: o.avgPrice } : {}), ...(o.feeUsd !== undefined ? { feeUsd: o.feeUsd } : {}), ...(o.note ? { note: o.note } : {}) };
+  }
+}
+/* A FILL, SAID: "Bought 0.5 BTC @ 62,481.7 · Paper account" — the side, the size, the market, the price (an event contract's in cents),
+   where; a liquidation's or a settlement's own words after it. The price is the fill's own — "avg" after it where the account could give
+   only the order's average (service.ts toldFill). Once a fill (core FILLS_SAID: the order's own answer may have said it) */
+function shFillToast(f) {
+  if (!f || !(num(f.qty) > 0)) return;
+  const key = f.clientId ? `${f.clientId}|${num(f.filledQty)}` : `${f.venue || ""}|${f.ref || ""}|${f.at || ""}|${num(f.qty)}`;
+  if (FILLS_SAID.has(key)) return;
+  fillSaid(key);
+  const price = f.price === undefined || f.price === null ? "" : ` @ ${f.kind === "event" ? cents(f.price) : px(f.price)}${f.avg ? " avg" : ""}`;
+  // a close says what it made or lost, as HL's trade history's Closed PNL does
+  const r = Number(f.realizedUsd);
+  const closed = f.realizedUsd !== undefined && f.realizedUsd !== null && Number.isFinite(r) ? ` · closed PNL ${r < 0 ? "−" : "+"}${money(Math.abs(r))}` : "";
+  toast(`${f.side === "sell" ? "Sold" : "Bought"} ${qtyOf(f.qty)} ${f.name || f.symbol || ""}${price}${closed}${f.venueName ? ` · ${f.venueName}` : ""}${f.note ? ` · ${f.note}` : ""}`, "ok");
+}
+/* a position or a holding as it now stands, over its row in the positions read the page keeps (null: gone) — a read on its way is let go
+   instead (it is from before), and the next look asks again. The read keeps its own age: a pushed row never lengthens the life of the rows
+   it did not change (another venue's marks and PNL are read again when that read is due, however often a paper account fills) */
+function shPosition(e) {
+  if (!e || !e.venue || !e.symbol) return;
+  const path = "/api/account/positions";
+  const hit = API.get(path);
+  if (hit && !hit.pending && hit.body && hit.body.ok !== false && Array.isArray(hit.body.positions)) {
+    const same = (p) => p.venue === e.venue && p.symbol === e.symbol;
+    const list = hit.body.positions.slice();
+    const i = list.findIndex(same);
+    if (e.position && i >= 0) list[i] = e.position;
+    else if (e.position) list.push(e.position);
+    else if (i >= 0) list.splice(i, 1);
+    API.set(path, { ...hit, body: { ...hit.body, positions: list } });
+  } else forget(path);
+  forget("/api/account/holdings");
+}
+/* the paper cash, over its venue's row: what the ticket's Available reads */
+function shBalance(e) {
+  if (!e || !A || !Array.isArray(A.venues) || !Number.isFinite(Number(e.cashUsd))) return;
+  const v = A.venues.find((x) => x.id === e.venue);
+  const h = v && Array.isArray(v.holdings) ? v.holdings.find((x) => x.asset === "USD" && x.note === "paper money") : null;
+  if (!h) return;
+  const d = Number(e.cashUsd) - num(h.usd);
+  Object.assign(h, { amount: Number(e.cashUsd), usd: Number(e.cashUsd) });
+  v.usd = num(v.usd) + d;
+  if (v.cashUsd !== undefined) v.cashUsd = num(v.cashUsd) + d;
+}
+/* each paper book as it last said itself (the paper event: live/paper.ts PaperBookSummary), by venue: what it holds, its positions and its
+   open orders, counted — the read after a book's word is asked only when one of them moved, or on a reset (shBookMoved) */
+const SH_BOOKS = new Map();
+function shBookMoved(e) {
+  if (!e || !e.venue) return true;
+  const now = `${num(e.holdings)}|${num(e.positions)}|${num(e.open)}`;
+  const was = SH_BOOKS.get(e.venue);
+  SH_BOOKS.set(e.venue, now);
+  if (SH_BOOKS.size > 50) SH_BOOKS.delete(SH_BOOKS.keys().next().value);
+  return !!e.reset || was !== now;
+}
+/* what moved, drawn in the next frame (once for a burst), and — unless `read` is false: a change the patch alone carries — the account
+   read again a little later (once for a burst) */
+function shSoon(read = true) {
+  if (!A) return;
+  if (!SH.frame) {
+    SH.frame = true;
+    nextFrame(() => {
+      SH.frame = false;
+      shPatch();
+    });
+  }
+  if (!read) return;
+  clearTimeout(SH.timer);
+  SH.timer = setTimeout(shPushedRead, SH_PUSH_MS);
+}
+/* what a pushed change moves, drawn in place: the chrome, and the trading area's tabs and Available (ui/terminal.js ttPushed) */
+function shPatch() {
+  if (!A) return;
+  shAhead();
+  renderChrome(connected(), owns());
+  if (ROUTE.tab === "trade" && typeof ttPushed === "function") ttPushed();
+}
+/* the account read again after a burst — while an owner action is being signed, its own read comes when it is done (core own) */
+async function shPushedRead() {
+  SH.timer = 0;
+  if (SH.loading) return void (SH.again = true);
+  if (busy) return;
+  SH.loading = true;
+  try {
+    await load({ draw: shPushedDraw });
+  } catch {
+    // the account not answering is the refresh's to say
+  } finally {
+    SH.loading = false;
+    if (SH.again) {
+      SH.again = false;
+      shSoon();
+    }
+  }
+}
+/* the read after a burst drawn: whole when nothing is being typed or signed and no sheet is open; else only what moved, and whole later */
+function shPushedDraw() {
+  if (quiet()) return void render();
+  SH.late = true;
+  shPatch();
+}
+
+/* a listener on the account's stream (ui/stream.js, loaded right after the contract; asked for, as any other script's names are) */
+const shOn = (type, fn) => (typeof stOn === "function" ? stOn(type, fn) : () => {});
+// an order whose status or fill did not move (a trailing stop's stop moved, a queued order's note) is drawn in place, and not read for
+shOn("order", (o) => shSoon(shOrder(o)));
+shOn("fill", (f) => {
+  shFillToast(f);
+  shSoon();
+});
+shOn("position", (e) => {
+  shPosition(e);
+  shSoon();
+});
+shOn("balance", (e) => {
+  shBalance(e);
+  shSoon();
+});
+// a paper book started again: nothing kept of it stands. A book that said itself with the same holdings, positions and open orders (its
+// look moved a trailing stop, or noted a queued order's wait) is read for nothing: what moved came as its own events
+shOn("paper", (e) => {
+  if (e && e.reset) afterAction();
+  shSoon(shBookMoved(e));
+});
+shOn("statement", () => {
+  forget("/api/account/statement");
+  shSoon();
+});
+shOn("card", () => shSoon());
+// the stream could not resume from where the page stopped (the account restarted, or more came than it keeps): everything read afresh
+shOn("snapshot", () => {
+  afterAction();
+  shSoon();
+});
+// focus left a field while a read was drawn only in part: the whole page now
+document.addEventListener("focusout", () => {
+  if (SH.late) setTimeout(() => SH.late && quiet() && render(), 0);
+});
+
 routed();
 (async () => {
   await Owner.ready();
@@ -486,8 +693,22 @@ routed();
   };
   if (typeof requestIdleCallback === "function") requestIdleCallback(ahead, { timeout: 2000 });
   else setTimeout(ahead, 500);
-  // a refresh due in the middle of a scroll waits for it to rest (its drawing is main-thread work the scroll's frames would wait for)
+  // what changes on the account, pushed from here on (ui/stream.js; a browser without event streams goes on by the read below)
+  if (typeof stStart === "function") stStart();
+  // a refresh due in the middle of a scroll waits for it to rest (its drawing is main-thread work the scroll's frames would wait for); while
+  // the stream is connected it is due REFRESH_SLOW times less often — what changes comes pushed (the account's door follows the real
+  // venues by itself while a page listens: service.ts watchDoor) — and a page drawn only in part since a pushed read (SH.late) is drawn
+  // whole at the first quiet moment. What the stream does not push is kept at its old pace: the trading area's tabs are drawn again from
+  // their own reads every tick, in place (ui/terminal.js ttPushed: the positions as read — their marks and PNL follow their markets'
+  // pushed prices between reads, ttLiveRow), and the top bar's clock moves on with the page's
   setInterval(() => {
-    if (A && quiet()) whenStill(() => quiet() && refresh());
+    // polling: every tick, as always; connected: only once nothing was read for the last ticks (a pushed change's read counts)
+    const pushed = typeof stHealth === "function" && stHealth() === "connected";
+    if (A && (!pushed || Date.now() - loadedAt >= REFRESH_MS * (REFRESH_SLOW - 1)) && quiet()) whenStill(() => quiet() && refresh());
+    else if (A && SH.late && quiet()) render();
+    else if (A && pushed) {
+      drawStamp();
+      if (ROUTE.tab === "trade" && typeof ttPushed === "function") ttPushed();
+    }
   }, REFRESH_MS);
 })();

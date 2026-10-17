@@ -51,7 +51,8 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import type { ChainName } from "./chain.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
-import { badOrder, ceilTo, CANDLE_INTERVALS, DONE, floorTo, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketSession, type MarketStats, type SessionPhase, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { badWindow, foldBars, INTERVAL_WORDS, limitOf, sessionsSince } from "./history.ts";
+import { badOrder, ceilTo, DONE, floorTo, INTERVAL_MS, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketSession, type MarketStats, type SessionPhase, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { asRefusal, networkNo, notTheApi, num, redact, REGION, unreachable, venueSaidNo, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 import type { LiveWriter } from "./writes.ts";
 
@@ -214,10 +215,12 @@ const STOCK = /^[A-Z][A-Z0-9.]{0,14}$/;
 const PAIR = /^([A-Z0-9]{1,15})\/([A-Z0-9]{1,15})$/;
 /** the most markets one stats call reads: one snapshots request for the stocks among them, one for the pairs */
 const STATS_MAX = 100;
-/** the most bars one history reads, the latest first, in one request */
-const BARS = 300;
-/** a bar's size in Alpaca's words (timeframe: [1-59]Min, [1-23]Hour, 1Day) */
-const TIMEFRAME: Record<CandleInterval, string> = { "5m": "5Min", "1h": "1Hour", "1d": "1Day" };
+/** the most bars one request of a history reads, the latest first (Alpaca takes up to 10,000, counted across the symbols asked) */
+const BARS_MOST = 10_000;
+/** a bar's size in Alpaca's words (timeframe: [1-59]Min, [1-23]Hour, 1Day, 1Week). Its 4Hour and 1Week are not asked: how it aligns them is
+ * not documented (history-sources.md), so 4h is folded from its hourly bars and a week (from Monday) from its daily ones */
+const TIMEFRAME: Partial<Record<CandleInterval, string>> = { "1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "1d": "1Day" };
+const FOLDED_FROM: Partial<Record<CandleInterval, CandleInterval>> = { "4h": "1h", "1w": "1d" };
 
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => !!v && typeof v === "object" && !Array.isArray(v);
@@ -991,19 +994,31 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
     },
 
     // Price history from the bars endpoints: GET /v2/stocks/bars (Alpaca's default feed for bars: all exchanges, 15 minutes behind without a
-    // subscription, so no end is sent) and GET /v1beta3/crypto/us/bars, one symbol, 5Min, 1Hour or 1Day bars from `sinceMs`, the latest 300
-    // (sort desc), given back oldest first. A bar's volume is in shares or coins
-    async candles(raw, interval, sinceMs) {
+    // subscription, so no end is sent for a window that ends now) and GET /v1beta3/crypto/us/bars, one symbol, the latest bars in the window
+    // (sort desc), given back oldest first — a stock's SPLIT-ADJUSTED (adjustment=split, as every keyless source's are; Alpaca's default is
+    // raw, which draws a 10:1 split as a cliff), not dividend-adjusted. A window with no start (a page before a chart's first bar) is asked
+    // from far enough back for the page and ends a second before `until`. 4h and 1w are folded from 1h and 1d. A bar's volume is in shares or
+    // coins
+    async candles(raw, interval, w) {
       try {
-        if (!CANDLE_INTERVALS.includes(interval)) return no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name}: price history comes in bars of ${CANDLE_INTERVALS.join(", ")}, not ${String(interval)}` });
-        if (!(Number.isFinite(sinceMs) && sinceMs >= 0)) return no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name}: a price history starts at a time, in milliseconds` });
+        const now = c.clock();
+        const why = badWindow(interval, w, now);
+        if (why) return no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name}: ${why}` });
         const symbol = raw.trim().toUpperCase();
         const pair = PAIR.exec(symbol);
         if (pair && !inDollars(pair[2]!)) return no("E_ACCOUNT_UNPRICED", { venue: c.venue, message: `${symbol} is priced in ${pair[2]}: the account trades markets priced in dollars, so that every limit means dollars` });
         if (!pair && !STOCK.test(symbol)) return no("E_VENUE_REJECTED", { venue: c.venue, message: `${c.name} lists no market "${raw.trim()}": a stock is its ticker (AAPL), a coin a pair (BTC/USD)` });
+        const native = FOLDED_FROM[interval] ?? interval;
+        const perBar = Math.max(1, Math.round(INTERVAL_MS[interval] / INTERVAL_MS[native]));
+        const want = Math.min(BARS_MOST, limitOf(w) * perBar);
         // RFC-3339, to the second
-        const start = new Date(Math.floor(sinceMs)).toISOString().replace(/\.\d{3}Z$/, "Z");
-        const query = `symbols=${symbol}&timeframe=${TIMEFRAME[interval]}&start=${encodeURIComponent(start)}&limit=${BARS}&sort=desc`;
+        const at = (ms: number): string => new Date(Math.floor(ms)).toISOString().replace(/\.\d{3}Z$/, "Z");
+        // a page with no start: from far enough back that the page's bars are inside it — a stock trades about a third of the calendar's hours.
+        // A stock's 1D and 5D are its latest session and its latest five (live/history.ts sessionsSince, as the keyless reader counts them
+        // and the service holds the answer to): a Sunday evening's 1D is Friday's session, a Monday morning's 5D five sessions, not three
+        const since = !pair && w.since !== undefined && (w.range === "1D" || w.range === "5D") ? sessionsSince(w.range, now) : w.since;
+        const startMs = since ?? Math.max(0, (w.until ?? now) - want * INTERVAL_MS[native] * (pair ? 1.2 : 3.5));
+        const query = `symbols=${symbol}&timeframe=${TIMEFRAME[native]}&start=${encodeURIComponent(at(startMs))}${w.until !== undefined ? `&end=${encodeURIComponent(at(w.until - 1_000))}` : ""}&limit=${want}&sort=desc${pair ? "" : "&adjustment=split"}`;
         const body = await getJson(pair ? `${DATA}/v1beta3/crypto/us/bars?${query}` : `${DATA}/v2/stocks/bars?${query}`);
         const rows = isObj(body) && isObj(body.bars) && Array.isArray(body.bars[symbol]) ? (body.bars[symbol] as unknown[]) : [];
         const bars = new Map<number, Candle>();
@@ -1015,7 +1030,11 @@ function alpacaTrader(c: { venue: string; name: string; base: string; keyId: str
           const v = typeof b.v === "number" && Number.isFinite(b.v) && b.v >= 0 ? b.v : undefined;
           bars.set(t, { t, o, h, l, c: cl, ...(v !== undefined ? { v } : {}) });
         }
-        return [...bars.values()].sort((x, y) => x.t - y.t);
+        const sorted = [...bars.values()].sort((x, y) => x.t - y.t);
+        const out = native !== interval ? foldBars(sorted, interval, pair ? "utc" : "new-york") : sorted;
+        // Alpaca's history reaches back to 2016: a window it filled, or one it still has a page of (next_page_token), has older bars
+        const cut = isObj(body) && typeof body.next_page_token === "string" && body.next_page_token !== "";
+        return { bars: out, more: cut || sorted.length > 0, source: `${c.name} · ${symbol}`, ...(pair ? {} : { adjustment: "split-adjusted, not dividend-adjusted" }), ...(native !== interval ? { folded: `${INTERVAL_WORDS[interval]} bars folded from ${c.name}'s ${INTERVAL_WORDS[native]} bars` } : {}) };
       } catch (err) {
         return asRefusal(c.venue, c.name, err, secrets);
       }

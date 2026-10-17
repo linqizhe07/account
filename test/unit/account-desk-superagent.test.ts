@@ -9,10 +9,12 @@ import type { Outcome } from "../../src/portfolio/account/exchange.ts";
 import { MODE_RULES } from "../../src/portfolio/account/mode-rules.ts";
 import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from "../../src/portfolio/account/sign.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
+import type { Listing, PublicSource } from "../../src/portfolio/live/public-markets.ts";
 import type { LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { startPortfolioServer } from "../../src/portfolio/server.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
+import type { MarketHub } from "../../src/portfolio/live/stream-hub.ts";
 
 /** THE SUPERAGENT (account/desk.ts): the desk at a paper account, trading on its own. Guard is the whole account's, so on paper every
  * order of the desk's would be a card; the owner signs one narrower thing — the desk's autonomy on paper — and only the desk's OWN house
@@ -136,7 +138,7 @@ function heldBrain(s: Script = {}) {
   return { brain, holdNext };
 }
 
-async function boot(o: { home?: string; brain?: Brain; paper?: Record<string, Market>; real?: Record<string, Market>; at?: number } = {}) {
+async function boot(o: { home?: string; brain?: Brain; paper?: Record<string, Market>; real?: Record<string, Market>; at?: number; publicMarkets?: PublicSource[]; streams?: MarketHub } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), "account-superagent-"));
   if (!o.home) homes.push(home);
   const paper = o.paper ?? majors();
@@ -147,7 +149,7 @@ async function boot(o: { home?: string; brain?: Brain; paper?: Record<string, Ma
   let n = 0;
   let skew = o.at ?? 0;
   const liveDeps: Partial<LiveDeps> = { clock: () => REAL + skew, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
-  const svc = await PortfolioService.create({ home, now: () => new Date(START + skew).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [], liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] }, desk: { brain: o.brain ?? scriptedBrain(scriptOf()), tickMs: 0 } });
+  const svc = await PortfolioService.create({ home, now: () => new Date(START + skew).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: o.publicMarkets ?? [], liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] }, desk: { brain: o.brain ?? scriptedBrain(scriptOf()), tickMs: 0 }, ...(o.streams ? { streams: o.streams } : {}) });
   await svc.restoring;
   const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: START + skew + ++n } as OwnerAction));
   const as = async (key: ReturnType<typeof simKey>, a: NoNonce<AgentAction>) => svc.exchange(await signAgent(key, { ...a, nonce: START + skew + ++n } as AgentAction));
@@ -909,5 +911,262 @@ describe("start again in one step: a resume carries the autonomy and the brain",
     expect(v.autonomy?.paper).toBe(true);
     expect(v.brain).toMatchObject({ provider: "claude", model: "claude-haiku-5-5", effort: "low" });
     expect(readRoom(home).filter((m) => m.from === "you").slice(-3).map((m) => m.text)).toEqual(["You resumed the desk.", "You changed the brain: Claude · Anthropic API · claude-haiku-5-5 · low effort.", expect.stringMatching(/^You let the desk trade on its own at Paper Ex, paper money/)]);
+  });
+});
+
+describe("the plan's exits act at once (feat/paper-live p0): the entry carries them to the venue, and the desk judges them before any brain", () => {
+  it("an entry goes out with its take-profit and stop as its bracket where the market takes one; the venue's stop fills between cycles and the lead closes on it, at its own price", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9, changePct24h: 2.5 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const brain = scriptedBrain(scriptOf({ search: () => ({ leads: [{ symbol: "BTC/USD", side: "buy", thesis: "BTC is up 2.5% on $2B of volume", confidence: 0.7 }], note: "" }) }));
+    const { svc, desk, own, hire, autonomy, home, advance } = await boot({ brain, publicMarkets: [kraken] });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    expect(code(await hire({ venue: "paper-1" }))).toBe("account");
+    expect(code(await autonomy(true))).toBe("account");
+    await desk.cycle("test");
+    const lead = (await desk.view())!.open[0]!;
+    expect(lead).toMatchObject({ id: "L-0001", state: "executed", exits: { takeProfit: Number((60010 * 1.02).toPrecision(10)), stopLoss: Number((60010 * 0.99).toPrecision(10)) } });
+    // the venue holds them: the entry's two exits, one canceling the other
+    const page = (await svc.accountView())!;
+    expect(page.orders.filter((o) => o.exitOf?.order === lead.order).map((o) => [o.exitOf!.kind, o.status]).sort()).toEqual([["stop-loss", "open"], ["take-profit", "open"]]);
+    expect(readRoom(home).find((m) => m.from === "sniper" && m.kind === "order")?.text).toMatch(/its take-profit at 61,210\.2 and its stop at 59,409\.9 held by the venue\.$/);
+    // the price falls through the stop between cycles: the paper account's own look sells, and the next tick of the desk's clock closes the
+    // lead on that fill — no cycle, no brain
+    Object.assign(btc, { price: 59000, bid: 58990, ask: 59010 });
+    expect(await svc.lookAtPaper()).toEqual(["paper-1"]);
+    advance(30_000);
+    await desk.tick();
+    const closed = (await desk.view())!.recent.find((l) => l.id === "L-0001")!;
+    expect(closed.state).toBe("closed");
+    expect(closed.exitWhy).toBe("stop at 58,990 (its stop-loss, filled by the venue)");
+    expect(closed.exit!.price).toBe(58990);
+  });
+
+  it("a lead's exits are found however many orders came after them: past the page's newest sixty, the venue's stop still closes the lead", async () => {
+    const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9, changePct24h: 2.5 };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async (q) => [btc].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const brain = scriptedBrain(scriptOf({ search: () => ({ leads: [{ symbol: "BTC/USD", side: "buy", thesis: "BTC is up 2.5% on $2B of volume", confidence: 0.7 }], note: "" }) }));
+    const { svc, desk, own, hire, autonomy, advance } = await boot({ brain, publicMarkets: [kraken] });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    expect(code(await hire({ venue: "paper-1" }))).toBe("account");
+    expect(code(await autonomy(true))).toBe("account");
+    await desk.cycle("test");
+    const lead = (await desk.view())!.open[0]!;
+    expect(lead.state).toBe("executed");
+    // seventy of the owner's own orders after it, resting far under the market: the entry and its two exits are no longer among the
+    // page's newest sixty
+    for (let i = 0; i < 70; i++) {
+      const p = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC/USD", side: "buy", orderType: "limit", qty: "0.0002", usd: "", limitPrice: "10000" });
+      if (isRefusal(p)) throw new Error(p.message);
+      const { nonce: _n, ...rest } = p.action as Extract<OwnerAction, { type: "liveOrder" }>;
+      expect(code(await own(rest as NoNonce<OwnerAction>))).toBe("order");
+    }
+    expect((await svc.accountView())!.orders.some((o) => o.id === lead.order || o.exitOf?.order === lead.order)).toBe(false);
+    // the price falls through the stop: the venue's stop sells, and the desk's next tick finds that fill and closes the lead on it
+    Object.assign(btc, { price: 59000, bid: 58990, ask: 59010 });
+    await svc.lookAtPaper();
+    advance(30_000);
+    await desk.tick();
+    const closed = (await desk.view())!.recent.find((l) => l.id === "L-0001")!;
+    expect(closed.state).toBe("closed");
+    expect(closed.exitWhy).toBe("stop at 58,990 (its stop-loss, filled by the venue)");
+  });
+
+  it("a stop the mark has passed is closed before the Exit's brain is asked about the other leads — never kept waiting on a call", async () => {
+    const { brain, holdNext } = heldBrain({ search: () => ({ leads: [{ symbol: "BTC/USDT", side: "buy", thesis: "BTC up", confidence: 0.7 }, { symbol: "ETH/USDT", side: "buy", thesis: "ETH up", confidence: 0.6 }], note: "" }) });
+    const { desk, hire, autonomy, paper, advance } = await boot({ brain });
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    expect((await desk.view())!.open.map((l) => l.symbol).sort()).toEqual(["BTC/USDT", "ETH/USDT"]);
+    // BTC falls through its 1% stop; ETH stands: the Exit's brain is asked about ETH alone, and is held mid-call
+    paper["BTC/USDT"] = SPOT("BTC/USDT", 58_000);
+    advance(10 * 60_000);
+    const exit = holdNext("exit");
+    const run = desk.cycle("test");
+    await exit.asked;
+    const sold = TR.paper as LiveTrader & { placed: OrderRequest[] };
+    expect(sold.placed.filter((o) => o.side === "sell").map((o) => o.symbol)).toEqual(["BTC/USDT"]);
+    expect((await desk.view())!.recent.find((l) => l.symbol === "BTC/USDT")?.state).toBe("closed");
+    exit.release();
+    await run;
+  });
+
+  it("between cycles the clock's tick judges the plan: a take-profit the mark has reached is closed at the next tick, not at the next cycle", async () => {
+    const { desk, hire, autonomy, paper, advance } = await boot();
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    expect((await desk.view())!.open.map((l) => l.state)).toEqual(["executed"]);
+    paper["BTC/USDT"] = SPOT("BTC/USDT", 61_800);
+    // a minute later: no cycle is due (every five minutes), the tick's own look at the plan closes it
+    advance(60_000);
+    await desk.tick();
+    const v = (await desk.view())!;
+    expect(v.open).toEqual([]);
+    expect(v.recent.find((l) => l.id === "L-0001")?.exitWhy).toMatch(/^TP HIT at 61,800 /);
+    expect(v.session?.cycles).toBe(1);
+  });
+
+  it("marks an open lead from its market's live stream (feat/paper-live p2a): the floor shows this moment's mark and result, and the plan's take-profit closes at the next tick though the venue's own read still says the old price", async () => {
+    const marks = new Map<string, number>();
+    const hub: MarketHub = {
+      covers: (source, symbol) => marks.has(`${source}|${symbol}`),
+      want: () => true,
+      hold: () => () => undefined,
+      quote: (source, symbol) => {
+        const p = marks.get(`${source}|${symbol}`);
+        return p === undefined ? undefined : { bid: p - 1, ask: p + 1, last: p, at: Date.now(), recvAt: Date.now(), seenAt: Date.now(), src: "Stand-in", seq: 1, live: true };
+      },
+      book: () => undefined,
+      trades: () => [],
+      since: () => ({ trades: 0, seq: 0 }),
+      confirmed: async () => undefined,
+      onTick: () => () => undefined,
+      close: () => undefined,
+    };
+    const { desk, hire, autonomy, advance } = await boot({ streams: hub });
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    const entry = (await desk.view())!.open[0]!.entry!;
+    // the stream marks BTC at 61,200; the venue's own read (its positions) still says 60,000
+    marks.set("pap|BTC/USDT", 61_200);
+    const lead = (await desk.feed(0))!.leads.find((l) => l.id === "L-0001")!;
+    expect(lead).toMatchObject({ markPrice: 61_200, markFrom: "Stand-in · live", unrealizedUsd: Number(((61_200 - entry.price) * entry.qty).toFixed(2)) });
+    // past the take-profit on the stream: the next tick closes it, at the stream's mark
+    marks.set("pap|BTC/USDT", 61_800);
+    advance(60_000);
+    await desk.tick();
+    const v = (await desk.view())!;
+    expect(v.open).toEqual([]);
+    expect(v.recent.find((l) => l.id === "L-0001")?.exitWhy).toMatch(/^TP HIT at 61,800 /);
+  });
+
+  it("the floor's equity is its open leads at the marks its rows show (feat/paper-live p2a): the start, what closed since, and the sum of the unrealised results it shows — moving with the live mark between the desk's ticks", async () => {
+    const marks = new Map<string, number>();
+    const hub: MarketHub = {
+      covers: (source, symbol) => marks.has(`${source}|${symbol}`),
+      want: () => true,
+      hold: () => () => undefined,
+      quote: (source, symbol) => {
+        const p = marks.get(`${source}|${symbol}`);
+        return p === undefined ? undefined : { bid: p - 1, ask: p + 1, last: p, at: Date.now(), recvAt: Date.now(), seenAt: Date.now(), src: "Stand-in", seq: 1, live: true };
+      },
+      book: () => undefined,
+      trades: () => [],
+      since: () => ({ trades: 0, seq: 0 }),
+      confirmed: async () => undefined,
+      onTick: () => () => undefined,
+      close: () => undefined,
+    };
+    const { desk, hire, autonomy } = await boot({ streams: hub });
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    const agrees = async () => {
+      const feed = (await desk.feed(0))!;
+      const shown = feed.leads.filter((l) => l.state === "executed").reduce((x, l) => x + (l.unrealizedUsd ?? 0), 0);
+      const realised = feed.leads.filter((l) => l.state === "closed").reduce((x, l) => x + (l.pnlUsd ?? 0), 0);
+      expect(feed.equity.nowUsd).toBeCloseTo(feed.equity.startUsd + realised + shown, 2);
+      return feed;
+    };
+    const before = await agrees();
+    // the stream moves between two of the desk's ticks: the rows' results move, and the equity with them
+    marks.set("pap|BTC/USDT", 61_200);
+    const after = await agrees();
+    const entry = after.leads.find((l) => l.id === "L-0001")!.entry!;
+    expect(after.equity.nowUsd - before.equity.nowUsd).toBeCloseTo((61_200 - entry.price) * entry.qty - (before.leads.find((l) => l.id === "L-0001")!.unrealizedUsd ?? 0), 2);
+    marks.set("pap|BTC/USDT", 59_500);
+    expect((await agrees()).equity.changeUsd).toBeCloseTo((59_500 - entry.price) * entry.qty, 2);
+  });
+
+  it("between cycles a plan close the door refused is not tried and said again at every tick — once a cycle, as before; a missing mark likewise", async () => {
+    const { desk, hire, autonomy, paper, advance, home } = await boot();
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    expect((await desk.view())!.open.map((l) => l.state)).toEqual(["executed"]);
+    const refusals = () => readRoom(home, 500).filter((m) => m.kind === "refusal" && m.lead === "L-0001").length;
+    // BTC more than triples: the take-profit is hit, and the close (worth more than the Exit's $100 an order) is refused at the door
+    paper["BTC/USDT"] = SPOT("BTC/USDT", 200_000);
+    advance(60_000);
+    await desk.tick();
+    expect(refusals()).toBe(1);
+    const lead = () => (readDesk(home)!.leads.find((l) => l.id === "L-0001") as Lead);
+    expect(lead()).toMatchObject({ state: "executed", closeRefused: expect.stringMatching(/^an order of \$[\d.,]+ is more than the \$100\.00 an order the trading limit allows/) });
+    // the next ticks, inside the cycle: not tried again, nothing more said
+    for (let i = 0; i < 4; i++) {
+      advance(30_000);
+      await desk.tick();
+    }
+    expect(refusals()).toBe(1);
+    // the cycle (five minutes after the last) tries it again, and says it again
+    advance(2 * 60_000);
+    await desk.tick();
+    expect((await desk.view())!.session?.cycles).toBe(2);
+    expect(refusals()).toBe(2);
+    advance(30_000);
+    await desk.tick();
+    expect(refusals()).toBe(2);
+    // the venue stops pricing a lead (another desk, fresh): the warning is said once, not at every tick — and again by the next cycle
+    const quiet = await boot();
+    await quiet.hire();
+    await quiet.autonomy(true);
+    await quiet.desk.cycle("test");
+    const noMark = () => readRoom(quiet.home, 500).filter((m) => m.kind === "warning" && /^L-0001: no mark for BTC\/USDT/.test(m.text)).length;
+    quiet.paper["BTC/USDT"] = SPOT("BTC/USDT", 60_000, { price: undefined, bid: undefined, ask: undefined });
+    for (let i = 0; i < 5; i++) {
+      quiet.advance(30_000);
+      await quiet.desk.tick();
+    }
+    expect(noMark()).toBe(1);
+    quiet.advance(2 * 60_000 + 30_000);
+    await quiet.desk.tick();
+    expect((await quiet.desk.view())!.session?.cycles).toBe(2);
+    expect(noMark()).toBe(2);
+  });
+
+  it("on a tick where a cycle is due the plan is judged once, by the cycle: a stop hit and refused there is tried and said once, and a missing mark said once", async () => {
+    const { desk, hire, autonomy, paper, advance, home } = await boot();
+    await hire();
+    await autonomy(true);
+    await desk.cycle("test");
+    expect((await desk.view())!.open.map((l) => l.state)).toEqual(["executed"]);
+    const refusals = () => readRoom(home, 500).filter((m) => m.kind === "refusal" && m.lead === "L-0001").length;
+    const doorRefused = () => readRoom(home, 500).filter((m) => m.kind === "refusal" && /the door refused the close/.test(m.text)).length;
+    // the take-profit is hit first seen on the tick that is also the cycle's (five minutes after the last): the close is refused at the
+    // door (worth more than the Exit's $100 an order), once — not by the tick's own look and then by the cycle again at once
+    paper["BTC/USDT"] = SPOT("BTC/USDT", 200_000);
+    advance(5 * 60_000);
+    await desk.tick();
+    expect((await desk.view())!.session?.cycles).toBe(2);
+    expect(refusals()).toBe(1);
+    expect(doorRefused()).toBe(1);
+    // a mark the venue stops giving, first missed on a cycle's tick: said once
+    const quiet = await boot();
+    await quiet.hire();
+    await quiet.autonomy(true);
+    await quiet.desk.cycle("test");
+    const noMark = () => readRoom(quiet.home, 500).filter((m) => m.kind === "warning" && /^L-0001: no mark for BTC\/USDT/.test(m.text)).length;
+    quiet.paper["BTC/USDT"] = SPOT("BTC/USDT", 60_000, { price: undefined, bid: undefined, ask: undefined });
+    quiet.advance(5 * 60_000);
+    await quiet.desk.tick();
+    expect((await quiet.desk.view())!.session?.cycles).toBe(2);
+    expect(noMark()).toBe(1);
+  });
+
+  it("a seat's limit in the desk's view and feed says whether its budget renews and when — a limit signed without renewHours says neither", async () => {
+    const { desk, hire, own, keyOf } = await boot();
+    await hire();
+    // the Sniper's limit as the setup signs it now (renewing every 24 hours); the Exit's as a desk hired before that has it
+    const r = await own({ type: "approveSpend", agent: keyOf("sniper").address, scope: "trade", allow: "pap", perPayment: "150", budget: "2000", windowHours: 0, validUntil: START + 30 * DAY, renewHours: 24 });
+    expect(code(r)).toBe("account");
+    const v = (await desk.view())!;
+    const sniper = v.seats.find((s) => s.role === "sniper")!.limit;
+    expect(sniper).toEqual({ perOrderUsd: 150, leftUsd: 2000, budgetUsd: 2000, venues: ["pap"], renewHours: 24, renewsAt: new Date(START + DAY).toISOString() });
+    expect(v.seats.find((s) => s.role === "exit")!.limit).toEqual({ perOrderUsd: 100, leftUsd: 500, budgetUsd: 500, venues: ["pap"] });
+    const feedSeat = (await desk.feed(0))!.seats.find((s) => s.role === "sniper")!;
+    expect(feedSeat.limit).toMatchObject({ renewHours: 24, renewsAt: new Date(START + DAY).toISOString() });
   });
 });

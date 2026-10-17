@@ -93,7 +93,7 @@ async function run(home: string, at = 0) {
   let n = 0;
   // a price feed that would price Kraken's USDC.B as a dollar: were the line not left out, the allocation would count twice
   const liveDeps: Partial<LiveDeps> = { clock: () => t, http: recordingHttp, price: async (a) => (a.toUpperCase() === "USDC.B" ? 1 : undefined), chain: { symbol: async () => "steakUSDC" } as never };
-  const svc = await PortfolioService.create({ home, now: () => new Date(t).toISOString(), venues: "frontline", real: true, liveDeps, liveWrites: { capUsd: 1000, pairingCode: "K7QX-M2PA" }, publicMarkets: [exchangeTickers("kraken", { open: library, clock: () => t }), kalshiPublic({ http: recordingHttp, clock: () => t }), polymarketPublic({ http: recordingHttp, clock: () => t })], account: { owners: [{ id: owner.address, kind: "eoa" as const, label: "owner", addedAt: new Date(START).toISOString() }] } });
+  const svc = await PortfolioService.create({ home, now: () => new Date(t).toISOString(), venues: "frontline", real: true, liveDeps, liveWrites: { capUsd: 1000, pairingCode: "K7QX-M2PA" }, publicMarkets: [exchangeTickers("kraken", { open: library, http: recordingHttp, clock: () => t, pace: async () => undefined }), kalshiPublic({ http: recordingHttp, clock: () => t }), polymarketPublic({ http: recordingHttp, clock: () => t })], account: { owners: [{ id: owner.address, kind: "eoa" as const, label: "owner", addedAt: new Date(START).toISOString() }] } });
   await svc.restoring;
   const nonce = () => t + ++n;
   const own = async (a: NoNonce<OwnerAction>, by: SimKey = owner) => svc.exchange(await signOwner(by, { ...a, nonce: nonce() } as OwnerAction));
@@ -183,9 +183,14 @@ describe("candles: the venue and the symbol never reach a host they name", () =>
       expect([url.protocol, PUBLIC_HOSTS.includes(url.hostname), url.port, url.username]).toEqual(["https:", true, "", ""]);
     }
     expect(asked[0]).toBe("https://gamma-api.polymarket.com/markets/slug/http");
-    // the exchange library is handed only a pair the exchange lists
+    // the exchange library is handed only a pair the exchange lists; the venue with deep history a Kraken pair is charted from (Coinbase
+    // Exchange, for a dollar pair) is asked at its fixed host, the product in its path — first whether it trades that product now; where it
+    // lists none, Kraken's own latest bars, and its candles are never asked
+    asked.length = 0;
     expect(refusal(await r.svc.candles("kraken", "BTC/USD@evil.com", "1h")).code).toBe("E_VENUE_REJECTED");
-    expect((await r.svc.candles("kraken", "BTC/USD", "1h")) as { candles: unknown[] }).toMatchObject({ venue: "kraken", public: true });
+    expect(asked).toEqual([]);
+    expect((await r.svc.candles("kraken", "BTC/USD", "1h")) as { candles: unknown[] }).toMatchObject({ venue: "kraken", public: true, source: "Kraken · BTC/USD" });
+    expect(asked.map((u) => new URL(u)).map((u) => [u.protocol, u.host, u.pathname])).toEqual([["https:", "api.exchange.coinbase.com", "/products/BTC-USD"]]);
     expect(handed).toEqual(["BTC/USD"]);
   });
 

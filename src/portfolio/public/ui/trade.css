@@ -19,7 +19,10 @@
 .tt-low .t .why { max-width: 360px; }
 .tt-low .t .acts { flex-wrap: wrap; }
 /* Open orders (tkDrawOpen): the market's name kept to a line, its whole name on hover; what else is under way under its own small head */
-.tt-low .tk-open-t .tt-c-mkt b { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.tt-low .tk-open-t .tt-c-mkt b { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+/* an order's note beside its status ("on Kraken's book at 141.44", "waiting at … for the price to reach 137.83") kept to a line too, the
+   whole of it on hover (tkOpenStatus): the table stays as wide as its panel */
+.tt-low .tk-open-t .tp-st + .why { display: inline-block; max-width: 130px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .tt-low .tk-open-also { margin: 12px 0 0; font-size: 12px; font-weight: 400; color: var(--dim); }
 /* a status in Under way: a word in bold, coloured by what it waits on */
 .tp-st { font-weight: 700; white-space: nowrap; }
@@ -99,12 +102,16 @@
 .tk-money { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .tk-money.paper { border: 1px dashed var(--text); color: var(--text); }
 .tk-money.real { background: var(--text); color: var(--surface); }
+/* no account picked yet (none named, no paper account trades it): the owner's pick is asked for, edged, never filled like a choice made */
+.tk-money.pick { border: 1px solid var(--border); color: var(--dim); font-weight: 600; }
 .tk-at { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-s); font-size: 14px; text-align: left; background: transparent; color: var(--text); width: 100%; }
 /* the name, its word beside it (Best · Closed · Public), the venue's note under them */
 .tk-at > span:first-child { display: block; min-width: 0; }
 .tk-at b { font-weight: 600; }
 .tk-at[aria-pressed="true"] { border: 1.5px solid var(--rule); padding: 9.5px 11.5px; }
-.tk-at-r { display: flex; flex-direction: column; align-items: flex-end; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* the price on the right: it gives way before the name does. A price with its age said beside it ("$342.62 · from 15:59 New York, 15 min
+   delayed") wraps under itself, right-aligned, instead of running over the account's name */
+.tk-at-r { display: flex; flex-direction: column; align-items: flex-end; flex: 0 1 auto; min-width: 0; max-width: 62%; font-weight: 600; white-space: normal; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .tk-at-r .why { font-weight: 400; }
 /* a venue line's note (a paper account says its whole rule while its market is shut): three lines at most, all of it on hover */
 .tk-at-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
@@ -143,6 +150,8 @@
 /* reduce only · take profit / stop loss: the row stands aside when neither is offered */
 .tk-flags { display: flex; flex-direction: column; gap: 6px; }
 .tk-flags:not(:has(label:not([hidden]))) { display: none; }
+/* the extended-hours switch's words, under the flags (P3: in view, not under Advanced) */
+.tk-eh-s { margin: -2px 0 0; }
 /* the other venues that list it, folded under one line */
 .tk-pubs summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; gap: 4px; list-style: none; }
 .tk-pubs summary::-webkit-details-marker { display: none; }
@@ -226,6 +235,7 @@
 .tt-order .tk-money { padding: 0 6px; border: 0; border-radius: var(--hl-r-panel); font: 400 12px/1.7 var(--font-sans); letter-spacing: normal; }
 .tt-order .tk-money.real { background: var(--hl-inset); color: var(--hl-title); }
 .tt-order .tk-money.paper { background: var(--hl-badge); color: var(--hl-accent-soft); }
+.tt-order .tk-money.pick { border: 1px solid var(--hl-inset); background: transparent; color: var(--hl-warn); }
 /* a venue: a row edged like a field, 33 high; the one the order goes to edged in the focus grey */
 .tt-order .tk-at { min-height: 33px; padding: 5px 10px; gap: 8px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); font-size: 12px; line-height: 15px; color: var(--hl-text); background: transparent; }
 .tt-order .tk-at[aria-pressed="true"] { padding: 5px 10px; border: 1px solid var(--hl-muted); }
@@ -256,9 +266,13 @@
 /* the primary: the soft accent, the near-black on it; the bright accent under the pointer; a dark green while it waits, never faded */
 .tt-order .btn.btn-primary, .tt-order [data-go] { min-height: 33px; padding: 0 16px; border: 0; border-radius: var(--hl-r); background: var(--hl-accent-soft); color: var(--hl-on-accent); font: 400 12px/31px var(--font-sans); box-shadow: none; }
 .tt-order .btn.btn-primary:disabled, .tt-order [data-go]:disabled { background: var(--hl-accent-disabled); color: var(--hl-on-accent); opacity: 1; }
+/* Sell and Short sign in HL's pink, as its own sell button does (ui/trade.js sideButton: data-side on the button); a dark pink while it waits */
+.tt-order [data-go][data-side="sell"] { background: var(--hl-down); color: var(--hl-on-accent); }
+.tt-order [data-go][data-side="sell"]:disabled { background: var(--hl-down-disabled); color: var(--hl-on-accent); }
 @media (hover: hover) {
   .tt-order .btn:not(.btn-primary):hover:not(:disabled), .tt-order [data-hand]:hover:not(:disabled) { background: var(--hl-inset-hover); }
   .tt-order .btn.btn-primary:hover:not(:disabled), .tt-order [data-go]:hover:not(:disabled) { background: var(--hl-accent); opacity: 1; }
+  .tt-order [data-go][data-side="sell"]:hover:not(:disabled) { background: var(--hl-down); filter: brightness(1.1); }
   .tt-order .link:hover { color: var(--hl-accent); }
   .tt-order button.tk-at:hover:not(:disabled) { border-color: var(--hl-muted); }
 }
@@ -319,8 +333,18 @@
 @media (hover: hover) {
   .tt-order .fld:hover { border-color: var(--hl-muted); }
 }
-/* the take-profit and stop-loss, the trail and its unit: one field a row, so a label and its figure both have room in a panel 270 wide */
-.tt-order :is([data-exits], [data-trail]) { grid-template-columns: minmax(0, 1fr); }
+/* the trail and its unit: one field a row, so a label and its figure both have room in a panel 270 wide */
+.tt-order [data-trail] { grid-template-columns: minmax(0, 1fr); }
+/* the take-profit and the stop-loss: each its price and its percent side by side, the price wider (it is what is signed) */
+.tt-order .tk-exits { display: flex; flex-direction: column; gap: 8px; }
+.tt-order .tk-exits[hidden] { display: none; }
+.tt-order .tk-exits .row2 { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+/* the limit's field: Mid and BBO at its right end, as HL keeps Mid inside its price field */
+.tt-order .fld.tk-limit-f { grid-template-columns: auto minmax(0, 1fr) auto; }
+.tt-order .tk-pxb-w { display: inline-flex; gap: 2px; margin-right: -6px; }
+.tt-order .tk-pxb-w[hidden] { display: none; }
+.tt-order .tk-pxb { min-height: 0; padding: 0 5px; border: 0; border-radius: var(--hl-r-panel); background: transparent; color: var(--hl-accent-soft); font: 400 12px/22px var(--font-sans); letter-spacing: normal; cursor: pointer; }
+.tt-order .tk-pxb:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -1px; }
 /* the Hand-to-agent composer in the panel: its labels are longer than an order's ("About how much ($)", an account's whole name in
    Where), so each says itself over its value — HL's field, two lines high — rather than cutting either */
 .tt-order .hta-form .row2 { grid-template-columns: minmax(0, 1fr); }
@@ -350,6 +374,7 @@
 
 /* ---- the boxes to tick (REF §5.14): 16, an edge at half strength, filled in the accent with a dark ring once ticked ---------------- */
 .tt-order .tk-flags { gap: 5px; }
+.tt-order .tk-eh-s { margin: -1px 0 0 24px; font: 400 11px/15px var(--font-sans); color: var(--hl-muted); }
 .tt-order label.chk1 { gap: 8px; min-height: 21px; font: 400 12px/15px var(--font-sans); color: var(--hl-text); }
 .tt-order label.chk1 input[type="checkbox"] { -webkit-appearance: none; appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border: 1px solid var(--hl-inset-hover); border-radius: var(--hl-r-check); background: transparent; opacity: .5; cursor: pointer; transition: background-color .3s ease-in-out, border-color var(--hl-ease), opacity var(--hl-ease); }
 .tt-order label.chk1 input[type="checkbox"]:checked { opacity: 1; border-color: var(--hl-accent-soft); background: var(--hl-accent-soft); box-shadow: inset 0 0 0 2px var(--hl-on-accent); }
@@ -419,7 +444,15 @@
 .tt-pop :is(.up, .down) { font-weight: 400; }
 .tt-pop .empty { padding: 4px; font-size: 12px; line-height: 24px; color: var(--hl-title); }
 .tt-pop .callout { padding: 10px 12px; border-radius: var(--hl-r); }
+/* a row's star (this browser's own short list, ui/trade.js tkStarToggle), beside its button: dim until starred, the accent once it is */
+.tt-pop .tk-list li { display: flex; align-items: center; }
+.tt-pop .tk-list li > button[data-i] { flex: 1 1 auto; min-width: 0; }
+.tt-pop .tk-star { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; min-height: 25px; padding: 0; border: 0; border-radius: var(--hl-r-panel); background: transparent; color: var(--hl-dim); cursor: pointer; }
+.tt-pop .tk-star .ico { width: 13px; height: 13px; }
+.tt-pop .tk-star.on { color: var(--hl-accent-soft); }
+.tt-pop .tk-star.on .ico { fill: currentColor; }
 @media (hover: hover) {
+  .tt-pop .tk-star:hover { color: var(--hl-title); }
   .tt-pop .tk-seg button:hover:not([aria-pressed="true"]) { color: var(--hl-title); }
   .tt-pop .tk-list button:hover { background: var(--hl-inset); }
   .tt-pop .tk-pfind:hover { border-color: var(--hl-muted); }
@@ -441,7 +474,18 @@
   .tt-order label.chk1 { min-height: 44px; }
   .tt-pop .tk-seg button { line-height: 44px; }
   .tt-pop .tk-list button { min-height: 44px; }
+  .tt-pop .tk-star { width: 44px; min-height: 44px; }
+  .tt-order .tk-pxb { min-height: 40px; padding: 0 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .tt-order .tk-side .seg::before, .tt-order .tk-side .seg button, .tt-order label.chk1 input[type="checkbox"], .tt-order .fld, .tt-order .tk-pct input[type="range"]::-webkit-slider-thumb, .tt-order .tk-otabs.slide-under::after { transition: none; }
 }
+
+/* how old the price an order was valued at is, once it is not the last few seconds' (core ageWords): the area's word for caution */
+.tk-age { color: var(--hl-warn); font-size: 11px; }
+/* a figure's quieter words in the summary (a fee's rate, "as the venue charges it", a queued order's open) */
+.tt-order .tk-qsub { color: var(--hl-dim); }
+/* a venue's long rule in the face's block, folded under one line (ui/trade.js tkNoteHtml) */
+.tk-kbnote summary { cursor: pointer; list-style: none; text-decoration: underline dashed; text-underline-offset: 2.4px; width: max-content; }
+.tk-kbnote summary::-webkit-details-marker { display: none; }
+.tk-kbnote p { margin: 4px 0 0; }

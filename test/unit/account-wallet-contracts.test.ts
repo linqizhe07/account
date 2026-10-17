@@ -3,7 +3,8 @@
  *
  *   answerAsk           the owner declines an agent's ask: it leaves `asks`, and the agent is shown it was declined for a day
  *   earn in holdings    money in an earn product is a holdings row (class earn) and in the venue's, the live and the net worth totals — once
- *   candles             one market's price history, at a connected venue and from a public source, kept a minute
+ *   candles             one market's price history, at a connected venue and from a public source: a range's first view, a page before a
+ *                       bar, kept seconds to minutes
  *   connector           each venue says the connection it was made with
  *   RWA rows            a wallet's tokenised fund is rwa:USDY in Markets, with its issuer's words, as in holdings
  *   kinds               a trader's own kinds reach the page
@@ -163,9 +164,27 @@ describe("one market's price history", () => {
     expect(ev.body.candles.every((b: { c: number }) => b.c > 0 && b.c < 1)).toBe(true);
   });
 
+  it("a range in its own bar size, and the page before a bar a chart has: each says whether older bars exist", async () => {
+    const r = await get("/api/account/candles?venue=ex&symbol=BTC/USDT&range=5D");
+    expect(r.body).toMatchObject({ ok: true, venue: "ex", interval: "5m", range: "5D", more: expect.any(Boolean) });
+    expect(r.body.candles.length).toBeGreaterThan(100);
+    const first = r.body.candles[0].t as number;
+    const page = await get(`/api/account/candles?venue=ex&symbol=BTC/USDT&interval=5m&before=${first}&limit=50`);
+    expect(page.body).toMatchObject({ ok: true, interval: "5m", before: first, more: true });
+    expect(page.body.range).toBeUndefined();
+    expect(page.body.candles).toHaveLength(50);
+    expect(page.body.candles.every((b: { t: number }) => b.t < first)).toBe(true);
+    // neither a range nor a page: the bar size's own range (an hour's is a month)
+    expect((await get("/api/account/candles?venue=ex&symbol=BTC/USDT&interval=1h")).body).toMatchObject({ ok: true, interval: "1h", range: "1M" });
+  });
+
   it("refuses what it cannot answer, in words", async () => {
     const no = async (q: string) => (await get(`/api/account/candles?${q}`)).body.refusal;
-    expect((await no("venue=ex&symbol=BTC/USDT&interval=4h")).message).toMatch(/5m, 1h, 1d/);
+    expect((await no("venue=ex&symbol=BTC/USDT&interval=2h")).message).toBe("price history is by 1m, 5m, 15m, 1h, 4h, 1d, 1w");
+    expect((await no("venue=ex&symbol=BTC/USDT&range=2Y")).message).toBe("a range is one of 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, MAX");
+    expect((await no("venue=ex&symbol=BTC/USDT&range=1D&before=1700000000000")).message).toBe("price history is asked for a range or for the page before a bar, not both");
+    expect((await no("venue=ex&symbol=BTC/USDT&before=yesterday")).message).toBe("a page of price history is asked before a bar's start, in milliseconds");
+    expect((await no("venue=ex&symbol=BTC/USDT&before=1700000000000&limit=5000")).message).toBe("a page of price history holds 1 to 1,000 bars");
     expect((await no("venue=nowhere&symbol=BTC/USDT&interval=1h")).code).toBe("E_WALLET_ACCOUNT_UNKNOWN");
     expect((await no("venue=standin-stock-tokens&symbol=NVDA&interval=1h")).message).toMatch(/publishes no price history/);
     expect((await no("venue=ex&symbol=NOPE/USDT&interval=1h")).code).toBe("E_VENUE_REJECTED");

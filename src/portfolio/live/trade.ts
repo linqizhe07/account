@@ -75,8 +75,18 @@ export interface Market {
   session?: MarketSession | undefined;
   /** why not, or what the owner should know (extended hours, a market order queued for the open) */
   note?: string | undefined;
+  /** a perpetual: the leverage set for this market at the venue now, where the venue says it before any position is open (a paper
+   * account's: 1x unless set) — what an order would open at */
+  leverage?: number | undefined;
+  /** the venue's own rule for how an order fills, where it says one for every market (a paper account's: live/paper.ts paperRule) — long,
+   * and the same for each market: the ticket folds it under "How it fills here", and a list's line of the market never carries it */
+  rule?: string | undefined;
   /** the order types the venue takes here */
   types: OrderType[];
+  /** an order type listed here that the market cannot take NOW, and why, in the venue's words — a paper account's US share whose only quote
+   * is Cboe's, fifteen minutes behind the market, takes no market order (live/paper.ts: a limit rests until a real-time quote reaches it).
+   * The account refuses such an order when it prepares it, with these words (account/live-orders.ts plan) */
+  refusesNow?: Partial<Record<OrderType, string>> | undefined;
   /** the times in force it takes here (absent: only its own default, which is not chosen) */
   tifs?: TimeInForce[] | undefined;
   /** where a venue takes a time in force for some order types only (Robinhood: "day" for a crypto stop, not a crypto limit): per type, the
@@ -215,10 +225,75 @@ export interface PublicTrade {
   at: string;
 }
 
-export type CandleInterval = "5m" | "1h" | "1d";
-export const CANDLE_INTERVALS: readonly CandleInterval[] = ["5m", "1h", "1d"];
+/** THE BAR SIZES OF A PRICE HISTORY (feat/paper-live phase H): a minute, five, fifteen, an hour, four hours, a day, a week. A source that
+ * publishes no bar of a size folds it from its own finer real bars (live/history.ts foldBars: 4h from 1h, 1w from 1d, Monday weeks) and says
+ * so; nothing is ever made up between them */
+export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
+export const CANDLE_INTERVALS: readonly CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+/** how long a bar of each size lasts, in ms (a week is seven days, whatever the day it starts on) */
+export const INTERVAL_MS: Readonly<Record<CandleInterval, number>> = { "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000 };
+/** THE RANGES a chart is asked for, as a trading screen names them: a day, five, a month, three, six, the year so far, a year, five, all of it */
+export type CandleRange = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "MAX";
+export const CANDLE_RANGES: readonly CandleRange[] = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+/** the most bars one ask of a history gives: a view that would hold more is given the latest this many, and scrolling left pages the rest
+ * (about ten Binance-sized calls, the crypto report's first-view budget: history-sources.md) */
+export const HISTORY_MOST = 5_000;
 /** one bar of price history: its start (ms), open, high, low, close, and the volume when the venue says, in base units */
 export interface Candle { t: number; o: number; h: number; l: number; c: number; v?: number | undefined }
+
+/** THE STRETCH OF TIME a price history is asked for. A chart's first view asks a range's start (`since`) and HISTORY_MOST bars at most; a
+ * chart scrolled left asks the page before the first bar it has (`until`, no `since`) */
+export interface CandleWindow {
+  /** the first bar wanted starts at or after this (ms). Absent: ONE page of the source's own — one request, the latest bars before `until` —
+   * which is what a chart scrolled left asks, so each scroll costs the venue one request */
+  since?: number | undefined;
+  /** every bar given starts before this (ms). Absent: now, the bar still forming included */
+  until?: number | undefined;
+  /** at most this many bars, the latest where more lie in the window (HISTORY_MOST at most; a page: the source's own page at most) */
+  limit?: number | undefined;
+  /** the view was asked as a range (`since` is that range's start on the calendar): a source whose market keeps sessions may count it in
+   * them — a US stock's 1D is its latest session, its 5D the latest five — and a source that keeps only so many bars at a size draws the
+   * range in a coarser one rather than a part of it (Hyperliquid's latest 5,000) */
+  range?: CandleRange | undefined;
+  /** the venue's OWN bars only, never another venue's drawn in their place: a paper account judging the time it slept against its market's
+   * listing source alone (live/paper.ts catchUp) — where a chart of a Kraken pair is drawn from a venue with a longer history, this asks
+   * Kraken's own (live/public-markets.ts). Every other source draws only its own anyway */
+  own?: true | undefined;
+}
+
+/** A PAGE OF A PRICE HISTORY, as a source that pages says it: the bars, whether older ones exist, and, where the history ends inside what was
+ * asked, why — in words the chart shows at that edge. A source that says none of it answers a plain list of bars (live/history.ts pageOf) */
+export interface CandlePage {
+  /** oldest first */
+  bars: Candle[];
+  /** older bars exist before the first one: the next page is asked with `until` set to the first bar's start */
+  more: boolean;
+  /** the answer stops short of what was asked for a reason other than the history: a page older than the ones answered was refused, or
+   * did not answer, so the bars may not reach the window's start (`more` is said too). A chart draws them; whoever must see the whole window
+   * — the paper account judging the time it slept (live/paper.ts catchUp) — does not take them */
+  partial?: true | undefined;
+  /** where the history ends, when it ends inside what was asked, in a sentence: "Coinbase Exchange's BTC-USD history starts Mon 20 Jul 2015",
+   * "Hyperliquid keeps only the latest 5,000 bars at this size", "Intraday history starts …" */
+  ends?: string | undefined;
+  /** the bars' own size, where the source drew them coarser than asked (Hyperliquid's latest 5,000 bars do not reach the range's start),
+   * and why, in a sentence the chart shows beside them */
+  interval?: CandleInterval | undefined;
+  note?: string | undefined;
+  /** whose bars these are, in words: the venue and its market ("Coinbase Exchange · BTC-USD", "Robinhood · AAPL") */
+  source?: string | undefined;
+  /** what the prices are adjusted for, where a source adjusts them (US stocks: "split-adjusted, not dividend-adjusted") */
+  adjustment?: string | undefined;
+  /** which hours the bars cover, where a market keeps sessions ("pre-market, regular and after-hours, 04:00–20:00 New York · no overnight
+   * data", "regular session only") */
+  session?: string | undefined;
+  /** the bars were folded from finer real bars of the same source, in words ("4h bars folded from 1h bars") */
+  folded?: string | undefined;
+  /** stretches inside the bars where the source has none, said and never filled: [from, to) ms and why ("No overnight data") */
+  gaps?: Array<{ from: number; to: number; why: string }> | undefined;
+  /** the last bar is not the source's own daily bar but built from its intraday bars of a session the daily bars do not have yet: its start,
+   * and the words it carries ("Today so far") */
+  today?: { t: number; words: string } | undefined;
+}
 
 export interface OrderRequest {
   symbol: string;
@@ -281,7 +356,32 @@ export interface Position {
   liquidationPrice?: number | undefined;
   /** what was paid for it in dollars, fees in it, where the venue keeps that (a paper account's book) */
   costUsd?: number | undefined;
+  /** a perpetual's margin: what the venue holds against the position now, in dollars, where it says (a paper account's isolated margin,
+   * Hyperliquid's marginUsed) */
+  marginUsd?: number | undefined;
+  /** a perpetual's funding since it opened, in dollars: above zero the position paid it, below zero it received it — only where the venue
+   * keeps it with a sign it documents (a paper account's book) */
+  fundingUsd?: number | undefined;
   native: unknown;
+}
+
+/** WHAT AN ORDER WOULD LEAVE by the venue's own rule, said before the order where the venue keeps a rule it can say then (a paper account's
+ * book: its fee, and a perpetual's liquidation price once the order has opened or added to the position at the leverage set there, under the
+ * same rule its looks liquidate by). Nothing here is estimated from outside the venue's rule: a venue that says nothing before an order has
+ * no `estimate`, and a figure it cannot say is absent */
+export interface OrderEstimate {
+  /** the fee the order would pay at `price`, in dollars, and that fee's rate in basis points of the notional */
+  feeUsd?: number | undefined;
+  feeBps?: number | undefined;
+  /** a perpetual: the liquidation price of the position as the order would leave it (absent: no position left, or one that cannot be
+   * liquidated — a long whose margin covers the whole notional), and the leverage it would stand at */
+  liquidationPrice?: number | undefined;
+  leverage?: number | undefined;
+  /** why the venue's own rule would refuse the order now, in words — what open orders hold of the cash or the holding, a book that does not
+   * hold a market order's size within its worst price — so the account says it before anything is signed */
+  refuses?: string | undefined;
+  /** what else the order would do, in words (a close of a whole holding: the open sells on it canceled with it) */
+  note?: string | undefined;
 }
 
 /** `pending`: taken by the venue, not yet on its book (or, from a wallet, waiting for the wallet to send it) */
@@ -333,6 +433,10 @@ export interface LiveTrader {
   positions?(): Promise<Position[] | Refusal>;
   /** a position closed by the venue's own call (Alpaca's DELETE /positions); absent: the account closes it with a reduce-only market order */
   close?(symbol: string, qty: number, clientId: string): Promise<OrderState | Refusal>;
+  /** what an order of `qty` at `price` would leave by the venue's own rule (OrderEstimate: its fee, a perpetual's liquidation price, and
+   * whether the rule would refuse it now), where the venue keeps one it can say before the order; absent where it does not. Its type, its
+   * limit, stop and worst prices where the order has them; `close`: the order is a close of the whole position (LiveTrader.close) */
+  estimate?(o: { symbol: string; side: Side; qty: number; price: number; reduceOnly?: boolean | undefined; type?: OrderType | undefined; limitPrice?: number | undefined; stopPrice?: number | undefined; worstPrice?: number | undefined; close?: boolean | undefined }): Promise<OrderEstimate | Refusal>;
   /** a perpetual's leverage, and its margin mode where the venue lets it be set */
   setLeverage?(symbol: string, leverage: number, marginMode?: "cross" | "isolated"): Promise<{ leverage: number; marginMode?: "cross" | "isolated" | undefined; native: unknown } | Refusal>;
   // ---- reading the market (no order, nothing signed) ----
@@ -341,8 +445,9 @@ export interface LiveTrader {
   /** event contracts, each carrying its `group` (the question), `closeTime` and `category`: the open ones, in one category when asked,
    * closing within `closingWithinMs` when asked, at most `limit`, most traded first */
   events?(o: { category?: string | undefined; closingWithinMs?: number | undefined; limit: number }): Promise<Market[] | Refusal>;
-  /** price history since `sinceMs`, oldest first */
-  candles?(symbol: string, interval: CandleInterval, sinceMs: number): Promise<Candle[] | Refusal>;
+  /** price history in a window (CandleWindow: a first view's range, or one page before the first bar a chart has), oldest first: a page
+   * that says whether older bars exist and where the history ends (CandlePage), or a plain list where the venue says nothing of it */
+  candles?(symbol: string, interval: CandleInterval, window: CandleWindow): Promise<Candle[] | CandlePage | Refusal>;
   /** whose prices a market's history and book are, where that is not the venue's own: a paper account's market's public source ("Kraken",
    * "US stocks"); absent, the venue's own */
   pricesFrom?(symbol: string): Promise<string | undefined>;

@@ -50,7 +50,8 @@
  *     never for its whole list;
  *   · a perpetual's funding rate and when it is next paid (fetchFundingRate; Bybit's ticker carries it already), at OKX, Binance and Bybit;
  *     a dated future's expiry as when it stops trading;
- *   · price history (fetchOHLCV), at most 300 bars of 5 minutes, an hour or a day;
+ *   · price history (fetchOHLCV) in bars of 1m to 1w, page by page — a chart's first view up to HISTORY_MOST bars, each page scrolled left one
+ *     request of the exchange's page — a size the exchange lacks folded from a finer one it has (live/history-crypto.ts libraryHistory);
  *   · the order book (fetchOrderBook), best first, fifty levels a side at most, and the latest trades (fetchTrades), newest first, a trade's
  *     side only where the exchange's docs say it is the taker's.
  */
@@ -59,7 +60,8 @@ import { no } from "../refuse.ts";
 import type { KeyFile } from "./credentials.ts";
 import { exchangeSaidNo, isBinance, isBybit, isOkx, thrownHttp, type ExchangeClient } from "./exchange.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, preIpoOf } from "./preipo.ts";
-import { badOrder, ceilTo, floorTo, inDollars, notionalOf, onStep, pick, plain, CANDLE_INTERVALS, DONE, type Candle, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderBook, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type PublicTrade, type TimeInForce } from "./trade.ts";
+import { libraryHistory, libraryNative, MONDAY_WEEKS } from "./history-crypto.ts";
+import { badOrder, ceilTo, floorTo, inDollars, notionalOf, onStep, pick, plain, CANDLE_INTERVALS, DONE, type CandleInterval, type CandlePage, type CandleWindow, type LiveTrader, type Market, type MarketStats, type OrderBook, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type PublicTrade, type TimeInForce } from "./trade.ts";
 import { num, redact, transportCode, type LiveProbe, type MarginMode, type MarketExtras } from "./types.ts";
 
 type Dict = Record<string, unknown>;
@@ -130,9 +132,8 @@ const STATS_MAX = 40;
 const BINANCE_SYMBOLS = 20;
 /** the kind of market as the library names it, where an exchange lists its tickers by kind */
 const LIBRARY_KIND: Record<Kind, string> = { spot: "spot", perp: "swap", future: "future" };
-/** the most bars one history reads, in one request: OKX's candles and Coinbase's take at most 300 a call */
+/** the most bars one request of a history reads: OKX's candles and Coinbase's take at most 300 a call (Binance and Bybit 1,000) */
 const BARS = 300;
-const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
 /** the most levels a side of a book is read to, and the most trades one read gives (the page's order book and its trades) */
 const BOOK_DEPTH = 50;
 const TRADES_MAX = 100;
@@ -1208,32 +1209,29 @@ export function exchangeTrader(client: ExchangeClient, venue: string, name: stri
     return !out.size && refused ? refused : out;
   };
 
-  /** Price history (fetchOHLCV): the latest bars since `sinceMs`, at most 300, oldest first, in one request. A bar's volume is in the coin,
-   * where the library counts it so: any spot market's, and OKX's, Binance's and Bybit's linear contracts' (OKX's from its volume in the coin,
-   * not in contracts; Bybit's linear contract is one coin). Elsewhere a contract's volume may be counted in contracts, and none is said */
-  const candles = async (symbol: string, interval: CandleInterval, sinceMs: number): Promise<Candle[] | Refusal> => {
+  /** Price history (fetchOHLCV) in a window (live/trade.ts CandleWindow), oldest first: page by page from the window's start, a page scrolled
+   * left one request (live/history-crypto.ts libraryHistory), a size the exchange lacks folded from a finer one it has. A bar's volume is in
+   * the coin, where the library counts it so: any spot market's, and OKX's, Binance's and Bybit's linear contracts' (OKX's from its volume
+   * in the coin, not in contracts; Bybit's linear contract is one coin). Elsewhere a contract's volume may be counted in contracts, and none
+   * is said */
+  const candles = async (symbol: string, interval: CandleInterval, w: CandleWindow): Promise<CandlePage | Refusal> => {
     if (!CANDLE_INTERVALS.includes(interval)) return no("E_VENUE_REJECTED", { venue, message: `${name}: price history comes in bars of ${and([...CANDLE_INTERVALS])}, not ${String(interval)}` });
-    if (!(Number.isFinite(sinceMs) && sinceMs >= 0)) return no("E_VENUE_REJECTED", { venue, message: `${name}: a price history starts at a time, in milliseconds` });
+    if (!w || typeof w !== "object" || (w.since !== undefined && !(Number.isFinite(w.since) && w.since >= 0)) || (w.until !== undefined && !(Number.isFinite(w.until) && w.until > 0))) return no("E_VENUE_REJECTED", { venue, message: `${name}: a price history starts at a time, in milliseconds` });
     const f = await find(symbol, true);
     if (isRefusal(f)) return f;
     if (!able("fetchOHLCV")) return no("E_VENUE_RAIL_CLOSED", { venue, message: `${name} has no price history the library can read` });
-    if (client.timeframes !== undefined && obj(client.timeframes)[interval] === undefined) return no("E_VENUE_RAIL_CLOSED", { venue, message: `${name} keeps no ${interval} bars` });
-    const from = Math.max(Math.floor(sinceMs), now() - BARS * BAR_MS[interval]);
-    let rows: unknown[];
+    // a week asked as a week only where the exchange's own weeks start on Monday (MONDAY_WEEKS), else folded from its days (Kraken's start
+    // on Thursday)
+    const native = libraryNative({ fetchOHLCV: async () => [], timeframes: client.timeframes === undefined ? undefined : obj(client.timeframes) }, interval, fam !== undefined && MONDAY_WEEKS.has(fam));
+    if (!native) return no("E_VENUE_RAIL_CLOSED", { venue, message: `${name} keeps no ${interval} bars` });
+    const inCoin = f.kind === "spot" || fam === "okx" || fam === "binance" || fam === "bybit";
     try {
-      rows = await client.fetchOHLCV!(f.m.symbol, interval, from, BARS);
+      const got = await libraryHistory({ fetchOHLCV: (sym, tf, since, limit) => client.fetchOHLCV!(sym, tf, since, limit) }, { name, symbol: f.m.symbol, inCoin, pageBars: fam === "binance" || fam === "bybit" ? 1_000 : BARS, clock: now, no: fail }, interval, native, w);
+      // Kraken answers only its latest 720 bars, whatever start is asked: where its bars end is that, not where its market started
+      return !isRefusal(got) && fam === "kraken" && got.ends ? { ...got, ends: "Kraken keeps only the latest 720 bars at this size" } : got;
     } catch (err) {
       return fail(err);
     }
-    const inCoin = f.kind === "spot" || fam === "okx" || fam === "binance" || fam === "bybit";
-    const bars = new Map<number, Candle>();
-    for (const r of Array.isArray(rows) ? rows : []) {
-      if (!Array.isArray(r)) continue;
-      const [t, o, h, l, c, v] = [finite(r[0]), pos(r[1]), pos(r[2]), pos(r[3]), pos(r[4]), finite(r[5])];
-      if (t === undefined || t < from || o === undefined || h === undefined || l === undefined || c === undefined) continue;
-      bars.set(t, { t, o, h, l, c, ...(inCoin && v !== undefined && v >= 0 ? { v } : {}) });
-    }
-    return [...bars.values()].sort((a, b) => a.t - b.t);
   };
 
   /** the library has the call here, and says the exchange has it */

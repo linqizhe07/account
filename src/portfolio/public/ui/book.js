@@ -27,13 +27,25 @@
                    its limit price. `rows`: how many rows a side the ladder draws; without it, as many whole rows as the panel's height
                    holds (worked out when it is mounted and when its size changes, never as data arrives), so no row is ever cut
      bkRelease(el) stops it: its timers, and any answer still on its way is dropped
-   As HL's does, a level whose size changed since the last read flashes once in its side's colour (bkFlashes; none under reduced motion),
+   PUSHED. Where the account's stream carries the market (ui/stream.js: the market showing is followed, and its venue's own stream moves —
+   live/stream-hub.ts), its book and its latest trades come pushed as book · trades events, a few times a second, and are drawn in the next
+   frame (only while their tab shows; kept for it otherwise): the reads above then become a slow fallback — once every BK_SLOW_MS while what
+   is pushed is fresh — and are back on their beat as soon as it is not (the stream down, the market no longer live there, nothing pushed for
+   BK_PUSH_FRESH_MS). A pushed book that holds as many levels a side as the ladder draws (or every level the venue has) is drawn as it came;
+   a stream that sends only its venue's nearest few (Hyperliquid's five, OKX's five, Kraken's ten) has those drawn live with the deeper levels
+   of the last read beyond them (bkCompose) — only levels strictly further out than the stream's last, from a read no older than
+   BK_STITCH_MS — and the quiet line says so, with when those were read; the reads keep their beat then, for the depth. The pushed trades and
+   the trades read are one tape (bkMergeTrades): each trade once, newest first, each row keyed by the trade itself, so a new trade comes in at
+   the top and the rows under it are the same rows moved down, never drawn again. Nothing pushed is ever taken for more than it is: an
+   answer read before a newer push is not drawn over it, and a market the stream says is not live is read again at once
+   As HL's does, a level whose size changed since the last read flashes once in its side's colour (bkFlashes; none under reduced motion) —
+   softer, and a level at most once in BK_FLASH_MS, while the stream drives the book (bk-live: it moves several times a second) —
    and a pointer over a row shows a card beside the panel with what the rows from the best to it add up to (bkReach: the distance from the
    middle, the average price, the totals in the base and the quote — from the source's own levels; the keyboard's focus on a row shows it
    too, a finger never).
    The pure parts, for the tests and anything else that draws a book: bkGroup · bkLadder · bkSpread · bkSpreadParts · bkSpreadWords ·
    bkSpreadHtml · bkTopLine · bkPrice · bkSize · bkClock · bkGroups · bkFlashes · bkReach · bkReachLines · bkUnanswered (whether a read's body says the account did not answer
-   it: the terminal's bar asks it too) · bkNoWords · bkOldWords. */
+   it: the terminal's bar asks it too) · bkNoWords · bkOldWords · bkCompose · bkLiveLine · bkMergeTrades · bkTradeKey. */
 
 /** each mounted panel's state, by its element: the market, the tab, the grouping, what the last reads said, the timers */
 const BK = new WeakMap();
@@ -54,6 +66,15 @@ const BK_CHROME_PX = 41 + 31 + 17 + 23 + 30;
 /** a refused read is asked again after this long, doubled each time it is refused again, at most the second figure; an answer resets it */
 const BK_BACKOFF_MS = 2000;
 const BK_BACKOFF_MAX_MS = 60_000;
+/** WHILE THE STREAM PUSHES THE MARKET: what was pushed is fresh for this long; meanwhile a read is asked only once in BK_SLOW_MS (the
+ * fallback, and a check of what the stream says); the deeper levels a read gave are laid beyond a shallow stream's for this long at most;
+ * and a level flashes at most once in BK_FLASH_MS (its own flash's length) */
+const BK_PUSH_FRESH_MS = 5_000;
+const BK_SLOW_MS = 15_000;
+const BK_STITCH_MS = 10_000;
+const BK_FLASH_MS = 800;
+/** the panels mounted now, each its state (the pushed book and trades find theirs here; BK is keyed by element and cannot be walked) */
+const BK_LIVE = new Set();
 
 // ---- the pure parts --------------------------------------------------------------------------------------------------------------------
 
@@ -150,10 +171,11 @@ function bkSize(s) {
   return Number(n.toPrecision(12)).toLocaleString("en-US", { maximumFractionDigits: 8 });
 }
 
-/** a moment on the viewer's own clock, HH:MM:SS */
+/** a moment on the viewer's own clock, HH:MM:SS — the trading screen's one clock (core yourClock), as the chart and the tables say it */
 function bkClock(iso) {
   const ms = typeof iso === "number" ? iso : Date.parse(String(iso || ""));
   if (!Number.isFinite(ms)) return "—";
+  if (typeof yourClock === "function") return yourClock(ms, { date: false });
   const d = new Date(ms);
   const two = (x) => String(x).padStart(2, "0");
   return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
@@ -229,6 +251,84 @@ function bkTopLine(book, now = Date.now()) {
   return `Best bid and ask only: ${why}${old}`;
 }
 
+/** THE BOOK TO DRAW from what the stream pushed (`push`: its levels a side, best first, and whether each side may go on past them — `more`)
+ * and the last read (`read`, or null): a side the stream sends as deep as the ladder needs (`need` levels), or whole (`more` false), is the
+ * stream's alone; a side it sends shallower has the stream's levels and, beyond them, the read's levels strictly further out than the
+ * stream's last (a bid lower, an ask higher) — never one of the read's inside the stream's, which the stream now says otherwise — and goes
+ * on as far as the read says. A read of a book's best bid and ask only (depth "top") adds nothing. `short`: a side was shallower than the
+ * ladder needs; `stitched` says how many levels a side are the stream's where the read's lie beyond them, and when that read is from (its
+ * own moment); neither: the stream's book alone, as deep as it is needed */
+function bkCompose(push, read, need) {
+  const lv = (x) => (Array.isArray(x) ? x.filter((l) => Array.isArray(l) && Number(l[0]) > 0) : []);
+  const deep = read && read.depth !== "top" ? read : null;
+  const out = { bids: [], asks: [], at: push.at, from: push.from, depth: "full", more: {} };
+  let live = Infinity;
+  for (const side of ["bids", "asks"]) {
+    const mine = lv(push[side]);
+    const goesOn = !(push.more && push.more[side] === false);
+    if (!goesOn || mine.length >= need) {
+      out[side] = mine;
+      out.more[side] = goesOn;
+      continue;
+    }
+    // shallower than the ladder needs: the reads keep their beat for the depth (book.js bkDue)
+    out.short = true;
+    if (!deep) {
+      out[side] = mine;
+      out.more[side] = goesOn;
+      continue;
+    }
+    const last = mine.length ? Number(mine[mine.length - 1][0]) : side === "bids" ? Infinity : -Infinity;
+    const beyond = lv(deep[side]).filter((l) => (side === "bids" ? Number(l[0]) < last : Number(l[0]) > last));
+    out[side] = [...mine, ...beyond];
+    out.more[side] = !(deep.more && deep.more[side] === false);
+    if (beyond.length && mine.length) live = Math.min(live, mine.length);
+  }
+  if (live !== Infinity) out.stitched = { n: live, at: deep.at };
+  return out;
+}
+/** the quiet line under a book drawn from the stream: how many levels a side are live, and when the deeper ones were read — short, to sit
+ * on one line under the ladder (the stream's name is the bar's and the tape's) — "" for the stream's book alone */
+function bkLiveLine(book) {
+  if (!book || !book.stitched) return "";
+  const at = Date.parse(String(book.stitched.at || ""));
+  return `Nearest ${book.stitched.n} live · the rest as read${Number.isFinite(at) ? ` at ${bkClock(at)}` : ""}`;
+}
+
+/** a trade's own words, as one key: its moment (to the millisecond, however its source wrote it), its price, its size, its side */
+function bkTradeKey(t) {
+  const ms = Date.parse(String((t && t.at) || ""));
+  return `${Number.isFinite(ms) ? ms : String((t && t.at) || "")}|${Number(t && t.price)}|${Number(t && t.size)}|${(t && t.side) || ""}`;
+}
+/** ONE TAPE from two lists of the same market's latest trades (the stream's and a read's, each newest first): every trade once — as many
+ * of the same trade as the list that holds most of it says (two fills of one size in one moment are two trades) — newest first, the first
+ * list's order kept among trades of one moment, `limit` at most. Nothing is made: every row is a trade one of them gave */
+function bkMergeTrades(a, b, limit = BK_TRADES) {
+  const out = [];
+  const most = new Map();
+  for (const list of [a, b]) {
+    const here = new Map();
+    for (const t of Array.isArray(list) ? list : []) {
+      if (!t || !Number.isFinite(Number(t.price))) continue;
+      const k = bkTradeKey(t);
+      const n = (here.get(k) || 0) + 1;
+      here.set(k, n);
+      if (n <= (most.get(k) || 0)) continue;
+      most.set(k, n);
+      out.push(t);
+    }
+  }
+  const ms = (t) => {
+    const x = Date.parse(String(t.at || ""));
+    return Number.isFinite(x) ? x : -Infinity;
+  };
+  return out
+    .map((t, i) => [t, i])
+    .sort((x, y) => ms(y[0]) - ms(x[0]) || x[1] - y[1])
+    .slice(0, limit)
+    .map(([t]) => t);
+}
+
 // ---- drawing ----------------------------------------------------------------------------------------------------------------------------
 
 /** the panel's frame for one market: its head (the tabs, the grouping), the book's pane and the trades' pane — drawn once per market; the
@@ -245,7 +345,7 @@ function bkFrame(st) {
   const heads = (last) => `<div class="bk-cols"><span>Price<span class="sr">${quote ? ` in ${esc(quote)}` : ""}</span></span><span>Size<span class="sr">${size ? ` in ${esc(size)}` : ""}</span></span><span>${last}</span></div>`;
   return `<div class="bk" data-k="bk:${esc(st.key)}">
 <div class="bk-head"><div class="bk-tabs" role="tablist" aria-label="Order book or trades"><button type="button" role="tab" class="bk-tab" data-bk-tab="book" aria-selected="true">Order book</button><button type="button" role="tab" class="bk-tab" data-bk-tab="trades" aria-selected="false">Trades</button></div></div>
-<div class="bk-pane" data-bk-pane="book" role="tabpanel"><div class="bk-ctl">${select}${unit}</div>${heads("Total")}<div class="bk-ladder"><div class="bk-asks" data-bk-asks></div><div class="bk-mid" data-bk-mid><span class="bk-wait">Reading the book…</span></div><div class="bk-bids" data-bk-bids></div></div><p class="bk-note" data-bk-note></p></div>
+<div class="bk-pane" data-bk-pane="book" role="tabpanel"><div class="bk-ctl">${select}${unit}</div>${heads("Total")}<div class="bk-ladder" tabindex="0" role="group" aria-label="Order book: the arrow keys move from level to level, Enter takes a level's price as the limit"><div class="bk-asks" data-bk-asks></div><div class="bk-mid" data-bk-mid><span class="bk-wait">Reading the book…</span></div><div class="bk-bids" data-bk-bids></div></div><p class="bk-note" data-bk-note></p></div>
 <div class="bk-pane" data-bk-pane="trades" role="tabpanel" hidden>${heads("Time")}<div class="bk-tape" data-bk-tape><p class="bk-wait">Reading the trades…</p></div></div>
 </div>`;
 }
@@ -259,7 +359,7 @@ function bkRowHtml(r, side, o, g, flash = "") {
   // a row that is only part of its range: its size and its running total are what was read of it, at least that much ("≥"), and it says so
   const least = r.part ? "≥\u2009" : "";
   const title = r.part ? `Use ${p} as the limit price · only part of this range was read: at least this much rests here` : `Use ${p} as the limit price`;
-  return `<div class="bk-row bk-${side}${r.part ? " bk-part" : ""}${flash ? ` bk-f${flash}` : ""}" role="button" tabindex="0" data-k="${side}:${esc(String(r.p))}${r.part ? ":part" : ""}" data-bk-px="${esc(String(r.p))}" title="${esc(title)}"><span class="bk-bar" style="transform:scaleX(${Number(w.toFixed(4))})"></span><span class="bk-p">${esc(p)}</span><span class="bk-s">${least}${esc(bkSize(r.s))}</span><span class="bk-t">${least}${esc(bkSize(r.t))}</span></div>`;
+  return `<div class="bk-row bk-${side}${r.part ? " bk-part" : ""}${flash ? ` bk-f${flash}` : ""}" role="button" tabindex="-1" data-k="${side}:${esc(String(r.p))}${r.part ? ":part" : ""}" data-bk-px="${esc(String(r.p))}" title="${esc(title)}"><span class="bk-bar" style="transform:scaleX(${Number(w.toFixed(4))})"></span><span class="bk-p">${esc(p)}</span><span class="bk-s">${least}${esc(bkSize(r.s))}</span><span class="bk-t">${least}${esc(bkSize(r.t))}</span></div>`;
 }
 
 /** THE LEVELS THAT CHANGED since the book was last drawn at this grouping: a level at the same price on the same side whose size the
@@ -348,19 +448,34 @@ function bkDrawBook(el, st) {
   const step = Number(st.o.priceStep);
   const lad = bkLadder(book, { rows: st.rows, group: g > 1 && step > 0 ? Number((g * step).toPrecision(12)) : 0 });
   const shown = g;
-  // the levels whose size changed since the last draw flash once (bkFlashes); the two names are taken in turn, one per draw
-  const changed = bkFlashes(st, lad, g);
+  // the levels whose size changed since the last draw flash once (bkFlashes); the two names are taken in turn, one per draw. While the
+  // stream drives the book (st.live: several draws a second) a level flashes at most once in BK_FLASH_MS, and keeps its flash's name on
+  // the draws within it, so its flash runs its whole length rather than being cut by the next draw
+  let changed = bkFlashes(st, lad, g);
+  const t = Date.now();
+  const held = st.live ? st.flashAt || (st.flashAt = new Map()) : null;
+  if (held) changed = new Set([...changed].filter((k) => !(held.has(k) && t - held.get(k).at < BK_FLASH_MS)));
   if (changed.size) st.flip = st.flip === "a" ? "b" : "a";
-  const fl = (side, r) => (changed.has(`${side}:${r.p}`) ? st.flip : "");
+  if (held) {
+    for (const k of changed) held.set(k, { at: t, name: st.flip });
+    for (const [k, f] of held) if (t - f.at >= BK_FLASH_MS) held.delete(k);
+  } else st.flashAt = null;
+  const fl = (side, r) => {
+    const k = `${side}:${r.p}`;
+    if (changed.has(k)) return st.flip;
+    return held && held.has(k) ? held.get(k).name : "";
+  };
   paint(asks, lad.asks.map((r) => bkRowHtml(r, "ask", st.o, shown, fl("ask", r))).join(""));
   paint(bids, lad.bids.map((r) => bkRowHtml(r, "bid", st.o, shown, fl("bid", r))).join(""));
   st.lad = lad;
   bkCardAgain(el, st);
   paint(mid, !lad.asks.length && !lad.bids.length ? '<span class="bk-wait">No orders on the book just now</span>' : bkSpreadHtml(book, st.o));
-  // a book kept while the account does not answer: said over its quiet line, in the warning colour, and the ladder dimmed (bkOld)
-  const top = bkTopLine(book);
+  // a book kept while the account does not answer: said over its quiet line, in the warning colour, and the ladder dimmed (bkOld). A book
+  // the stream pushes with the deeper levels of the last read beyond its own says which are live (bkLiveLine)
+  const top = bkTopLine(book) || bkLiveLine(book);
   paint(note, st.bookOld ? `<span class="bk-oldline" role="status">${esc(bkOldWords(st.bookOld, st.wait.book))}</span>${top ? ` ${esc(top)}` : ""}` : esc(top));
   bkOld(el, !!st.bookOld);
+  bkLiveMark(el, !!st.live);
   // a book of its best bid and ask only: the panel says so on its root (book.css centres the two rows and the line under them, rather
   // than leaving them adrift in a ladder's height)
   bkTop(el, book.depth === "top");
@@ -376,6 +491,11 @@ function bkOld(el, old) {
   const root = el.querySelector(".bk");
   if (root && root.classList && typeof root.classList.toggle === "function") root.classList.toggle("bk-old", !!old);
 }
+/* the root's mark for a book the stream drives (bk-live: book.css flashes its changed levels softer) */
+function bkLiveMark(el, live) {
+  const root = el.querySelector(".bk");
+  if (root && root.classList && typeof root.classList.toggle === "function") root.classList.toggle("bk-live", !!live);
+}
 
 /** the trades' pane: time, price (coloured by the side that took it, where the source says, with the side in words for a screen reader),
  * size — or the refusal's words */
@@ -386,13 +506,19 @@ function bkDrawTrades(el, st) {
   // the trades kept while the account does not answer: the line over them says since when they were not read
   const old = st.tradesOld ? `<p class="bk-oldline" role="status" data-k="old">${esc(bkOldWords(st.tradesOld, st.wait.trades))}</p>` : "";
   if (!st.trades.length) return void paint(tape, `${old}<p class="bk-wait">No trades just now</p>`);
+  // each row keyed by the trade itself (bkTradeKey, and how many of the same came before it): a trade that comes in is a row inserted at
+  // the top, and the rows under it are the same elements moved down — never every row's words written again
+  const seen = new Map();
   paint(
     tape,
     old +
     st.trades
-      .map((t, i) => {
+      .map((t) => {
         const side = t.side === "buy" ? "buy" : t.side === "sell" ? "sell" : "";
-        return `<div class="bk-trow" data-k="t${i}"><span class="bk-p${side ? ` bk-${side}` : ""}">${esc(bkPrice(t.price, st.o, 1))}${side ? `<span class="sr"> ${side === "buy" ? "bought" : "sold"}</span>` : ""}</span><span class="bk-s">${esc(bkSize(t.size))}</span><span class="bk-t">${esc(bkClock(t.at))}</span></div>`;
+        const k = bkTradeKey(t);
+        const n = (seen.get(k) || 0) + 1;
+        seen.set(k, n);
+        return `<div class="bk-trow" data-k="${esc(`t:${k}#${n}`)}"><span class="bk-p${side ? ` bk-${side}` : ""}">${esc(bkPrice(t.price, st.o, 1))}${side ? `<span class="sr"> ${side === "buy" ? "bought" : "sold"}</span>` : ""}</span><span class="bk-s">${esc(bkSize(t.size))}</span><span class="bk-t">${esc(bkClock(t.at))}</span></div>`;
       })
       .join(""),
   );
@@ -478,8 +604,9 @@ function bkGroupShown(el, st) {
 /** the browser's own words for a request that never reached the account — a stopped service, a dropped connection ("Failed to fetch",
  * "Load failed", "NetworkError when attempting to fetch resource.") — or for an answer that was not the account's (a gateway's "502 Bad
  * Gateway"): core api gives either as { ok: false, error } with no refusal */
-const BK_UNANSWERED = /^(Failed to fetch|Load failed|NetworkError\b|fetch failed|The network connection was lost|The Internet connection appears to be offline|\d{3}\b)/i;
-/** a read the account did not answer: no body at all, or core api's { ok: false, error } for a request that never reached it (`b` may be
+const BK_UNANSWERED = /^(Failed to fetch|Load failed|NetworkError\b|fetch failed|The network connection was lost|The Internet connection appears to be offline|The account did not answer\b|\d{3}\b)/i;
+/** a read the account did not answer: no body at all, or core api's { ok: false, error } for a request that never reached it — or that it
+ * let go unanswered after its timeout (`b` may be
  * that body, or the words a read already took from one). Never a refusal: that is the account's own sentence, and an error the account
  * wrote itself (its 500's "The account hit an error answering this") is its own words too */
 function bkUnanswered(b) {
@@ -581,12 +708,27 @@ function bkLive(el, st, letGo = true) {
 async function bkReadBook(el, st) {
   const ask = ++st.bookAsked;
   const depth = st.group > 1 ? 50 : 20;
+  st.readAt.book = Date.now();
   const body = await api(`/api/account/book?${new URLSearchParams({ venue: st.o.venue, symbol: st.o.symbol, depth: String(depth) })}`);
   if (BK.get(el) !== st || !st.alive || ask < st.bookDrawn) return;
   st.bookDrawn = ask;
   const read = !!(body && body.ok && body.book);
+  // what the stream pushes is fresh: the read is the depth beyond a shallow stream's levels (bkCompose), and a read that failed takes
+  // nothing away from the book the stream keeps drawing
+  if (bkPushed(st, "book")) {
+    if (read) {
+      st.rest = body.book;
+      st.restAt = Date.now();
+      st.book = bkCompose(st.pushBook, st.rest, bkNeed(st));
+    }
+    bkMissed(st, "book", !read);
+    return void bkDrawBook(el, st);
+  }
+  st.live = false;
   if (read) {
     st.book = body.book;
+    st.rest = body.book;
+    st.restAt = Date.now();
     st.bookNo = null;
     st.bookAt = Date.now();
     st.bookOld = 0;
@@ -607,10 +749,19 @@ async function bkReadBook(el, st) {
  * quietly, and no more asking until the market or the tab changes (st.tradesQuiet) */
 async function bkReadTrades(el, st) {
   const ask = ++st.tradesAsked;
+  st.readAt.trades = Date.now();
   const body = await api(`/api/account/trades?${new URLSearchParams({ venue: st.o.venue, symbol: st.o.symbol, limit: String(BK_TRADES) })}`);
   if (BK.get(el) !== st || !st.alive || ask < st.tradesDrawn) return;
   st.tradesDrawn = ask;
   const none = body && body.ok && typeof body.none === "string" && body.none.trim() ? body.none.trim() : "";
+  // the stream pushes the market's trades: a read's are laid into the same tape (each trade once), and a read that failed takes nothing
+  // away from it
+  if (bkPushed(st, "trades")) {
+    const read = !!(body && body.ok && Array.isArray(body.trades));
+    if (read) st.trades = bkMergeTrades(st.trades, body.trades);
+    bkMissed(st, "trades", !read);
+    return void bkDrawTrades(el, st);
+  }
   if (none) {
     st.trades = null;
     st.tradesNo = { words: none, quiet: true };
@@ -632,8 +783,84 @@ async function bkReadTrades(el, st) {
   bkMissed(st, "trades", !!st.tradesOld || (!!st.tradesNo && !st.tradesQuiet));
   bkDrawTrades(el, st);
 }
-/* the read `what` may be asked on its beat now: its tab showing, not quiet (trades a source does not publish), not waiting out a refusal */
-const bkDue = (st, what) => st.tab === what && !(what === "trades" && st.tradesQuiet) && Date.now() >= st.next[what];
+/* the read `what` may be asked on its beat now: its tab showing, not quiet (trades a source does not publish), not waiting out a refusal —
+   and, while the stream pushes it whole (a book as deep as the ladder needs, the trades), only once in BK_SLOW_MS */
+const bkDue = (st, what) => st.tab === what && !(what === "trades" && st.tradesQuiet) && Date.now() >= st.next[what] && !(bkPushed(st, what) && (what === "trades" || !(st.book && st.book.short)) && Date.now() - st.readAt[what] < BK_SLOW_MS);
+/* what the stream pushes of the market (its book or its trades) is fresh: it came within BK_PUSH_FRESH_MS, live, and the stream is connected */
+const bkPushed = (st, what) => st.heard[what] > 0 && Date.now() - st.heard[what] < BK_PUSH_FRESH_MS && (typeof stHealth !== "function" || stHealth() === "connected");
+/* how many levels a side the ladder needs drawn from a pushed book alone: its rows at 1× the tick; grouped, the fifty a side a read asks */
+const bkNeed = (st) => (st.group > 1 ? 50 : st.rows);
+
+/** THE BOOK THE STREAM PUSHED for a panel's market (ui/stream.js book event): drawn in the next frame — its own levels, with the last read's
+ * deeper ones beyond them where it sends fewer than the ladder needs (bkCompose) — and the reads slowed while it comes whole. One that says
+ * its market is not live (the stream lost it) puts the reads back on their beat at once */
+function bkPushedBook(st, d) {
+  if (!d || d.live !== true || !Array.isArray(d.bids) || !Array.isArray(d.asks)) {
+    st.heard.book = 0;
+    st.pushBook = null;
+    st.next.book = 0;
+    return;
+  }
+  st.pushBook = d;
+  st.heard.book = Date.now();
+  st.live = true;
+  st.book = bkCompose(d, st.rest && Date.now() - st.restAt <= BK_STITCH_MS ? st.rest : null, bkNeed(st));
+  st.bookNo = null;
+  st.bookOld = 0;
+  st.bookAt = Date.now();
+  bkSoon(st, "book");
+}
+/** THE TRADES THE STREAM PUSHED (the market's latest, newest first): laid into the tape — each once, newest first — and drawn in the next
+ * frame. Trades that come with the word that the market is not live are still the venue's own (laid in), but the reads are on their beat
+ * again at once */
+function bkPushedTrades(st, d) {
+  if (!d || !Array.isArray(d.trades)) return;
+  if (d.live === true) st.heard.trades = Date.now();
+  else {
+    st.heard.trades = 0;
+    st.next.trades = 0;
+  }
+  if (!d.trades.length) return;
+  st.trades = bkMergeTrades(d.trades, st.trades);
+  st.tradesNo = null;
+  st.tradesOld = 0;
+  st.tradesAt = Date.now();
+  st.tradesQuiet = false;
+  bkSoon(st, "trades");
+}
+/** what was pushed drawn once, in the next frame, however much came meanwhile — only the tab showing, and only while the panel is on the
+ * page and laid out (otherwise it is kept, and drawn when its tab or its pane comes back) */
+function bkSoon(st, what) {
+  st.due[what] = true;
+  if (st.queued) return;
+  st.queued = true;
+  nextFrame(() => {
+    st.queued = false;
+    if (!bkLive(st.el, st)) return;
+    for (const w of ["book", "trades"]) {
+      if (!st.due[w] || st.tab !== w) continue;
+      st.due[w] = false;
+      if (w === "book") bkDrawBook(st.el, st);
+      else bkDrawTrades(st.el, st);
+    }
+  });
+}
+/* the pushed book and trades, each to the panels mounted on its market; the stream no longer connected: the reads are on their beat again */
+if (typeof stOn === "function") {
+  const each = (d, fn) => {
+    if (!d || typeof d.venue !== "string") return;
+    for (const st of [...BK_LIVE]) if (st.alive && st.o.venue === d.venue && st.o.symbol === d.symbol) fn(st, d);
+  };
+  stOn("book", (d) => each(d, bkPushedBook));
+  stOn("trades", (d) => each(d, bkPushedTrades));
+  stOn("health", (h) => {
+    if (h === "connected") return;
+    for (const st of BK_LIVE) {
+      st.heard.book = 0;
+      st.heard.trades = 0;
+    }
+  });
+}
 
 /** the next read of `what` in `ms`, while the panel lives; a read only while its tab shows and the page is visible */
 function bkLoop(el, st, what, ms) {
@@ -663,6 +890,12 @@ function bkWire(el) {
         // publishes no trades is asked once more, and is quiet again if it still does not)
         st.tradesQuiet = false;
         st.next[want] = 0;
+        // what the stream pushed for it while it was not showing, drawn now rather than after the read
+        if (st.due[want]) {
+          st.due[want] = false;
+          if (want === "book") bkDrawBook(el, st);
+          else bkDrawTrades(el, st);
+        }
         void (want === "book" ? bkReadBook(el, st) : bkReadTrades(el, st)).catch(() => undefined);
       }
       return true;
@@ -701,7 +934,25 @@ function bkWire(el) {
     if (st) bkCardHide(el, st);
   });
   el.addEventListener("keydown", (e) => {
-    if ((e.key === "Enter" || e.key === " ") && e.target && e.target.dataset && e.target.dataset.bkPx !== undefined && press(e.target)) e.preventDefault();
+    if ((e.key === "Enter" || e.key === " ") && e.target && e.target.dataset && e.target.dataset.bkPx !== undefined && press(e.target)) return void e.preventDefault();
+    // THE BOOK IS ONE TAB STOP (its rows are not: tabbing through forty levels to reach the order panel is no way to trade): from the ladder,
+    // ↑ goes to the best ask and ↓ to the best bid; on a level, ↑ and ↓ move to the next one up or down, Home and End to the ends
+    const t = e.target;
+    if (!t || !["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key) || typeof t.closest !== "function") return;
+    const lad = t.closest(".bk-ladder");
+    if (!lad || !el.contains(lad)) return;
+    const rows = [...lad.querySelectorAll("[data-bk-px]")];
+    if (!rows.length) return;
+    const at = rows.indexOf(t);
+    const asks = lad.querySelectorAll(".bk-asks [data-bk-px]").length;
+    let to;
+    if (e.key === "Home") to = rows[0];
+    else if (e.key === "End") to = rows[rows.length - 1];
+    else if (at < 0) to = e.key === "ArrowUp" ? rows[Math.max(0, asks - 1)] : rows[Math.min(rows.length - 1, asks)];
+    else to = rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === "ArrowUp" ? -1 : 1)))];
+    if (!to) return;
+    e.preventDefault();
+    to.focus({ preventScroll: true });
   });
   el.addEventListener("change", (e) => {
     const st = BK.get(el);
@@ -709,6 +960,8 @@ function bkWire(el) {
     if (!st || !sel || !sel.matches || !sel.matches("[data-bk-group]")) return;
     const k = Number(sel.value);
     st.group = k >= 1 ? k : 1;
+    // the stream's book laid over the last read again for the depth this grouping needs
+    if (st.pushBook && bkPushed(st, "book")) st.book = bkCompose(st.pushBook, st.rest, bkNeed(st));
     bkDrawBook(el, st);
     void bkReadBook(el, st).catch(() => undefined);
   });
@@ -720,8 +973,11 @@ function bkMount(el, o) {
   if (!el || !o || !o.venue || !o.symbol) return;
   bkRelease(el);
   const fixed = Number.isInteger(o.rows) && o.rows > 0 && o.rows <= 50;
-  const st = { key: `${o.venue}|${o.symbol}`, o, rows: fixed ? o.rows : BK_ROWS, fixed, tab: "book", group: 1, book: null, bookNo: null, bookAt: 0, bookOld: 0, trades: null, tradesNo: null, tradesAt: 0, tradesOld: 0, tradesQuiet: false, bookAsked: 0, bookDrawn: 0, tradesAsked: 0, tradesDrawn: 0, wait: { book: 0, trades: 0 }, next: { book: 0, trades: 0 }, timers: {}, alive: true, watch: null, sizes: null, sizesAt: 0, flip: "", cardRow: "", lad: null };
+  // what the stream pushed (heard: when, by what; pushBook its last book), the last read's book (rest, restAt: what lies beyond a shallow
+  // stream's levels), when each read was last asked, whether the book drawn is the stream's (live), the draws waiting for the next frame
+  const st = { key: `${o.venue}|${o.symbol}`, el, o, rows: fixed ? o.rows : BK_ROWS, fixed, tab: "book", group: 1, book: null, bookNo: null, bookAt: 0, bookOld: 0, trades: null, tradesNo: null, tradesAt: 0, tradesOld: 0, tradesQuiet: false, bookAsked: 0, bookDrawn: 0, tradesAsked: 0, tradesDrawn: 0, wait: { book: 0, trades: 0 }, next: { book: 0, trades: 0 }, timers: {}, alive: true, watch: null, sizes: null, sizesAt: 0, flip: "", cardRow: "", lad: null, heard: { book: 0, trades: 0 }, pushBook: null, rest: null, restAt: 0, readAt: { book: 0, trades: 0 }, live: false, flashAt: null, due: { book: false, trades: false }, queued: false };
   BK.set(el, st);
+  BK_LIVE.add(st);
   paint(el, bkFrame(st));
   bkShowTab(el, st);
   // the rows a side: the caller's, else as many as the panel holds — and again whenever its size changes, the book drawn again from what
@@ -760,4 +1016,5 @@ function bkRelease(el) {
   for (const t of Object.values(st.timers)) clearTimeout(t);
   if (st.watch) st.watch.disconnect();
   BK.delete(el);
+  BK_LIVE.delete(st);
 }

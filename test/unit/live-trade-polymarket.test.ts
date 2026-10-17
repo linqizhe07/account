@@ -872,7 +872,7 @@ describe("candles(): an outcome's price history at Polymarket", () => {
     const history = `${CLOB}/prices-history?market=${YES}&startTs=${H}&endTs=${END}&fidelity=5`;
     const points = [{ t: H + 17, p: 0.15 }, { t: H + 317, p: 0.17 }, { t: H + 617, p: 0.14 }, { t: H + 3317, p: 0.16 }, { t: H + 3617, p: 0.155 }];
     const { t, seen } = await pm({ answers: { ...MARKET_ANSWERS, [`GET ${history}`]: json({ history: points }) } });
-    const bars = ok(await t.candles!(`${IRAN_SLUG}:Yes`, "1h", H * 1000));
+    const bars = ok(await t.candles!(`${IRAN_SLUG}:Yes`, "1h", { since: H * 1000 }));
     expect(calls(seen)).toEqual([`GET ${GAMMA}/markets/slug/${IRAN_SLUG}`, `GET ${CLOB}/book?token_id=${YES}`, `GET ${history}`]);
     expect(bars).toEqual<Candle[]>([
       { t: H * 1000, o: 0.15, h: 0.17, l: 0.14, c: 0.16 },
@@ -884,12 +884,12 @@ describe("candles(): an outcome's price history at Polymarket", () => {
     const since = (END - 600) * 1000;
     const history = `${CLOB}/prices-history?market=${YES}&startTs=${END - 600}&endTs=${END}&fidelity=1`;
     const { t, seen } = await pm({ answers: { ...MARKET_ANSWERS, [`GET ${history}`]: [json({ history: [] }), json({ error: "invalid filters: 'startTs' and 'endTs' interval is too long" }, 400)] } });
-    expect(ok(await t.candles!(`${IRAN_SLUG}:Yes`, "5m", since))).toEqual([]);
-    const long = refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "5m", since));
+    expect(ok(await t.candles!(`${IRAN_SLUG}:Yes`, "5m", { since }))).toEqual([]);
+    const long = refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "5m", { since }));
     expect([long.code, long.message]).toEqual(["E_VENUE_REJECTED", "Polymarket: invalid filters: 'startTs' and 'endTs' interval is too long"]);
     const n = seen.length;
-    expect(refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "4h" as never, since)).code).toBe("E_ACCOUNT_BAD_ACTION");
-    expect(refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "1h", TS_MS + 1)).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "2h" as never, { since })).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(`${IRAN_SLUG}:Yes`, "1h", { since: TS_MS + 1 })).code).toBe("E_ACCOUNT_BAD_ACTION");
     expect(seen.length).toBe(n);
   });
   it("the Asset sheet's daily bars, three hundred days of them: a startTs alone, which Polymarket answers up to now — never a startTs-to-endTs range longer than the fifteen days or so it refuses, whatever the fidelity", async () => {
@@ -901,7 +901,7 @@ describe("candles(): an outcome's price history at Polymarket", () => {
     const day0 = Math.ceil(start / DAY) * DAY;
     const points = [{ t: day0 + 3_600, p: 0.1 }, { t: day0 + 7_200, p: 0.12 }, { t: day0 + DAY + 60, p: 0.11 }];
     const { t, seen } = await pm({ answers: { ...MARKET_ANSWERS, [`GET ${history}`]: json({ history: points }) } });
-    const bars = ok(await t.candles!(`${IRAN_SLUG}:Yes`, "1d", since));
+    const bars = ok(await t.candles!(`${IRAN_SLUG}:Yes`, "1d", { since }));
     const asked = seen.filter((r) => r.url.includes("/prices-history")).map((r) => r.url);
     expect(asked).toEqual([history]);
     expect(bars).toEqual<Candle[]>([
@@ -911,8 +911,16 @@ describe("candles(): an outcome's price history at Polymarket", () => {
     // twelve days of hourly bars stay a range with its end: it is under the limit
     const hourly = `${CLOB}/prices-history?market=${YES}&startTs=${END - 12 * DAY}&endTs=${END}&fidelity=5`;
     const h = await pm({ answers: { ...MARKET_ANSWERS, [`GET ${hourly}`]: json({ history: [] }) } });
-    expect(ok(await h.t.candles!(`${IRAN_SLUG}:Yes`, "1h", (END - 12 * DAY) * 1000))).toEqual([]);
+    expect(ok(await h.t.candles!(`${IRAN_SLUG}:Yes`, "1h", { since: (END - 12 * DAY) * 1000 }))).toEqual([]);
     expect(h.seen.filter((r) => r.url.includes("/prices-history")).map((r) => r.url)).toEqual([hourly]);
+  });
+
+  it("MAX asks from the first second: Polymarket answers a startTs of 0 HTTP 400 \"the time component is mandatory\" (live 2026-10-17)", async () => {
+    const history = `${CLOB}/prices-history?market=${YES}&startTs=1&fidelity=60`;
+    const { t, seen } = await pm({ answers: { ...MARKET_ANSWERS, [`GET ${history}`]: json({ history: [{ t: END - 3_600, p: 0.2 }] }) } });
+    const bars = ok(await t.candles!(`${IRAN_SLUG}:Yes`, "1w", { since: 0, limit: 5_000, range: "MAX" }));
+    expect(seen.filter((r) => r.url.includes("/prices-history")).map((r) => r.url)).toEqual([history]);
+    expect(bars).toHaveLength(1);
   });
 });
 

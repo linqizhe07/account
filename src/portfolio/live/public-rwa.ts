@@ -24,7 +24,7 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { RWA_CATEGORY } from "./categories.ts";
 import type { ChainName } from "./chain.ts";
 import { chainIdOf, ISSUER_TERMS, knownIssued } from "./dex.ts";
-import { fin, fixedHosts, has, keeper, LIST_MS, nonNeg, pos, PUBLIC_HOSTS, publicNo, rec, str, type Listing, type PublicDeps, type PublicSource } from "./public-markets.ts";
+import { fin, fixedHosts, has, keeper, LIST_MS, nonNeg, pos, PUBLIC_HOSTS, publicNo, readAtOf, readLike, rec, str, type Listing, type PublicDeps, type PublicSource } from "./public-markets.ts";
 import type { MarketSession } from "./trade.ts";
 import { realHttp, unreachable, type Http, type HttpReply } from "./types.ts";
 
@@ -151,6 +151,8 @@ export function xstocksPublic(deps: PublicDeps = {}): PublicSource {
           issuer: ISSUER_TERMS.xstocks.issuer,
           eligibility: ISSUER_TERMS.xstocks.terms,
         });
+        // as old as Gate's ticker it is priced from (public-markets.ts readLike)
+        readLike(out[out.length - 1], x.t);
       }
       if (!Q) shown = { of: out.length, total: XSTOCKS_SHOWN.length };
       return out;
@@ -203,7 +205,7 @@ export function ondoStocksPublic(deps: PublicDeps = {}): PublicSource {
       const Q = (o.q ?? "").trim().toUpperCase();
       const limit = Math.max(1, o.limit);
       const pool = (Q ? symbols.filter((s) => has(Q, s, tokens.find((k) => k.symbol === s)?.underlying)) : symbols).slice(0, limit);
-      const got = new Map<string, { chain: ChainName; price: number; volume?: number | undefined }>();
+      const got = new Map<string, { chain: ChainName; price: number; volume?: number | undefined; at?: number | undefined }>();
       let refused: Refusal | undefined;
       // one at a time, in the order of the list: a refusal from LI.FI ends the asking (it holds the source back as the keeper says)
       for (const s of pool) {
@@ -214,7 +216,7 @@ export function ondoStocksPublic(deps: PublicDeps = {}): PublicSource {
             break;
           }
           if (p) {
-            got.set(s, { chain: k.chain, ...p });
+            got.set(s, { chain: k.chain, ...p, at: readAtOf(p) });
             break;
           }
         }
@@ -240,6 +242,8 @@ export function ondoStocksPublic(deps: PublicDeps = {}): PublicSource {
           issuer: ISSUER_TERMS.ondo.issuer,
           eligibility: ISSUER_TERMS.ondo.terms,
         });
+        // as old as LI.FI's price it is priced from (public-markets.ts readLike)
+        readLike(out[out.length - 1], x.at);
       }
       if (!Q) shown = { of: out.length, total: symbols.length };
       return out;

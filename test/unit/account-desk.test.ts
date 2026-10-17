@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { ANTHROPIC_KEY_SHAPE, brainReach, claudeBrain } from "../../src/portfolio/account/brain-claude.ts";
 import { shq } from "../../src/portfolio/account/brain-key.ts";
@@ -194,6 +194,26 @@ describe("the desk is hired", () => {
 });
 
 describe("a cycle", () => {
+  it("tells the account's push channel each time the floor moves — the room's newest line, the step under way, the brain calls in flight — as a desk event the page reads the floor again on (feat/paper-live p1)", async () => {
+    const { desk, hire, svc, home } = await boot();
+    const emit = vi.spyOn(svc.stream, "emit");
+    await hire();
+    await desk.cycle("test");
+    const told = emit.mock.calls.filter(([type]) => type === "desk").map(([, data]) => data as { seq: number; working: { role: string; what: string } | null; inFlight: number; at: string });
+    expect(told.length).toBeGreaterThan(5);
+    // the room's newest line is told as it is written: the last word is the room's last line
+    expect(told.at(-1)!.seq).toBe(readRoom(home).at(-1)!.seq);
+    // the steps the floor draws as live, each told as it begins (and its end told with the step it was inside, or none)
+    expect(told.some((d) => d.working?.role === "search" && d.working.what === "scan")).toBe(true);
+    expect(told.some((d) => d.working?.role === "risk" && d.working.what === "clear")).toBe(true);
+    expect(told.at(-1)!.working).toBeNull();
+    // a brain call is told as it goes out
+    expect(told.some((d) => d.inFlight === 1)).toBe(true);
+    expect(told.at(-1)!.inFlight).toBe(0);
+    expect(told.every((d) => typeof d.at === "string")).toBe(true);
+    emit.mockRestore();
+  });
+
   it("Guard: a lead found, cleared, placed as a card the owner answers; approved, it fills and the lead is executed", async () => {
     const { desk, hire, svc, own, home, advance } = await boot();
     await hire();

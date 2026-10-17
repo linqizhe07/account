@@ -23,12 +23,14 @@
  *
  * What a cycle does (every `everyMin` minutes while the session runs, or when the owner asks for one): the leads' orders are read back
  * from the account (fills, cards answered); EXIT reviews the open leads — the plan closes a lead at its take-profit, its stop or its time
- * limit without asking anyone, the brain may close one early; SEARCH reads Markets (the account's own listing of what the desk's venue
+ * limit without asking anyone, before the brain is asked anything, and the brain may then close one early; SEARCH reads Markets (the account's own listing of what the desk's venue
  * trades, movers and the most traded) and names leads; RISK checks each one — the market open, a price and a book, the spread, the day's
  * loss room, the size (the least of the objective's risk per lead, the Sniper's limit per order and what is left of its budget) — and
- * clears or rejects it; SNIPER places each cleared lead as the account's agentLiveOrder; HEAD writes the cycle line, halts the floor when
+ * clears or rejects it; SNIPER places each cleared lead as the account's agentLiveOrder — at a paper account with the plan's take-profit
+ * and stop as its bracket, so the paper account acts on them the moment the price reaches them; HEAD writes the cycle line, halts the floor when
  * the day's loss reaches the objective's line, and writes the evening report at the hour the objective names (and the weekly review on
- * Sundays). Every step is a message in the room with the lead's id. Nothing in the room is invented: the account's reads, the door's
+ * Sundays). Between cycles the clock's every tick (30 s) reads the orders back and judges the plan's exits again — numbers, no brain — so a
+ * stop never waits for the next cycle. Every step is a message in the room with the lead's id. Nothing in the room is invented: the account's reads, the door's
  * answers, the brain's words (said to be the brain's).
  *
  * The brain's cost is counted from the API's own token counts at the model's listed price — or the price the owner gives for a model no
@@ -242,6 +244,9 @@ export interface Lead {
   order?: string | undefined;
   card?: string | undefined;
   entry?: { price: number; qty: number; at: string; feeUsd: number; contractSize: number } | undefined;
+  /** the plan's take-profit and stop as prices, sent with the entry as its bracket (entering): the venue holds them as the entry's exits,
+   * the one that fills canceling the other, so they act the moment the price reaches them — not at the desk's next look */
+  exits?: { takeProfit: number; stopLoss: number } | undefined;
   /** the exit order and its fill */
   exitOrder?: string | undefined;
   exitWhy?: string | undefined;
@@ -253,6 +258,13 @@ export interface Lead {
   markPrice?: number | undefined;
   unrealizedUsd?: number | undefined;
   markAt?: string | undefined;
+  /** the last close of it that did not go — the door refused it, or no house seat or no price could send it — when (ISO) and why. Between
+   * cycles the clock's tick does not try the plan's close again until a cycle has passed since: a refusal is tried and said once a cycle,
+   * as before the plan was judged at every tick, not every thirty seconds. A close that goes clears it */
+  closeRefusedAt?: string | undefined;
+  closeRefused?: string | undefined;
+  /** when the room was last told the venue gave no mark for it (ISO): between cycles said again only once a cycle has passed */
+  noMarkAt?: string | undefined;
 }
 
 export type RoomKind = "cycle" | "lead" | "clearance" | "order" | "card" | "exit" | "warning" | "halt" | "report" | "review" | "note" | "refusal" | "you";
@@ -352,6 +364,9 @@ export interface FeedLead {
   roiPct?: number | undefined;
   markPrice?: number | undefined;
   unrealizedUsd?: number | undefined;
+  /** an open lead marked from its market's live stream as the floor is read: the moment the stream confirmed the mark, and the stream */
+  markAt?: string | undefined;
+  markFrom?: string | undefined;
   tpPct?: number | undefined;
   slPct?: number | undefined;
   maxHours?: number | undefined;
@@ -377,6 +392,18 @@ export interface DeskFunnel {
   executed: number;
   closed: number;
   rejected: number;
+}
+
+/** a seat's trading limit as the door holds it now: up to so much an order, what is left of its budget, at which venues — and, where the
+ * owner signed it renewing (approveSpend renewHours: the Superagent's), every how many hours its entries are counted afresh and when they
+ * next are, so a page can say that an empty budget renews, and when */
+export interface SeatLimit {
+  perOrderUsd: number;
+  leftUsd: number;
+  budgetUsd: number;
+  venues: string[];
+  renewHours?: number | undefined;
+  renewsAt?: string | undefined;
 }
 
 /** The floor's read (GET /api/account/desk/feed?since=<seq>), asked every second while the floor shows: the room's lines after `since`, who
@@ -412,7 +439,7 @@ export interface DeskFeed {
    * have, in percent */
   name: string;
   objective: DeskObjective;
-  seats: Array<{ role: RoleId; kind: "house" | "outside"; name: string; status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined }>;
+  seats: Array<{ role: RoleId; kind: "house" | "outside"; name: string; status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined }>;
   hard: { maxSpreadPct: number };
 }
 
@@ -671,7 +698,15 @@ export interface DeskWorld {
   page(): Promise<AccountPage | undefined>;
   explore(o: { tab?: string | undefined; sort?: string | undefined; limit?: number | undefined }): Promise<Exploration | Refusal>;
   market(venue: string, symbol: string): Promise<Market | Refusal>;
+  /** a market's live mark from the venues' streams (service.ts liveMark: a perpetual's venue mark, a coin's last trade), with the moment the
+   * stream confirmed it, while its stream is live — what an open lead is marked at first; nothing when it is not (the venue is read) */
+  mark?(venue: string, symbol: string): { price: number; at: string; from: string } | undefined;
   positions(venue: string): Promise<Position[] | Refusal>;
+  /** the account's orders tied to these ids, out of every order this run of the account keeps — not only the newest the page carries
+   * (AccountPage.orders: sixty): each order whose id is one of them, or whose card is (an order placed when the owner answered one), and
+   * each exit of one of them (LiveOrder.exitOf: a bracket's take-profit and stop). A lead held for days, while the desk places three
+   * orders a lead, still finds its entry and the exits the venue holds for it */
+  ordersOf(ids: readonly string[]): LiveOrder[];
   exchange(envelope: Envelope): Promise<Outcome>;
   nonce(): number;
   venueName(id: string): string;
@@ -685,6 +720,18 @@ export interface DeskOptions {
   tickMs?: number | undefined;
   /** how soon the first cycle comes after a hire, a resume or the clock's start (FIRST_CYCLE_MS; a test's own, shorter) */
   firstCycleMs?: number | undefined;
+  /** told each time what the floor draws moved (the account's push channel: service.ts sends it on as a `desk` event, account/stream.ts):
+   * the desk's record written — a room line, a lead, the session, the equity — a step begun or ended, a brain call sent or answered. Only
+   * that it moved, and the room's newest line: the page reads the floor (feed) for the rest. A listener that throws is its own fault */
+  onChange?: ((what: DeskChange) => void) | undefined;
+}
+
+/** what the desk tells as its floor moves (DeskOptions.onChange): the room's newest line's seq (the floor's read asks after it), the step
+ * under way now, and the brain calls in flight */
+export interface DeskChange {
+  seq: number;
+  working: DeskWorking | null;
+  inFlight: number;
 }
 
 // ---- limits of the file ------------------------------------------------------------------------------------------------------
@@ -916,7 +963,7 @@ export interface DeskView {
   autonomy?: DeskAutonomy | undefined;
   /** what Search scanned last */
   lastScan?: DeskScan | undefined;
-  seats: Array<DeskSeat & { status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined; cards: number }>;
+  seats: Array<DeskSeat & { status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined; cards: number }>;
   session?: (DeskSession & { state: "live" | "paused" | "halted" | "ended"; elapsedMs: number; remainingMs: number }) | undefined;
   equity: { nowUsd: number; startUsd: number; changeUsd: number; changePct: number; mult: number; points: Array<[number, number]> };
   target: { pct: number; progressPct: number; reachedUsd: number; targetUsd: number };
@@ -955,7 +1002,7 @@ export interface DeskCatalog {
 }
 
 /** the steps the desk's clock takes, in the words an answer names them with ("the desk's clock is mid-step: …") */
-type ClockStep = "a cycle" | "following orders" | "marking the equity" | "writing the report" | "writing the weekly review" | "ending the session";
+type ClockStep = "a cycle" | "following orders" | "the plan's exits" | "marking the equity" | "writing the report" | "writing the weekly review" | "ending the session";
 
 interface Who {
   signer: string;
@@ -1097,11 +1144,24 @@ export class Desk {
     const same = top !== undefined && top.role === w.role && top.what === w.what && top.lead === w.lead;
     const step: DeskWorking = { role: w.role, what: w.what, ...(w.lead ? { lead: w.lead } : {}), since: same ? top.since : this.world.now() };
     this.steps.push(step);
+    this.told();
     try {
       return await fn();
     } finally {
       const i = this.steps.lastIndexOf(step);
       if (i >= 0) this.steps.splice(i, 1);
+      this.told();
+    }
+  }
+
+  /** the floor moved: told to the account's push channel (DeskOptions.onChange), which tells the pages watching it to read it again */
+  private told(): void {
+    const fn = this.opts.onChange;
+    if (!fn) return;
+    try {
+      fn({ seq: this.file?.counters.seq ?? 0, working: this.working(), inFlight: this.inFlight });
+    } catch {
+      // the listener's fault is its own: the desk goes on
     }
   }
 
@@ -1619,6 +1679,7 @@ export class Desk {
     if (this.file.leads.length > MAX_LEADS) this.file.leads = recentAndOpen(this.file.leads, MAX_LEADS);
     if (this.file.reports.length > MAX_REPORTS) this.file.reports = this.file.reports.slice(-MAX_REPORTS);
     writePrivate(deskPath(this.world.home), `${JSON.stringify(this.file, null, 1)}\n`);
+    this.told();
   }
 
   // ---- the clock ----
@@ -1664,6 +1725,18 @@ export class Desk {
       }
       this.running = "following orders";
       await this.followOrders();
+      // the first cycle after a hire, a resume or the clock's start comes at its own moment (soonAt), never earlier: a tick of the clock that
+      // lands in the seconds between the owner's hire and the autonomy signed after it would otherwise run the first cycle at once, and its
+      // entry would wait on a card although the owner was still signing the autonomy that places it (soon, autonomyChange)
+      const cycleDue = !s.pausedAt && nowMs - this.lastCycleAt >= f.objective.everyMin * 60_000 && nowMs >= this.soonAt;
+      // the plan's exits (take-profit, stop, time) are numbers: judged at every tick of the clock, never only once a cycle — and never
+      // waiting for a brain. A paused desk's leads keep their plan for when it resumes (the venue still holds a bracketed entry's exits).
+      // On a tick where a cycle is due the cycle's own exits judge the plan first, so they are not judged here too: a close the door
+      // refused a moment ago would be sent again at once, and its refusal (or a missing mark) said twice in the room and the ledger
+      if (!s.pausedAt && !cycleDue) {
+        this.running = "the plan's exits";
+        await this.planExits();
+      }
       this.running = "marking the equity";
       if (nowMs - this.lastEquityAt >= 60_000) await this.markEquity();
       const nyNow = ny(nowMs);
@@ -1673,10 +1746,8 @@ export class Desk {
       this.running = "writing the weekly review";
       if (nyNow.dow === 0 && nyNow.minutes >= at && f.reviewed !== nyNow.day) await this.review();
       this.running = "a cycle";
-      // the first cycle after a hire, a resume or the clock's start comes at its own moment (soonAt), never earlier: a tick of the clock that
-      // lands in the seconds between the owner's hire and the autonomy signed after it would otherwise run the first cycle at once, and its
-      // entry would wait on a card although the owner was still signing the autonomy that places it (soon, autonomyChange)
-      if (!s.pausedAt && nowMs - this.lastCycleAt >= f.objective.everyMin * 60_000 && nowMs >= this.soonAt) await this.cycleNow("the clock");
+      // paused while the steps above were awaited (the owner's ask): no cycle, as before
+      if (cycleDue && !s.pausedAt) await this.cycleNow("the clock");
     } finally {
       this.running = undefined;
     }
@@ -1806,14 +1877,14 @@ export class Desk {
   }
 
   /** each seat's standing on the account: let in, its trading limit at the desk's venue, its cards waiting */
-  private standing(page: AccountPage): Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined; cards: number }> {
-    const out = new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined; cards: number }>();
+  private standing(page: AccountPage): Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined; cards: number }> {
+    const out = new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined; cards: number }>();
     for (const s of this.file?.seats ?? []) {
       const keys = page.keys.filter((k) => k.address === s.address).sort((a, b) => Date.parse(b.approvedAt) - Date.parse(a.approvedAt));
       const key = keys[0];
       const status = !key ? "not let in" : key.status === "ok" ? "ok" : key.status === "expired" ? "expired" : "revoked";
       const spend = page.spend.find((x) => x.agent === s.address && x.scope === "trade" && !x.expired && x.budgetUsd > 0);
-      const limit = spend ? { perOrderUsd: spend.perPaymentUsd, leftUsd: r2(Math.max(0, spend.budgetUsd - spend.spentUsd - spend.reservedUsd)), budgetUsd: spend.budgetUsd, venues: spend.allow } : undefined;
+      const limit: SeatLimit | undefined = spend ? { perOrderUsd: spend.perPaymentUsd, leftUsd: r2(Math.max(0, spend.budgetUsd - spend.spentUsd - spend.reservedUsd)), budgetUsd: spend.budgetUsd, venues: spend.allow, ...(spend.renewHours ? { renewHours: spend.renewHours, ...(spend.renewsAt ? { renewsAt: spend.renewsAt } : {}) } : {}) } : undefined;
       out.set(s.role, { status, limit, cards: page.cards.filter((c) => c.agent === s.address).length });
     }
     return out;
@@ -1821,6 +1892,12 @@ export class Desk {
 
   private openLeads(): Lead[] {
     return (this.file?.leads ?? []).filter(isOpenLead);
+  }
+
+  /** how many of the desk's leads are open at `venue` now (waiting on the owner, placed, held or closing): a paper account the desk trades
+   * is not started again under them (service.ts paperControl) */
+  openLeadsAt(venue: string): number {
+    return this.file && this.file.objective.venue === venue ? this.openLeads().length : 0;
   }
 
   // ---- Search ----
@@ -1905,12 +1982,12 @@ export class Desk {
 
   // ---- Risk ----
 
-  private clear(lead: Lead, venue: AccountPage["venues"][number], limit: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] }, page: AccountPage): Promise<boolean> {
+  private clear(lead: Lead, venue: AccountPage["venues"][number], limit: SeatLimit, page: AccountPage): Promise<boolean> {
     return this.doing({ role: "risk", what: "clear", lead: lead.id }, () => this.clearing(lead, venue, limit, page));
   }
 
   /** Risk's step on one lead: the hard checks first (the numbers kept on the lead, LeadChecks), then the brain's verdict and plan */
-  private async clearing(lead: Lead, venue: AccountPage["venues"][number], limit: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] }, page: AccountPage): Promise<boolean> {
+  private async clearing(lead: Lead, venue: AccountPage["venues"][number], limit: SeatLimit, page: AccountPage): Promise<boolean> {
     const f = this.file!;
     const s = f.session!;
     const reject = (why: string) => {
@@ -2008,9 +2085,13 @@ export class Desk {
       return "none";
     }
     if (eh) this.room("sniper", "note", `${lead.id}: the regular session is closed (${eh.phase} session): the entry goes as a day limit at ${eh.limit} with extended hours.`, { lead: lead.id });
+    // at a PAPER account the plan's take-profit and stop go WITH the entry, as its bracket, where the market takes one: the paper account
+    // places them the moment the entry fills and acts on them at its own price (paper.ts: the one that fills cancels the other), never at
+    // the desk's next look. An extended-hours entry takes none; at a real venue the entry goes as it always has, the plan judged by the desk
+    const bracket = eh || venue.paper !== true ? undefined : this.bracketOf(lead, m);
     const action = eh
       ? { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "limit", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: eh.limit, tif: "day", extendedHours: "true", nonce: this.world.nonce() }
-      : { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "market", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: "", nonce: this.world.nonce() };
+      : { type: "agentLiveOrder" as const, venue: venue.id, symbol: lead.symbol, side: lead.side, orderType: "market", qty: "", usd: String(lead.sizeUsd ?? 0), limitPrice: "", ...(bracket ? { takeProfit: bracket.takeProfit, stopLoss: bracket.stopLoss } : {}), nonce: this.world.nonce() };
     const out = await this.world.exchange(await signAgent(key, action));
     const now = this.world.now();
     lead.updatedAt = now;
@@ -2030,13 +2111,34 @@ export class Desk {
     }
     if (out.kind === "order") {
       this.tookOrder(lead, out.order);
+      if (bracket) lead.exits = { takeProfit: Number(bracket.takeProfit), stopLoss: Number(bracket.stopLoss) };
       const px = out.order.avgPrice ?? out.order.price;
-      this.room("sniper", "order", `${lead.id}: ${out.order.status === "filled" ? `filled ${fig(out.order.filledQty)} ${out.order.base}${px !== undefined ? ` at ${fig(px)}` : ""}` : `placed ${out.order.id} (${out.order.status})`} at ${venue.name} (${this.howPlaced(venue)}).`, { lead: lead.id, refs: { order: out.order.id, symbol: lead.symbol } });
+      const exits = bracket ? `, its take-profit at ${fig(Number(bracket.takeProfit))} and its stop at ${fig(Number(bracket.stopLoss))} held by the venue` : "";
+      this.room("sniper", "order", `${lead.id}: ${out.order.status === "filled" ? `filled ${fig(out.order.filledQty)} ${out.order.base}${px !== undefined ? ` at ${fig(px)}` : ""}` : `placed ${out.order.id} (${out.order.status})`} at ${venue.name} (${this.howPlaced(venue)})${exits}.`, { lead: lead.id, refs: { order: out.order.id, symbol: lead.symbol } });
       this.save();
       return "placed";
     }
     this.room("sniper", "note", `${lead.id}: the door answered ${out.kind}.`, { lead: lead.id });
     return "none";
+  }
+
+  /** THE PLAN AS A BRACKET: the lead's take-profit and stop (Risk's percents from the entry) as prices from where the entry fills now — the
+   * ask for a buy, the bid for a sell — each a step beyond it on the market's own price step (a take-profit up and a stop down for a buy,
+   * the other way for a sell), so the venue takes both as the entry's exits. None where the market takes no exits on an entry, or has no
+   * price or plan to set them by */
+  private bracketOf(lead: Lead, m: Market | Refusal): { takeProfit: string; stopLoss: string } | undefined {
+    if (isRefusal(m) || m.brackets !== true || lead.tpPct === undefined || lead.slPct === undefined) return undefined;
+    const ref = lead.side === "buy" ? (m.ask ?? m.price) : (m.bid ?? m.price);
+    if (!(ref && ref > 0)) return undefined;
+    const step = m.priceStep && m.priceStep > 0 ? m.priceStep : undefined;
+    const up = (x: number) => (step ? ceilTo(x, step) : Number(x.toPrecision(10)));
+    const down = (x: number) => (step ? floorTo(x, step) : Number(x.toPrecision(10)));
+    const buy = lead.side === "buy";
+    const tp = buy ? up(ref * (1 + lead.tpPct / 100)) : down(ref * (1 - lead.tpPct / 100));
+    const sl = buy ? down(ref * (1 - lead.slPct / 100)) : up(ref * (1 + lead.slPct / 100));
+    if (!(tp > 0 && sl > 0) || (buy ? !(tp > ref && sl < ref) : !(tp < ref && sl > ref))) return undefined;
+    const text = (x: number) => Number(x.toFixed(10)).toString();
+    return { takeProfit: text(tp), stopLoss: text(sl) };
   }
 
   /** an order of the desk's, as the account has it now: the lead follows it */
@@ -2066,10 +2168,13 @@ export class Desk {
   private async following(live: Lead[]): Promise<void> {
     const page = await this.world.page();
     if (!page) return;
+    // the leads' own orders, looked up among every order the account keeps (DeskWorld.ordersOf), never only the page's newest sixty: an
+    // entry, a card's order, a close and the exits the venue holds for an entry are found however many orders came after them
+    const orders = this.world.ordersOf(live.flatMap((l) => [l.order, l.card, l.exitOrder].filter((x): x is string => typeof x === "string" && x !== "")));
     let changed = false;
     for (const lead of live) {
       if (lead.state === "confirmed" && lead.card) {
-        const o = page.orders.find((x) => x.card === lead.card);
+        const o = orders.find((x) => x.card === lead.card);
         if (o) {
           const was = lead.state;
           this.tookOrder(lead, o);
@@ -2086,7 +2191,7 @@ export class Desk {
         continue;
       }
       if (lead.state === "executed" && lead.order) {
-        const o = page.orders.find((x) => x.id === lead.order);
+        const o = orders.find((x) => x.id === lead.order);
         if (o && (o.filledQty !== (lead.entry?.qty ?? 0) || ["canceled", "rejected", "expired"].includes(o.status))) {
           const had = lead.entry !== undefined;
           this.tookOrder(lead, o);
@@ -2094,10 +2199,18 @@ export class Desk {
           if (!had && lead.entry) this.room("sniper", "order", `${lead.id}: filled ${fig(lead.entry.qty)} at ${fig(lead.entry.price)}.`, { lead: lead.id, refs: { order: o.id } });
           if ((lead.state as LeadState) === "refused") this.room("sniper", "refusal", `${lead.id}: ${lead.why}`, { lead: lead.id, refs: { order: o.id } });
         }
+        // the entry's own exits, held by the venue (its bracket: entering): the one that filled closed the lead, at its own price
+        const hit = lead.state === "executed" && lead.entry ? orders.find((x) => x.exitOf?.order === lead.order && x.status === "filled" && x.filledQty > 0 && x.avgPrice !== undefined) : undefined;
+        if (hit) {
+          lead.exitOrder = hit.id;
+          lead.exitWhy = hit.exitOf!.kind === "take-profit" ? `TP HIT at ${fig(hit.avgPrice!)} (its take-profit, filled by the venue)` : `stop at ${fig(hit.avgPrice!)} (its stop-loss, filled by the venue)`;
+          this.closed(lead, hit.avgPrice!, hit.filledQty, hit.feeUsd ?? 0);
+          changed = true;
+        }
         continue;
       }
       if (lead.state === "closing" && lead.exitOrder) {
-        const o = page.orders.find((x) => x.id === lead.exitOrder);
+        const o = orders.find((x) => x.id === lead.exitOrder);
         if (!o) continue;
         if (o.filledQty > 0 && o.avgPrice !== undefined && (o.status === "filled" || o.filledQty >= (lead.entry?.qty ?? 0))) {
           this.closed(lead, o.avgPrice, o.filledQty, o.feeUsd ?? 0);
@@ -2133,47 +2246,79 @@ export class Desk {
 
   /** the open leads marked, the plan applied (take-profit, stop, time), danger watched, the brain asked about the rest. Returns how many
    * were reviewed */
-  private async exits(page: AccountPage, venue: AccountPage["venues"][number] | undefined, askBrain: boolean): Promise<number> {
+  private async exits(page: AccountPage, venue: AccountPage["venues"][number] | undefined, askBrain: boolean, between = false): Promise<number> {
     if (!this.file!.leads.some((l) => l.state === "executed" && l.entry) || !venue) return 0;
-    return this.doing({ role: "exit", what: "exit" }, () => this.exiting(page, venue, askBrain));
+    return this.doing({ role: "exit", what: "exit" }, () => this.exiting(page, venue, askBrain, between));
   }
 
-  private async exiting(page: AccountPage, venue: AccountPage["venues"][number] | undefined, askBrain: boolean): Promise<number> {
+  /** the plan's exits alone, between cycles (the clock's tick): the open leads marked and closed at their take-profit, stop or time limit —
+   * numbers, no brain asked */
+  private async planExits(): Promise<void> {
+    const f = this.file;
+    if (!f || !f.leads.some((l) => l.state === "executed" && l.entry)) return;
+    const page = await this.world.page();
+    if (!page) return;
+    await this.exits(page, page.venues.find((v) => v.id === f.objective.venue), false, true);
+  }
+
+  /** `between`: the clock's tick between cycles (planExits), not a cycle */
+  private async exiting(page: AccountPage, venue: AccountPage["venues"][number] | undefined, askBrain: boolean, between = false): Promise<number> {
     const f = this.file!;
     const open = f.leads.filter((l) => l.state === "executed" && l.entry);
     if (!open.length || !venue) return 0;
+    /** the entry's take-profit and stop still held by the venue (its bracket): the venue acts on them at their own price, so the desk does
+     * not close the lead on them by its marks too. Once they are gone (canceled, or one filled) the plan's own numbers stand again */
+    const exits = this.world.ordersOf(open.flatMap((l) => (l.order ? [l.order] : [])));
+    const held = (lead: Lead): boolean => !!lead.order && exits.some((x) => x.exitOf?.order === lead.order && (x.status === "open" || x.status === "pending" || x.status === "partial"));
     const positions = await this.world.positions(venue.id);
     const pos = isRefusal(positions) ? [] : positions;
     const nowMs = Date.parse(this.world.now());
+    // BETWEEN CYCLES (`between`: the clock's tick, no brain) what cannot change in thirty seconds is not tried or said again every thirty
+    // seconds: a plan close that did not go (Lead.closeRefusedAt: the per-order cap, a holding already sold, no seat to send it) waits for
+    // a cycle to have passed since, and a missing mark is said once a cycle. A cycle itself tries and says them as it always has
+    const every = Math.max(1, f.objective.everyMin) * 60_000;
+    const since = (iso: string | undefined): number => (iso === undefined ? Infinity : nowMs - Date.parse(iso));
+    const waiting = (lead: Lead): boolean => between && since(lead.closeRefusedAt) < every;
     const toClose: Array<{ lead: Lead; why: string; from: RoleId }> = [];
     for (const lead of open) {
       const e = lead.entry!;
       const p = pos.find((x) => x.symbol === lead.symbol);
-      let mark = p?.markPrice;
+      // the market's live stream first (DeskWorld.mark: this moment's price, not a read kept a while), else the venue's own mark
+      const live = this.world.mark?.(venue.id, lead.symbol);
+      let mark = live?.price ?? p?.markPrice;
       if (mark === undefined) {
         const m = await this.world.market(venue.id, lead.symbol);
         if (!isRefusal(m)) mark = m.price ?? (lead.side === "buy" ? m.bid : m.ask);
       }
       if (mark === undefined) {
-        this.room("watch", "warning", `${lead.id}: no mark for ${lead.symbol} — the venue did not price it this cycle.`, { lead: lead.id });
+        if (!between || !(since(lead.noMarkAt) < every)) {
+          lead.noMarkAt = this.world.now();
+          this.room("watch", "warning", `${lead.id}: no mark for ${lead.symbol} — the venue did not price it this cycle.`, { lead: lead.id });
+        }
         continue;
       }
       const dir = lead.side === "buy" ? 1 : -1;
       const movePct = (dir * (mark - e.price) * 100) / e.price;
-      const unrealised = p && p.unrealizedUsd !== undefined && Math.abs(p.qty - e.qty) < 1e-9 ? p.unrealizedUsd : dir * (mark - e.price) * e.qty * (e.contractSize ?? 1);
+      const unrealised = !live && p && p.unrealizedUsd !== undefined && Math.abs(p.qty - e.qty) < 1e-9 ? p.unrealizedUsd : dir * (mark - e.price) * e.qty * (e.contractSize ?? 1);
       lead.markPrice = mark;
       lead.unrealizedUsd = r2(unrealised);
       lead.markAt = this.world.now();
       const hours = (nowMs - Date.parse(e.at)) / HOUR;
-      if (lead.tpPct !== undefined && movePct >= lead.tpPct) toClose.push({ lead, why: `TP HIT at ${fig(mark)} (${pct(movePct)})`, from: "exit" });
-      else if (lead.slPct !== undefined && movePct <= -lead.slPct) toClose.push({ lead, why: `stop at ${fig(mark)} (${pct(movePct)})`, from: "exit" });
+      const venueHolds = held(lead);
+      if (!venueHolds && lead.tpPct !== undefined && movePct >= lead.tpPct) toClose.push({ lead, why: `TP HIT at ${fig(mark)} (${pct(movePct)})`, from: "exit" });
+      else if (!venueHolds && lead.slPct !== undefined && movePct <= -lead.slPct) toClose.push({ lead, why: `stop at ${fig(mark)} (${pct(movePct)})`, from: "exit" });
       else if (lead.maxHours !== undefined && hours >= lead.maxHours) toClose.push({ lead, why: `time limit: ${Math.round(hours)} h open (${pct(movePct)})`, from: "exit" });
       else if (p?.liquidationPrice !== undefined && p.liquidationPrice > 0) {
         const dist = (Math.abs(mark - p.liquidationPrice) / mark) * 100;
         if (dist < 3) toClose.push({ lead, why: `liquidation ${dist.toFixed(1)}% away at ${fig(p.liquidationPrice)}`, from: "watch" });
       }
     }
-    const rest = open.filter((l) => !toClose.some((c) => c.lead === l) && l.markPrice !== undefined);
+    // the plan's closes go first, before any brain is asked: a stop that is hit never waits for a call that may take two minutes. Between
+    // cycles, one that did not go less than a cycle ago is not tried again yet (waiting): it is still the plan's, and not handed to the brain
+    for (const c of toClose) if (!waiting(c.lead)) await this.close(c.lead, venue, c.why, c.from);
+    const planned = new Set(toClose.map((c) => c.lead));
+    toClose.length = 0;
+    const rest = open.filter((l) => !planned.has(l) && l.state === "executed" && l.markPrice !== undefined);
     if (askBrain && rest.length) {
       const seat = f.seats.find((s) => s.role === "exit");
       if (seat) {
@@ -2216,6 +2361,7 @@ export class Desk {
     const seat = f.seats.find((s) => s.role === from) ?? f.seats.find((s) => s.role === "exit");
     const key = seat && seat.kind === "house" ? this.seatKeyOf(seat.role) : undefined;
     if (!seat || !key || isRefusal(key)) {
+      this.notClosed(lead, "no house seat to close it from here");
       this.room(from, "warning", `${lead.id}: ${why} — no house seat to close it from here.`, { lead: lead.id });
       return;
     }
@@ -2225,6 +2371,7 @@ export class Desk {
     // a stock outside its regular session: the venue takes a limit for the session that is on, and nothing else (Alpaca's extended hours)
     const eh = perp ? undefined : this.extendedLimit(await this.world.market(venue.id, lead.symbol), side);
     if (eh && !eh.ok) {
+      this.notClosed(lead, eh.why);
       this.room(seat.role, "warning", `${lead.id}: ${why} — ${eh.why}`, { lead: lead.id });
       return;
     }
@@ -2238,9 +2385,12 @@ export class Desk {
     lead.exitWhy = why;
     lead.updatedAt = this.world.now();
     if (isRefusal(out)) {
+      this.notClosed(lead, out.message);
       this.room(seat.role, "refusal", `${lead.id}: ${why} — the door refused the close: ${out.message}`, { lead: lead.id });
       return;
     }
+    lead.closeRefusedAt = undefined;
+    lead.closeRefused = undefined;
     if (out.kind === "card") {
       lead.state = "closing";
       lead.exitOrder = undefined;
@@ -2254,6 +2404,13 @@ export class Desk {
       if (out.order.filledQty > 0 && out.order.avgPrice !== undefined && out.order.status === "filled") this.closed(lead, out.order.avgPrice, out.order.filledQty, out.order.feeUsd ?? 0);
       else this.room(seat.role, "exit", `${lead.id}: ${why} — closing (${out.order.id}, ${out.order.status}).`, { lead: lead.id, refs: { order: out.order.id } });
     }
+  }
+
+  /** a close of the lead did not go: when and why, so the clock's tick between cycles does not try it again before a cycle has passed
+   * (exiting: waiting) */
+  private notClosed(lead: Lead, why: string): void {
+    lead.closeRefusedAt = this.world.now();
+    lead.closeRefused = plainText(why, 200);
   }
 
   // ---- the equity, the halt ----
@@ -2271,12 +2428,15 @@ export class Desk {
     }
   }
 
-  private equityNow(): number {
+  /** the session's equity now: its start, what its leads closed since realised, and each open lead's unrealised result — as the desk last
+   * marked it, or as `unrealisedOf` says (the floor's read marks its open leads from the live stream: its equity is those same marks, so
+   * the figure at its head and the leads beside it agree) */
+  private equityNow(unrealisedOf?: (l: Lead) => number | undefined): number {
     const f = this.file!;
     const s = f.session!;
     const since = Date.parse(s.startedAt);
     const realised = f.leads.filter((l) => l.state === "closed" && l.exit && Date.parse(l.exit.at) >= since).reduce((x, l) => x + (l.pnlUsd ?? 0), 0);
-    const unrealised = this.openLeads().reduce((x, l) => x + (l.unrealizedUsd ?? 0), 0);
+    const unrealised = this.openLeads().reduce((x, l) => x + ((unrealisedOf ? unrealisedOf(l) : l.unrealizedUsd) ?? 0), 0);
     return r2(s.startEquityUsd + realised + unrealised);
   }
 
@@ -2404,6 +2564,7 @@ export class Desk {
     const system = `You are ${spec.tag}, the ${spec.name} on a trading desk that an account runs for its owner. The account enforces every limit: a seat trades only with a key the owner let in and inside a limit the owner signed, in Guard every order waits for the owner on a card. Your charter — owns: ${charter.owns} Good output: ${charter.good} Never: ${charter.never} The desk's objective this week: "${f.objective.text}". Decide only from the data given; name no number the data does not have; answer in the JSON shape asked for and nothing else.`;
     return this.doing({ role, what, lead: o.lead }, async () => {
       this.inFlight++;
+      this.told();
       const t0 = performance.now();
       let ok = false;
       try {
@@ -2433,6 +2594,7 @@ export class Desk {
       } finally {
         this.inFlight = Math.max(0, this.inFlight - 1);
         this.lastThink[role] = { at: this.world.now(), ms: Math.round(performance.now() - t0), ok };
+        this.told();
       }
     });
   }
@@ -2450,7 +2612,7 @@ export class Desk {
     if (!f) return undefined;
     const page = await this.world.page();
     const nowMs = Date.parse(this.world.now());
-    const standing = page ? this.standing(page) : new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined; cards: number }>();
+    const standing = page ? this.standing(page) : new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined; cards: number }>();
     const s = f.session;
     const { state, equity: eq, target, venue, nextCycleAt } = this.figures(nowMs, page);
     const { nowUsd: now, startUsd: start } = eq;
@@ -2499,14 +2661,15 @@ export class Desk {
     };
   }
 
-  /** the figures the page's view and the floor's read share: the session's state, the equity now against the start, the target, the
-   * venue's row on the account, the next cycle (while the session is live) */
-  private figures(nowMs: number, page: AccountPage | undefined): { state: "live" | "paused" | "halted" | "ended"; equity: Omit<DeskFeed["equity"], "tail">; target: DeskView["target"]; venue: DeskView["venue"]; nextCycleAt?: string | undefined } {
+  /** the figures the page's view and the floor's read share: the session's state, the equity now against the start (its open leads marked
+   * as `unrealisedOf` says, where the read marks them itself), the target, the venue's row on the account, the next cycle (while the
+   * session is live) */
+  private figures(nowMs: number, page: AccountPage | undefined, unrealisedOf?: (l: Lead) => number | undefined): { state: "live" | "paused" | "halted" | "ended"; equity: Omit<DeskFeed["equity"], "tail">; target: DeskView["target"]; venue: DeskView["venue"]; nextCycleAt?: string | undefined } {
     const f = this.file!;
     const s = f.session;
     const state = !s || s.endedAt ? "ended" : s.halted ? "halted" : s.pausedAt ? "paused" : "live";
     const start = s?.startEquityUsd ?? 0;
-    const now = s ? this.equityNow() : 0;
+    const now = s ? this.equityNow(unrealisedOf) : 0;
     const change = r2(now - start);
     const targetUsd = r2(start * (f.objective.targetPct / 100));
     const row = page?.venues.find((v) => v.id === f.objective.venue);
@@ -2541,8 +2704,21 @@ export class Desk {
     const seq = f.counters.seq;
     const from = since > seq ? 0 : since;
     const room = from >= seq ? [] : readRoomTail(this.world.home, from, FEED_ROOM_MAX);
-    const { state, equity, target, venue, nextCycleAt } = this.figures(nowMs, kept);
-    const standing = kept ? this.standing(kept) : new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: { perOrderUsd: number; leftUsd: number; budgetUsd: number; venues: string[] } | undefined; cards: number }>();
+    /** an open lead's mark and its unrealised result: its market's live stream's now (DeskWorld.mark) where it is live, else the desk's
+     * last mark of it — each lead marked once a read, so the equity and the rows below are of the same marks */
+    const marks = new Map<Lead, { markPrice: number | undefined; unrealizedUsd: number | undefined; markAt?: string | undefined; markFrom?: string | undefined }>();
+    const liveMarked = (l: Lead): { markPrice: number | undefined; unrealizedUsd: number | undefined; markAt?: string | undefined; markFrom?: string | undefined } => {
+      const had = marks.get(l);
+      if (had) return had;
+      const live = l.state === "executed" && l.entry ? this.world.mark?.(f.objective.venue, l.symbol) : undefined;
+      const dir = l.side === "buy" ? 1 : -1;
+      const out = !live || !l.entry ? { markPrice: l.markPrice, unrealizedUsd: l.unrealizedUsd } : { markPrice: live.price, unrealizedUsd: r2(dir * (live.price - l.entry.price) * l.entry.qty * (l.entry.contractSize ?? 1)), markAt: live.at, markFrom: live.from };
+      marks.set(l, out);
+      return out;
+    };
+    // the floor's equity is its open leads at the marks its rows show: start, plus what closed since, plus the sum of those leads' results
+    const { state, equity, target, venue, nextCycleAt } = this.figures(nowMs, kept, (l) => liveMarked(l).unrealizedUsd);
+    const standing = kept ? this.standing(kept) : new Map<RoleId, { status: "ok" | "not let in" | "expired" | "revoked"; limit?: SeatLimit | undefined; cards: number }>();
     const s = f.session;
     const brain = this.standingOf();
     return {
@@ -2576,8 +2752,8 @@ export class Desk {
         exitWhy: l.exitWhy,
         pnlUsd: l.pnlUsd,
         roiPct: l.roiPct,
-        markPrice: l.markPrice,
-        unrealizedUsd: l.unrealizedUsd,
+        // an open lead marked from its market's live stream as the floor is read (each second while it shows), not only at the desk's tick
+        ...liveMarked(l),
         tpPct: l.tpPct,
         slPct: l.slPct,
         maxHours: l.maxHours,

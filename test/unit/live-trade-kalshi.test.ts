@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { liveAccount } from "../../src/portfolio/adapters/live.ts";
 import { kalshiDayEnd, kalshiSign, kalshiSource } from "../../src/portfolio/live/kalshi.ts";
-import type { Candle, LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
+import type { Candle, CandlePage, LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply, LiveSource } from "../../src/portfolio/live/types.ts";
 
 /** TRADING at Kalshi, against a stand-in for Kalshi's trade API v2 that checks every request's signature with a key pair made here and
@@ -1065,13 +1065,13 @@ describe("candles(): a Kalshi market's price history", () => {
     const k = answering([stick(S - 3600, traded("0.4000", "0.4500", "0.3900", "0.4300"), "120.00"), stick(S - 7200, traded("0.3800", "0.4100", "0.3700", "0.4000"), "80.00"), stick(S, { previous_dollars: "0.4300" }, "0.00")]);
     const { t } = await connect(k);
     const n = k.sent.length;
-    const yes = ok(await t.candles!(FED_YES, "1h", START - 3 * 3_600_000));
+    const yes = ok(await t.candles!(FED_YES, "1h", { since: START - 3 * 3_600_000 }));
     expect(k.sent.slice(n).map((s) => [s.path, s.query])).toEqual([["/markets/candlesticks", { market_tickers: "KXFED-27APR-T4.00", start_ts: String(S - 3 * 3600), end_ts: String(S), period_interval: "60" }]]);
     expect(yes).toEqual<Candle[]>([
       { t: (S - 3 * 3600) * 1000, o: 0.38, h: 0.41, l: 0.37, c: 0.4, v: 80 },
       { t: (S - 2 * 3600) * 1000, o: 0.4, h: 0.45, l: 0.39, c: 0.43, v: 120 },
     ]);
-    const no = ok(await t.candles!(FED_NO, "1h", START - 3 * 3_600_000));
+    const no = ok(await t.candles!(FED_NO, "1h", { since: START - 3 * 3_600_000 })) as Candle[];
     expect(no[1]).toEqual({ t: (S - 2 * 3600) * 1000, o: 0.6, h: 0.61, l: 0.55, c: 0.57, v: 120 });
   });
 
@@ -1086,7 +1086,7 @@ describe("candles(): a Kalshi market's price history", () => {
     ]);
     const { t } = await connect(k);
     const n = k.sent.length;
-    const bars = ok(await t.candles!(FED_YES, "5m", START - 600_000));
+    const bars = ok(await t.candles!(FED_YES, "5m", { since: START - 600_000 }));
     expect(k.sent[n]!.query.period_interval).toBe("1");
     expect(bars).toEqual<Candle[]>([
       { t: base * 1000, o: 0.4, h: 0.44, l: 0.38, c: 0.39, v: 17.5 },
@@ -1094,15 +1094,39 @@ describe("candles(): a Kalshi market's price history", () => {
     ]);
   });
 
+  it("MAX is asked from the market's open (GET /markets/{ticker}), never from 0 (Kalshi answers start_ts=0 HTTP 400), and in spans of 9,999 periods at most", async () => {
+    const k = answering([stick(S - 86_400, traded("0.4000", "0.4500", "0.3900", "0.4300"), "120.00")]);
+    const { t } = await connect(k);
+    const n = k.sent.length;
+    const open = Date.parse(String(FED.open_time ?? "2026-01-01T00:00:00Z"));
+    const max = ok(await t.candles!(FED_YES, "1w", { since: 0, limit: 5_000, range: "MAX" })) as CandlePage;
+    const asked = k.sent.slice(n).map((s) => [s.path, s.query.start_ts]);
+    expect(asked[0]).toEqual(["/markets/KXFED-27APR-T4.00", undefined]);
+    expect(asked.slice(1).every(([p]) => p === "/markets/candlesticks")).toBe(true);
+    // from its open, every span 9,999 days at most
+    expect(Number(asked.at(-1)![1])).toBe(Math.floor(open / 1000));
+    expect(k.sent.slice(n + 1).every((s) => (Number(s.query.end_ts) - Number(s.query.start_ts)) / 86_400 <= 9_999)).toBe(true);
+    expect(max.ends).toMatch(/^Kalshi's KXFED-27APR-T4\.00 history starts /);
+    // a month of five-minute bars: its latest 5,000 (seventeen days and a bit, 25,000 one-minute candles) in three spans of 9,999 at most,
+    // newest first, the rest said to exist
+    const m = k.sent.length;
+    const month = ok(await t.candles!(FED_YES, "5m", { since: START - 30 * 86_400_000, limit: 5_000, range: "1M" })) as CandlePage;
+    const spans = k.sent.slice(m).filter((s) => s.path === "/markets/candlesticks");
+    expect(spans.length).toBe(3);
+    expect(spans.every((s) => Number(s.query.end_ts) - Number(s.query.start_ts) <= 9_999 * 60)).toBe(true);
+    expect(Number(spans.at(-1)!.query.start_ts)).toBe(S - 5_000 * 300);
+    expect(month.more).toBe(true);
+  });
+
   it("refused before anything is asked: an interval it does not have, a history that starts after now, a name that is not <ticker>:YES|NO; Kalshi's no is its own", async () => {
     const k = fakeKalshi({ routes: (s) => (s.path === "/markets/candlesticks" ? json({ error: { code: "service_unavailable", message: "unavailable" } }, 503) : undefined) });
     const { t } = await connect(k);
     const n = k.sent.length;
-    expect(refusal(await t.candles!(FED_YES, "15m" as never, START - 3_600_000)).code).toBe("E_ACCOUNT_BAD_ACTION");
-    expect(refusal(await t.candles!(FED_YES, "1h", START + 1)).code).toBe("E_ACCOUNT_BAD_ACTION");
-    expect(refusal(await t.candles!("KXFED-27APR-T4.00", "1h", START - 3_600_000)).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(FED_YES, "2h" as never, { since: START - 3_600_000 })).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(FED_YES, "1h", { since: START + 1 })).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!("KXFED-27APR-T4.00", "1h", { since: START - 3_600_000 })).code).toBe("E_ACCOUNT_BAD_ACTION");
     expect(k.sent.length).toBe(n);
-    expect(refusal(await t.candles!(FED_YES, "1d", START - 7 * 86_400_000)).code).toBe("E_VENUE_UNREACHABLE");
+    expect(refusal(await t.candles!(FED_YES, "1d", { since: START - 7 * 86_400_000 })).code).toBe("E_VENUE_UNREACHABLE");
   });
 });
 

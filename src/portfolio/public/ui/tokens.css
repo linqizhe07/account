@@ -254,6 +254,8 @@
   --hl-down-flash: #732a36;
   --hl-up-tick: #0a9981;
   --hl-down-box: #34242e;
+  /* the Sell and Short button while it waits (an order being prepared, signed or placed): HL's pink, dark — never faded */
+  --hl-down-disabled: #4b2a33;
   /* the chart: HL keeps TradingView's own candle colours and grid */
   --hl-candle-up: #26a69a;
   --hl-candle-down: #ef5350;

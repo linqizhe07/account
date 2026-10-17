@@ -30,6 +30,15 @@ const MKT_KIND = { coin: "Crypto", stock: "Stock", perp: "Perpetual", rwa: "Toke
 const MKT_KIND_OF = { coin: "crypto", stock: "stocks", rwa: "rwas", perp: "perps", event: "predictions" };
 /* every market at once, for the Watching tab and for a market asked for by name */
 const MKT_ALL = "/api/account/explore?limit=200";
+/* THE DRAWER'S PRICE HISTORY by range, as the Trade pane's chart offers them (ui/chart.js; the account's CANDLE_RANGES), each asked in the
+   bar size it starts in (live/history.ts RANGE_BAR) — the size the asset read is asked in too — and the range a drawer opened on a bar size
+   alone is drawn over (live/history.ts INTERVAL_RANGE); each bar size's length, where the line breaks at a hole */
+const MKT_RANGES = [["1D", "1m"], ["5D", "5m"], ["1M", "1h"], ["3M", "4h"], ["6M", "4h"], ["YTD", "1d"], ["1Y", "1d"], ["5Y", "1w"], ["MAX", "1w"]];
+const MKT_RANGE_BAR = Object.fromEntries(MKT_RANGES);
+const MKT_IV_RANGE = { "1m": "1D", "5m": "1D", "15m": "5D", "1h": "1M", "4h": "3M", "1d": "1Y", "1w": "5Y" };
+const MKT_IV_MS = { "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000 };
+/* the range the drawer shows: the one picked, else the one its bar size is drawn over */
+const mkRangeOf = (o) => (MKT_RANGE_BAR[o.range] ? o.range : MKT_IV_RANGE[o.interval] || "1M");
 
 // ---- words and numbers -------------------------------------------------------------------------------
 
@@ -182,11 +191,14 @@ function mkRoute(item, oi) {
     return { act: "why", venue: mkVenue(a.venue) ? a.venue : "", text: `${a.venueName || "The venue"}: ${mkSaid(a.note) || "this market has closed"}.` };
   }
   let refused = null;
-  // a real account before a paper one: a rehearsal is offered only where nothing real trades the thing — unless the page is on Paper, where
-  // the paper account comes first; on Real money a paper account is not offered at all
+  // A PAPER ACCOUNT BEFORE A REAL ONE: the ticket this opens is the trading area's, and there a paper account is the default whenever one
+  // trades the thing — real money is the owner's own pick, in the ticket's Where list or its Real money | Paper switch (ui/trade.js
+  // tkFirstLeg). On Real money a paper account is not offered at all. A venue's lens is the owner's own pick too: under it that venue comes
+  // first, as the ticket opens there (tkFirstLeg), and only then a paper account before a real one
   const lens = lensNow();
   const isPaper = (l) => !!mkAtOf(item, l.venue).paper || paperVenue(l.venue);
-  const legs = [...mkLegs(item, oi)].filter((l) => lens.kind !== "real" || !isPaper(l)).sort((a, b) => (lens.kind === "paper" ? -1 : 1) * (Number(isPaper(a)) - Number(isPaper(b))));
+  const picked = (l) => (lens.kind === "venue" ? Number(l.venue === lens.id) : 0);
+  const legs = [...mkLegs(item, oi)].filter((l) => lens.kind !== "real" || !isPaper(l)).sort((a, b) => picked(b) - picked(a) || Number(isPaper(b)) - Number(isPaper(a)));
   for (const l of legs) {
     const v = mkVenue(l.venue);
     // a connected venue that does not serve this network now is not offered, nor said: the list is what serves the user
@@ -1083,7 +1095,7 @@ function openMarket(item) {
   if (!A) return;
   const it = mkResolve(item);
   if (!it) return void mkLookup(item);
-  MKT.open = { item: it, interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [] };
+  MKT.open = { item: it, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [] };
   const body = openDrawer(`<div class="mk-d" data-mk-drawer>${mkDrawerHtml(MKT.open)}</div>`, { title: it.name, redraw: mkDrawerRedraw });
   if (!MKT.drawerWired) {
     $("drawer").addEventListener("close", () => {
@@ -1118,38 +1130,43 @@ function mkCandleLeg(item) {
   const l = legs.find((x) => mkVenue(x.venue)) || legs.find((x) => mkAtOf(item, x.venue).public) || legs[0];
   return l ? { venue: l.venue, symbol: l.symbol, venueName: (mkVenue(l.venue) || {}).name || mkAtOf(item, l.venue).venueName || l.venue } : null;
 }
-/* the bars a candles read gave (GET /api/account/candles: { venue, venueName, symbol, interval, candles: [bars] }) as one series; null when
-   it gave none */
+/* the bars a candles read gave (GET /api/account/candles: { venue, venueName, symbol, interval, candles: [bars], and what it says of them:
+   the stretches with none, whose they are, what they are adjusted for, which hours they cover }) as one series; null when it gave none */
 function mkSeriesOf(b) {
   if (!b || b.ok === false) return null;
-  if (Array.isArray(b.candles)) return { venue: b.venue, venueName: b.venueName, symbol: b.symbol, interval: b.interval, bars: b.candles };
+  if (Array.isArray(b.candles)) return { venue: b.venue, venueName: b.venueName, symbol: b.symbol, interval: b.interval, bars: b.candles, ...(Array.isArray(b.gaps) ? { gaps: b.gaps } : {}), ...["source", "adjustment", "session"].reduce((o, k) => (typeof b[k] === "string" && b[k] ? { ...o, [k]: b[k] } : o), {}) };
   return b.candles && Array.isArray(b.candles.bars) ? b.candles : Array.isArray(b.bars) ? b : null;
 }
 /* the candles read is not on this account (an account from before it): the drawer draws from the Asset read as it did */
 const mkNoCandles = (b) => !!b && b.ok === false && !b.refusal;
 
 /* what the drawer reads for it: the market's price history (any market, connected or public), the asset (what is held, orders, cost, lines,
-   and the history an account without the candles read gives) — again after each read of the account, so a cancel or a close shows — and,
-   for a coin or a share, every connected venue's price (never for a pre-IPO contract: its venues' units differ, so each is shown in its own
-   words); for a pre-IPO company, the prediction markets about its IPO */
+   and the history an account without the candles read gives, over the same range as the candles read: never another range's line under
+   the pressed button) — again after each read of the account, so a cancel or a close shows — and, for a coin or a share, every connected
+   venue's price (never for a pre-IPO contract: its venues' units differ, so each is shown in its own words); for a pre-IPO company, the
+   prediction markets about its IPO. An answer is taken only while the drawer still shows the range and the bar size it was asked for:
+   ranges share bar sizes (3M and 6M 4h, YTD and 1Y a day, 5Y and MAX a week), so a slow range's answer landing after the next one's is
+   never drawn under the next one's button. The price history is waited for as the chart waits for its first view (core
+   HISTORY_TIMEOUT_MS: longer than the account gives its sources) */
 function mkDrawerLoad(o) {
   const leg = mkCandleLeg(o.item);
+  const range = mkRangeOf(o);
   if (leg && o.candles === undefined) {
     const interval = o.interval;
     o.candles = null;
-    api(`/api/account/candles?${new URLSearchParams({ venue: leg.venue, symbol: leg.symbol, interval })}`, { ttl: 30_000 }).then((b) => {
-      if (MKT.open !== o || o.interval !== interval) return;
+    api(`/api/account/candles?${new URLSearchParams({ venue: leg.venue, symbol: leg.symbol, interval, range })}`, { ttl: 30_000, timeout: HISTORY_TIMEOUT_MS }).then((b) => {
+      if (MKT.open !== o || o.interval !== interval || mkRangeOf(o) !== range) return;
       o.candles = b;
       mkDrawerRedraw();
     });
   }
   const key = mkAssetKey(o.item);
-  const stamp = `${o.interval}|${A.now}`;
+  const stamp = `${o.interval}|${range}|${A.now}`;
   if (key && o.assetFor !== stamp) {
     const interval = o.interval;
     o.assetFor = stamp;
-    api(`/api/account/asset?key=${encodeURIComponent(key)}&interval=${interval}`, { ttl: 10_000 }).then((b) => {
-      if (MKT.open !== o || o.interval !== interval) return;
+    api(`/api/account/asset?${new URLSearchParams({ key, interval, range })}`, { ttl: 10_000 }).then((b) => {
+      if (MKT.open !== o || o.interval !== interval || mkRangeOf(o) !== range) return;
       o.asset = b;
       mkDrawerRedraw();
     });
@@ -1216,9 +1233,11 @@ function mkDrawerClick(e) {
     case "sell": return void mkTicket({ venue: v, symbol: b.dataset.symbol, side: "sell" }, o.item);
     case "short": return void mkTrade(o.item, "sell");
     case "connect": return void connectVia(b.dataset.connector, { name: b.dataset.name });
-    case "interval":
-      if (b.dataset.v === o.interval) return;
-      o.interval = b.dataset.v;
+    // another range: in its own bar size (the asset read too)
+    case "range":
+      if (!MKT_RANGE_BAR[b.dataset.v] || b.dataset.v === mkRangeOf(o)) return;
+      o.range = b.dataset.v;
+      o.interval = MKT_RANGE_BAR[o.range];
       o.candles = undefined;
       mkDrawerRedraw();
       return void mkDrawerLoad(o);
@@ -1241,28 +1260,55 @@ function mkDrawerClick(e) {
 }
 
 /* the price history as a line: the closes, low and high, first and last time; an event's in cents. Each bar sits at its own time between
-   the first and the last, so a gap in the venue's bars (a market closed overnight) is a gap, not a step. Where it comes from is the
-   picture's title */
-function mkChart(series, ev) {
+   the first and the last, and the line BREAKS where the venue has no bars — more than a bar and a half's time between two intraday bars
+   (a market closed overnight, a minute nobody traded), more than that between a round-the-clock market's daily bars, or a stretch its own
+   words say it has none of (`gaps`) — so a gap is a gap, never bridged by a line (a share's closed days are not gaps: its daily line runs
+   on over a weekend). `sessions`: a market that keeps them (a share). Where it comes from is the picture's title, and under the line its
+   source, what its prices are adjusted for and which hours it covers, where the account says */
+function mkChart(series, ev, sessions = false) {
   const bars = ((series && series.bars) || []).filter((b) => Number.isFinite(b.c));
   if (bars.length < 2) return "";
   const W = 400;
   const H = 140;
-  const cs = bars.map((b) => b.c);
-  const lo = Math.min(...cs);
-  const hi = Math.max(...cs);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const b of bars) {
+    if (b.c < lo) lo = b.c;
+    if (b.c > hi) hi = b.c;
+  }
   const span = hi - lo || 1;
   const timed = bars.every((b) => Number.isFinite(b.t)) && bars[bars.length - 1].t > bars[0].t;
   const t0 = bars[0].t;
   const tspan = timed ? bars[bars.length - 1].t - t0 : 1;
   const x = (i) => ((timed ? (bars[i].t - t0) / tspan : i / (bars.length - 1)) * W).toFixed(1);
   const y = (c) => (H - 6 - ((c - lo) / span) * (H - 12)).toFixed(1);
-  const line = bars.map((b, i) => `${i ? "L" : "M"}${x(i)},${y(b.c)}`).join("");
+  const ms = MKT_IV_MS[series.interval] || 0;
+  const gaps = Array.isArray(series.gaps) ? series.gaps.filter((g) => g && Number.isFinite(Number(g.from)) && Number.isFinite(Number(g.to))) : [];
+  const broken = (a, b) => timed && ((ms > 0 && (ms < 86_400_000 || !sessions) && b - a > 1.5 * ms) || gaps.some((g) => Number(g.from) < b && Number(g.to) > a + ms));
+  // one run of the line a stretch with no break, its area closed under it on its own
+  const runs = [];
+  let run = [];
+  bars.forEach((b, i) => {
+    if (i && broken(bars[i - 1].t, b.t)) {
+      runs.push(run);
+      run = [];
+    }
+    run.push(i);
+  });
+  runs.push(run);
+  const line = runs.map((r) => r.map((i, k) => `${k ? "L" : "M"}${x(i)},${y(bars[i].c)}`).join("")).join("");
+  const area = runs.map((r) => `${r.map((i, k) => `${k ? "L" : "M"}${x(i)},${y(bars[i].c)}`).join("")}L${x(r[r.length - 1])},${H}L${x(r[0])},${H}Z`).join("");
   const f = (n) => (ev ? mkCents(n) : mkUsd(n));
-  const when = (t) => `${nyDay(t)} ${nyTime(t)}`;
+  // a day's bars and longer: the day each bar stands for, with its year and no time of day — a share's New York day (its bars start at its
+  // open, or New York's midnight), a market's that trades round the clock its Universal day (its daily and weekly bars start at 00:00 UTC,
+  // the evening before in New York); a line of shorter bars over more than a few months: the New York date of its first and last
+  const long = ms >= 86_400_000 || (timed && tspan > 120 * 86_400_000);
+  const dayOpts = { day: "numeric", month: "short", year: "numeric", ...(ms >= 86_400_000 && !sessions ? { timeZone: "UTC" } : {}) };
+  const when = (t) => (long ? ny(t, dayOpts) : `${nyDay(t)} ${nyTime(t)}`);
   const first = bars[0];
   const last = bars[bars.length - 1];
-  return `<svg class="spark mk-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(`Price at ${series.venueName}, ${series.interval} bars: from ${f(first.c)} to ${f(last.c)}, low ${f(lo)}, high ${f(hi)}`)}"><title>At ${esc(series.venueName)} · ${esc(series.symbol)}</title><path class="area" d="${line}L${W},${H}L0,${H}Z"/><path class="line" d="${line}"/></svg><div class="mk-axis"><span>${esc(when(first.t))}</span><span>Low ${esc(f(lo))} · High ${esc(f(hi))}</span><span>${esc(when(last.t))}</span></div>`;
+  const said = [series.source, series.adjustment, series.session].filter((w) => typeof w === "string" && w).join(" · ");
+  return `<svg class="spark mk-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(`Price at ${series.venueName}, ${series.interval} bars: from ${f(first.c)} to ${f(last.c)}, low ${f(lo)}, high ${f(hi)}`)}"><title>At ${esc(series.venueName)} · ${esc(series.symbol)}</title><path class="area" d="${area}"/><path class="line" d="${line}"/></svg><div class="mk-axis"><span>${esc(when(first.t))}</span><span>Low ${esc(f(lo))} · High ${esc(f(hi))}</span><span>${esc(when(last.t))}</span></div>${said ? `<p class="mk-src">${esc(said)}</p>` : ""}`;
 }
 
 /* a position can be closed from here: trading is on, the venue trades and lists positions */
@@ -1409,11 +1455,12 @@ function mkChartHtml(o, it, leg, key) {
   const ev = it.kind === "event";
   const skel = '<div class="skel-rows" aria-hidden="true"><span class="skel" style="height:120px"></span></div>';
   const a = o.asset && o.asset.ok !== false ? o.asset : null;
-  const fromAsset = a && a.candles ? mkChart(a.candles, ev) : "";
+  const sessions = it.kind === "stock";
+  const fromAsset = a && a.candles ? mkChart(a.candles, ev, sessions) : "";
   if (leg && !mkNoCandles(o.candles)) {
     if (!o.candles) return skel;
     const series = mkSeriesOf(o.candles);
-    const drawn = series ? mkChart(series, ev) : "";
+    const drawn = series ? mkChart(series, ev, sessions) : "";
     if (drawn) return drawn;
     const words = mkSaid(refusalOf(o.candles)) || "it did not answer";
     const said = series ? `${leg.venueName} has no ${o.interval} bars for it yet` : words.startsWith(leg.venueName) ? words : `No price history from ${leg.venueName}: ${words}`;
@@ -1509,7 +1556,8 @@ function mkDrawerParts(o) {
     ${acts.length ? `<div class="mk-d-acts">${acts.join("")}</div>` : ""}
     ${why}
     ${mkCredit([it])}`;
-  const chart = `<section class="sec" aria-label="Price history"><div class="sec-head"><h2 class="h2">Price</h2>${key || leg ? mkSeg([["5m", "5m"], ["1h", "1h"], ["1d", "1d"]], o.interval, "interval", "Price history by") : ""}</div>${mkChartHtml(o, it, leg, key)}</section>`;
+  const ranges = mkSeg(MKT_RANGES.map(([r]) => [r, r]), mkRangeOf(o), "range", "Price history over").replace('class="seg"', 'class="seg mk-rseg"');
+  const chart = `<section class="sec" aria-label="Price history"><div class="sec-head"><h2 class="h2">Price</h2>${key || leg ? ranges : ""}</div>${mkChartHtml(o, it, leg, key)}</section>`;
   // a dollar held (a stablecoin, cash) is compared with nothing: a dollar is a dollar
   const across = it.kind === "stable" || it.kind === "cash" ? "" : `<section class="sec" aria-label="Across venues"><h2 class="h2">Across venues</h2>${mkAcrossHtml(o)}</section>`;
   const lines = `<section class="sec" aria-label="On the statement"><div class="sec-head"><h2 class="h2">On the statement</h2>${typeof openStatement === "function" ? '<button type="button" class="link" data-act="statement" data-fk="d-statement">Open the Statement →</button>' : ""}</div>${mkLinesHtml(o)}</section>`;

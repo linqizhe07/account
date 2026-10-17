@@ -59,7 +59,8 @@ import { no } from "../refuse.ts";
 import { polymarketSource } from "./address.ts";
 import { CHAINS, type ChainName, type ChainReader } from "./chain.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
-import { badOrder, ceilTo, floorTo, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { badWindow, barStart } from "./history.ts";
+import { badOrder, ceilTo, floorTo, INTERVAL_MS, inDollars, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { asRefusal, edgeRefused, edgeWords, notTheApi, notTheApiWords, num, REGION, redact, unreachable, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 import { tokenOn, type LiveWriter } from "./writes.ts";
 
@@ -142,8 +143,7 @@ const SLUG = /^[a-z0-9][a-z0-9-]*$/i;
 /** The prices a bar is folded from: one-minute prices make five-minute bars, five-minute prices hourly ones, hourly prices daily ones
  * (`fidelity` is in minutes). Polymarket refuses a range too long for its fidelity ("'startTs' and 'endTs' interval is too long", OBSERVED
  * for forty days of one-minute prices) */
-const FIDELITY_MIN: Record<CandleInterval, number> = { "5m": 1, "1h": 5, "1d": 60 };
-const BAR_MS: Record<CandleInterval, number> = { "5m": 5 * 60_000, "1h": 3_600_000, "1d": 86_400_000 };
+const FIDELITY_MIN: Record<CandleInterval, number> = { "1m": 1, "5m": 1, "15m": 5, "1h": 5, "4h": 60, "1d": 60, "1w": 60 };
 /** the longest startTs-to-endTs range /prices-history takes: fourteen days, under the fifteen or so it answers (OBSERVED 2026-10-05) */
 const HISTORY_RANGE_MS = 14 * 86_400_000;
 /** a category as Gamma's tag slug: "Climate & Science" → climate-science */
@@ -1213,23 +1213,26 @@ function polymarketTrader(c: { venue: string; name: string; wallet: Wallet; http
      * Polymarket refuses a startTs-to-endTs range longer than about fifteen days, whatever the fidelity ("invalid filters: 'startTs' and
      * 'endTs' interval is too long"), and answers a startTs alone — the endTs is optional — up to now, three hundred days included
      * (OBSERVED 2026-10-05, keyless GETs). So a longer history (the daily bars) is asked from its start with no end */
-    async candles(symbol, interval, sinceMs) {
+    async candles(symbol, interval, w) {
       try {
-        if (!Object.hasOwn(FIDELITY_MIN, interval)) return no("E_ACCOUNT_BAD_ACTION", { venue: c.venue, message: `price history comes in bars of 5m, 1h or 1d, not "${String(interval).slice(0, 12)}"` });
         const now = c.clock();
-        if (!(Number.isFinite(sinceMs) && sinceMs < now)) return no("E_ACCOUNT_BAD_ACTION", { venue: c.venue, message: "price history starts before now" });
+        const why = badWindow(interval, w, now);
+        if (why) return no("E_ACCOUNT_BAD_ACTION", { venue: c.venue, message: why });
+        // a window that names no start (a page before a chart's first bar): that many bars before its end — and never before the first
+        // second, since a startTs of 0 (MAX's) is answered HTTP 400 "the time component is mandatory" (live 2026-10-17)
+        const sinceMs = Math.max(1_000, w.since ?? (w.until ?? now) - Math.min(w.limit ?? 300, 1_000) * INTERVAL_MS[interval]);
+        const end = Math.min(now, w.until ?? now);
         const k = await resolve(symbol);
-        const range = now - sinceMs > HISTORY_RANGE_MS ? "" : `&endTs=${Math.floor(now / 1000)}`;
+        const range = end - sinceMs > HISTORY_RANGE_MS ? "" : `&endTs=${Math.floor(end / 1000)}`;
         const body = await getJson(`${CLOB}/prices-history?market=${k.tokenId}&startTs=${Math.floor(sinceMs / 1000)}${range}&fidelity=${FIDELITY_MIN[interval]}`);
         const points = (isObj(body) && Array.isArray(body.history) ? body.history : [])
           .filter(isObj)
           .map((x) => ({ t: given(x.t), p: given(x.p) }))
-          .filter((x): x is { t: number; p: number } => x.t !== undefined && x.t > 0 && x.p !== undefined && x.p >= 0 && x.p <= 1)
+          .filter((x): x is { t: number; p: number } => x.t !== undefined && x.t > 0 && x.t * 1000 < end + 60_000 && x.p !== undefined && x.p >= 0 && x.p <= 1)
           .sort((a, b) => a.t - b.t);
-        const step = BAR_MS[interval];
         const bars = new Map<number, Candle>();
         for (const { t, p } of points) {
-          const at = Math.floor((t * 1000) / step) * step;
+          const at = barStart(t * 1000, interval);
           const b = bars.get(at);
           if (!b) bars.set(at, { t: at, o: p, h: p, l: p, c: p });
           else {

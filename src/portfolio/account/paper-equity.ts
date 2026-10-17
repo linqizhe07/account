@@ -44,6 +44,8 @@ export interface PaperVenueSeries {
   /** what it started with, and when: a paper account the account keeps itself says both (its book); a venue's own paper account neither */
   startUsd?: number | undefined;
   createdAt?: number | undefined;
+  /** the paper money the owner added since it started (its book's deposits: topUpPaper), each at its moment: put in, never a gain */
+  deposits?: Array<{ at: number; usd: number }> | undefined;
   /** its past told again from its book (live/paper-history.ts), oldest first */
   rebuilt?: PaperPoint[] | undefined;
   /** the points the service wrote for it (the paper log), oldest first */
@@ -61,8 +63,10 @@ export interface PaperHistory extends NetWorthHistory {
   venue?: string | undefined;
   /** what the paper accounts in it started with, together, where every one of them says (a venue's own paper account does not) */
   startUsd?: number | undefined;
-  /** what they made or lost since they started, together: now against what they started with */
+  /** what they made or lost since they started, together: now against what they started with and the paper money added since */
   sinceStartUsd?: number | undefined;
+  /** the paper money added to them since they started (topUpPaper), together: put in, and not in what they made or lost */
+  addedUsd?: number | undefined;
   /** some of the curve is told again from a book (not only the points the service wrote) */
   rebuilt: boolean;
   /** what the told-again past cannot know, in words */
@@ -171,19 +175,23 @@ export function paperCurve(series: readonly PaperVenueSeries[], o: { range: stri
       return any ? { at: iso(t), usd: r2(usd), ...(partial ? { partial: true as const } : {}) } : undefined;
     })
     .filter((p): p is NonNullable<typeof p> => !!p);
-  // the change: each account from where it stood at the start (or from what it started with, started since) to now
+  // the change: each account from where it stood at the start (or from what it started with, started since) to now — less the paper money
+  // the owner added in the range, which is put in and never a gain (a top-up moves the curve, not the change)
+  const addedIn = (s: PaperVenueSeries, after: number): number => (s.deposits ?? []).reduce((x, d) => (d.at > after && d.at <= now && Number.isFinite(d.usd) ? x + d.usd : x), 0);
   let change = 0;
   let base = 0;
   let counted = 0;
   for (const a of accounts) {
     const from = a.begins >= startMs ? (a.s.startUsd !== undefined ? a.s.startUsd : a.points[0]?.usd) : valueAt(a.points, startMs)?.usd;
     if (from === undefined) continue;
-    change += a.s.nowUsd - from;
-    base += from;
+    const added = addedIn(a.s, a.begins >= startMs ? a.begins : startMs);
+    change += a.s.nowUsd - from - added;
+    base += from + added;
     counted++;
   }
   const allStarted = series.length > 0 && series.every((s) => s.startUsd !== undefined);
   const startUsd = allStarted ? r2(series.reduce((x, s) => x + s.startUsd!, 0)) : undefined;
+  const addedUsd = r2(series.reduce((x, s) => x + addedIn(s, Number.NEGATIVE_INFINITY), 0));
   const inexact = [...new Set(series.flatMap((s) => s.inexact ?? []))];
   const missing = [...new Set(series.flatMap((s) => s.missing ?? []))];
   const first = accounts.map((a) => a.since).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
@@ -203,7 +211,8 @@ export function paperCurve(series: readonly PaperVenueSeries[], o: { range: stri
     ...(points.some((p) => p.partial) ? { partial: true as const } : {}),
     paper: true,
     ...(o.venue ? { venue: o.venue } : {}),
-    ...(startUsd !== undefined ? { startUsd, sinceStartUsd: r2(series.reduce((x, s) => x + s.nowUsd, 0) - startUsd) } : {}),
+    ...(startUsd !== undefined ? { startUsd, sinceStartUsd: r2(series.reduce((x, s) => x + s.nowUsd, 0) - startUsd - addedUsd) } : {}),
+    ...(addedUsd ? { addedUsd } : {}),
     rebuilt: series.some((s) => (s.rebuilt?.length ?? 0) > 0),
     ...(inexact.length ? { inexact } : {}),
     ...(missing.length ? { missing } : {}),

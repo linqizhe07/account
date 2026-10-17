@@ -41,7 +41,8 @@ import { constants, createPrivateKey, sign as cryptoSign, type KeyObject } from 
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import { readSecretFile, type KeyFile, type KeyShape } from "./credentials.ts";
-import { badOrder, onStep, pick, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type Side, type TimeInForce } from "./trade.ts";
+import { badWindow, barStart, limitOf, utcDay } from "./history.ts";
+import { badOrder, INTERVAL_MS, onStep, pick, plain, type Candle, type CandleInterval, type CandlePage, type CandleWindow, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type Side, type TimeInForce } from "./trade.ts";
 import { asRefusal, networkNo, notTheApi, num, redact, REGION, unreachable, venueSaidNo, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 
 export const KALSHI_KEY: KeyShape = { required: ["keyId"], optional: ["privateKeyFile", "privateKey", "demo"], example: '{"keyId": "…", "privateKeyFile": "credentials/kalshi/private-key.pem"} (the .pem is the file Kalshi gives you when the key is made; a key made with write access places orders, a read-only one only reads)' };
@@ -341,10 +342,51 @@ function markOf(m: Rec | undefined, outcome: Outcome): number | undefined {
 /** a category as words to compare: "Climate and Weather", "climate-and-weather" and "CLIMATE AND WEATHER" are one */
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
-/** Kalshi keeps candles of 1, 60 and 1440 minutes (get-market-candlesticks.md; asked for 5 it answers none — OBSERVED): five minutes are five
- * one-minute candles folded together */
-const PERIOD_MIN: Record<CandleInterval, number> = { "5m": 1, "1h": 60, "1d": 1440 };
-const FOLD_MS: Partial<Record<CandleInterval, number>> = { "5m": 5 * 60_000 };
+/** Kalshi keeps candles of 1, 60 and 1440 minutes (get-market-candlesticks.md; asked for 5 it answers none — OBSERVED): every other size is
+ * the finer one it keeps folded together — five and fifteen minutes from one-minute candles, four hours from hourly ones, a week (from
+ * Monday, UTC) from daily ones */
+export const PERIOD_MIN: Readonly<Record<CandleInterval, number>> = { "1m": 1, "5m": 1, "15m": 1, "1h": 60, "4h": 60, "1d": 1440, "1w": 1440 };
+
+/** the most candles Kalshi answers a request: it counts them over the span asked, whatever the market traded — start_ts=1 answered "requested
+ * candlesticks across all markets: 29870400, max candlesticks: 10000", a span of 10,001 minutes "10001", and a start of 0 "start_ts is
+ * required" (HTTP 400 each, live 2026-10-17) — so a request asks 9,999 periods at most */
+export const KALSHI_CANDLES_MOST = 9_999;
+/** how many such requests one window takes at most: an older part is left for scrolling left */
+export const KALSHI_SPANS = 6;
+
+/** A WINDOW AS KALSHI'S CANDLESTICK REQUESTS: from the later of the window's start (a page with none: `limit` bars before its end, 300 at
+ * most a thousand), its latest `limit` bars (HISTORY_MOST at most: live/history.ts limitOf), the market's open where it is known (`openMs`)
+ * and one second, to its end (`endTs`, seconds, as the caller rounds it), cut into spans of KALSHI_CANDLES_MOST periods at most, newest
+ * first, KALSHI_SPANS at most. `cut`: an older part of what was asked is left out (the answer says older bars exist); `opened`: the market
+ * opened after the start asked (the answer says where its history starts); `wide`: one request does not hold the window from its start
+ * asked — the caller learns the market's open first and asks again, so a short window costs no lookup */
+export function kalshiSpans(interval: CandleInterval, w: CandleWindow, endTs: number, openMs?: number): { spans: Array<{ start: number; end: number }>; cut: boolean; opened: boolean; wide: boolean } {
+  const G = INTERVAL_MS[interval];
+  const period = PERIOD_MIN[interval] * 60;
+  const end = endTs * 1000;
+  const want = w.since ?? end - Math.min(w.limit ?? 300, 1_000) * G;
+  const latest = w.since === undefined ? Number.NEGATIVE_INFINITY : end - limitOf(w) * G;
+  const opened = openMs !== undefined && openMs > want;
+  const from = Math.max(1_000, want, latest, openMs ?? 0);
+  const start = Math.floor(from / 1000);
+  const wide = (endTs - Math.floor(Math.max(1_000, want) / 1000)) / period > KALSHI_CANDLES_MOST;
+  const spans: Array<{ start: number; end: number }> = [];
+  let e = endTs;
+  for (; e > start && spans.length < KALSHI_SPANS; e -= KALSHI_CANDLES_MOST * period) spans.push({ start: Math.max(start, e - KALSHI_CANDLES_MOST * period), end: e });
+  return { spans, cut: latest > Math.max(want, openMs ?? 0) || e > start, opened, wide };
+}
+/** KALSHI'S BARS AS A PAGE (both readers: this trader's and the public one, live/public-markets.ts): older bars said to exist where the
+ * spans left an older part of the window out, a request after the first was refused (`partial`), or a page scrolled left brought any; where
+ * the market opened after the start asked, its history said to start at its first bar. A window asked whole in one request is the plain
+ * list it always was (live/history.ts pageOf reads it the same way) */
+export function kalshiPage(bars: Candle[], asked: { cut: boolean; opened: boolean }, w: CandleWindow, partial: boolean, market: string): Candle[] | CandlePage {
+  const sorted = bars.sort((a, b) => a.t - b.t);
+  if (!asked.cut && !asked.opened && !partial) return sorted;
+  const more = partial || (!asked.opened && (asked.cut || (w.since === undefined && sorted.length > 0)));
+  const ends = asked.opened && !partial ? (sorted.length ? `${market} history starts ${utcDay(sorted[0]!.t)}` : `${market} market had not opened by then`) : undefined;
+  return { bars: sorted, more, ...(partial ? { partial: true as const } : {}), ...(ends ? { ends } : {}) };
+}
+
 /** a dollar string Kalshi gave, or nothing for a field that is absent or null (a candle's prices are null when nothing traded) */
 const dollars = (v: unknown): number | undefined => (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
@@ -935,30 +977,48 @@ function kalshiTrader(o: { venue: string; name: string; keyId: string; call: Cal
      * seconds, period_interval in minutes), one candle for each minute, hour or day in which something changed. A candle's prices are the
      * trades' (`price`: open_dollars, high_dollars, low_dollars, close_dollars, null when nothing traded — such a candle is left out: no trade,
      * no price, and the book's bid and ask are not a trade) and its volume the contracts traded (`volume_fp`). NO's prices are YES's turned over:
-     * 1 − YES, its high YES's low. A bar starts where Kalshi's period does: its end less its length */
-    async candles(symbol, interval, sinceMs) {
+     * 1 − YES, its high YES's low. A bar starts where Kalshi's period does: its end less its length. A window one request does not hold
+     * (Kalshi answers 9,999 periods at most: kalshiSpans) is asked from the market's open (GET /markets/{ticker}, open_time), in spans */
+    async candles(symbol, interval, w) {
       try {
         const s = parse(symbol);
         if (!s) return badSymbol(symbol);
-        if (!Object.hasOwn(PERIOD_MIN, interval)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: `price history comes in bars of 5m, 1h or 1d, not "${String(interval).slice(0, 12)}"` });
         const now = o.clock();
-        if (!(Number.isFinite(sinceMs) && sinceMs < now)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: "price history starts before now" });
+        const why = badWindow(interval, w, now);
+        if (why) return no("E_ACCOUNT_BAD_ACTION", { venue, message: why });
         const period = PERIOD_MIN[interval];
-        const r = await call("GET", `/markets/candlesticks?market_tickers=${enc(s.ticker)}&start_ts=${Math.floor(sinceMs / 1000)}&end_ts=${Math.floor(now / 1000)}&period_interval=${period}`);
-        if (r.status !== 200 || !isRec(r.body)) return fail(r);
-        const row = (Array.isArray(r.body.markets) ? (r.body.markets as unknown[]).filter(isRec) : []).find((x) => String(x.market_ticker ?? "").toUpperCase() === s.ticker);
-        const sticks = (row && Array.isArray(row.candlesticks) ? (row.candlesticks as unknown[]).filter(isRec) : []).sort((a, b) => num(a.end_period_ts) - num(b.end_period_ts));
-        const fold = FOLD_MS[interval];
+        const end = Math.min(now, w.until ?? now);
+        const endTs = Math.floor(end / 1000);
+        let asked = kalshiSpans(interval, w, endTs);
+        if (asked.wide) {
+          const m = await call("GET", `/markets/${enc(s.ticker)}`);
+          const open = m.status === 200 && isRec(m.body) && isRec(m.body.market) ? Date.parse(String(m.body.market.open_time ?? "")) : NaN;
+          if (Number.isFinite(open)) asked = kalshiSpans(interval, w, endTs, open);
+        }
+        const sticks: Rec[] = [];
+        let partial = false;
+        for (const [i, sp] of asked.spans.entries()) {
+          const r = await call("GET", `/markets/candlesticks?market_tickers=${enc(s.ticker)}&start_ts=${sp.start}&end_ts=${sp.end}&period_interval=${period}`);
+          if (r.status !== 200 || !isRec(r.body)) {
+            if (i === 0) return fail(r);
+            partial = true;
+            break;
+          }
+          const row = (Array.isArray(r.body.markets) ? (r.body.markets as unknown[]).filter(isRec) : []).find((x) => String(x.market_ticker ?? "").toUpperCase() === s.ticker);
+          sticks.push(...(row && Array.isArray(row.candlesticks) ? (row.candlesticks as unknown[]).filter(isRec) : []));
+        }
+        sticks.sort((a, b) => num(a.end_period_ts) - num(b.end_period_ts));
+        const fold = period * 60_000 !== INTERVAL_MS[interval];
         const bars = new Map<number, Candle>();
         for (const k of sticks) {
           const p = isRec(k.price) ? k.price : {};
           const [yo, yh, yl, yc] = [dollars(p.open_dollars), dollars(p.high_dollars), dollars(p.low_dollars), dollars(p.close_dollars)];
-          const end = num(k.end_period_ts);
-          if (yo === undefined || yh === undefined || yl === undefined || yc === undefined || !(end > 0)) continue;
+          const stop = num(k.end_period_ts);
+          if (yo === undefined || yh === undefined || yl === undefined || yc === undefined || !(stop > 0)) continue;
           const [op, hi, lo, cl] = s.outcome === "YES" ? [yo, yh, yl, yc] : [round(1 - yo, 4), round(1 - yl, 4), round(1 - yh, 4), round(1 - yc, 4)];
           const v = typeof k.volume_fp === "string" ? num(k.volume_fp) : undefined;
-          const start = (end - period * 60) * 1000;
-          const t = fold ? Math.floor(start / fold) * fold : start;
+          const start = (stop - period * 60) * 1000;
+          const t = fold ? barStart(start, interval) : start;
           const b = bars.get(t);
           if (!b) bars.set(t, { t, o: op, h: hi, l: lo, c: cl, ...(v !== undefined ? { v } : {}) });
           else {
@@ -968,7 +1028,7 @@ function kalshiTrader(o: { venue: string; name: string; keyId: string; call: Cal
             if (v !== undefined) b.v = round((b.v ?? 0) + v, 2);
           }
         }
-        return [...bars.values()];
+        return kalshiPage([...bars.values()], asked, w, partial, `${name}'s ${s.ticker}`);
       } catch (err) {
         return asRefusal(venue, name, err, secrets);
       }

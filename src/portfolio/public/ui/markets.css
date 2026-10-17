@@ -137,6 +137,10 @@
 .mk-d .sec-head .link { font-size: 13px; min-height: 36px; }
 .mk-chart { height: 150px; }
 .mk-axis { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-family: var(--font-sans); font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+/* under the line: whose bars, what their prices are adjusted for, which hours they cover (the account's words) */
+.mk-src { margin: 4px 0 0; font-family: var(--font-sans); font-size: 11px; line-height: 1.4; color: var(--dim); }
+/* the nine ranges over the drawer's price: narrower buttons, so they sit on one line beside the heading where there is room */
+.mk-rseg button { min-height: 32px; padding: 0 8px; font-size: 12px; }
 .mk-d .t td, .mk-d .t th { padding-left: 6px; padding-right: 6px; }
 .mk-d .why { white-space: normal; }
 /* You hold: a position's Close… and an order's Cancel at the end of its own line */

@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -21,6 +22,21 @@ describe("who the server answers", () => {
       expect(await get("/api/account", { origin: "null" })).toBe(403);
       expect(await get("/api/account", { "sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image" })).toBe(403);
       expect(await get("/", { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" })).toBe(200);
+      // a navigation from another site reaches the page and the venue's sign-in callback, never another route of the account's own (asked
+      // over node:http: fetch puts its own sec-fetch-mode on every request)
+      const raw = (path: string, headers: Record<string, string>) =>
+        new Promise<number>((resolve, reject) => {
+          const req = request(`${srv.url}${path}`, { headers }, (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          });
+          req.on("error", reject);
+          req.end();
+        });
+      const navigation = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+      expect(await raw("/api/account", navigation)).toBe(403);
+      expect(await raw("/api/account/stream?client=tab-navigated-1", navigation)).toBe(403);
+      expect(await raw("/api/account/signin/callback", navigation)).toBe(400);
       expect(await get("/api/account", { "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" })).toBe(200);
     } finally {
       await srv.close();

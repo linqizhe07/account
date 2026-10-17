@@ -37,8 +37,40 @@ function panel() {
   return { el, html, fire };
 }
 
-function page(fetcher?: Fetcher) {
+/** a browser's EventSource as ui/stream.js opens one: the test opens it and speaks through it (the account's stream: feat/paper-live p2b) */
+class FakeES {
+  static all: FakeES[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly heard = new Map<string, Array<(e: { data: string; lastEventId: string }) => void>>();
+  constructor(readonly url: string) {
+    FakeES.all.push(this);
+  }
+  addEventListener(type: string, fn: (e: { data: string; lastEventId: string }) => void) {
+    this.heard.set(type, [...(this.heard.get(type) ?? []), fn]);
+  }
+  close() {
+    this.readyState = 2;
+  }
+  open() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  say(type: string, data: unknown) {
+    for (const fn of this.heard.get(type) ?? []) fn({ data: JSON.stringify(data), lastEventId: "" });
+  }
+  fail() {
+    this.readyState = 0;
+    this.onerror?.();
+  }
+}
+
+/** the page, as account.html loads these: core, then — `stream` — the account's push channel (ui/stream.js) over a stand-in EventSource,
+ * then the book */
+function page(fetcher?: Fetcher, { stream = false }: { stream?: boolean } = {}) {
   const asked: string[] = [];
+  FakeES.all = [];
   const element = (): Record<string, unknown> => ({ addEventListener() {}, removeAttribute() {}, setAttribute() {}, querySelectorAll: () => [], querySelector: () => null, classList: { add() {}, remove() {}, toggle() {} }, dataset: {}, style: {}, hidden: false, innerHTML: "", textContent: "", value: "" });
   const sandbox: Record<string, unknown> = {
     document: { getElementById: element, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, body: element(), documentElement: { dataset: { theme: "cream" } }, visibilityState: "visible" },
@@ -58,13 +90,20 @@ function page(fetcher?: Fetcher) {
       const body = await fetcher(path);
       return { status: (body as { ok?: boolean })?.ok === false ? 409 : 200, statusText: "", json: async () => body };
     },
+    ...(stream ? { EventSource: FakeES, setInterval, clearInterval } : {}),
   };
   const ctx = createContext(sandbox);
   sandbox.window = runInContext("globalThis", ctx);
-  for (const f of FILES) new Script(readFileSync(`${UI}${f}`, "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of stream ? ["core.js", "stream.js", "book.js"] : FILES) new Script(readFileSync(`${UI}${f}`, "utf8"), { filename: f }).runInContext(ctx);
   const run = <T = unknown>(code: string): T => runInContext(code, ctx) as T;
   const fn = <T = unknown>(name: string) => run<(...a: unknown[]) => T>(name);
-  return { run, fn, asked, sandbox };
+  /** the stream started and open (connected) */
+  const connect = () => {
+    run("stStart()");
+    FakeES.all.at(-1)!.open();
+    return FakeES.all.at(-1)!;
+  };
+  return { run, fn, asked, sandbox, connect };
 }
 const settle = () => new Promise((r) => setTimeout(r, 0));
 /** every panel mounted in a test is released after it, so no timer outlives it */
@@ -541,7 +580,7 @@ describe("a level that changed, and what a row reaches (HL's flash and hover car
     // the best ask's size changes, a new bid comes in at the far end: only the ask flashes
     book = { ...BTC, asks: [[81769, 1.5], [81770, 0.03668], [81772, 0.01202]], bids: [...BTC.bids, [81765, 2]] };
     await p.fn<Promise<void>>("bkReadBook")(el, st());
-    expect(html("[data-bk-asks]")).toContain('class="bk-row bk-ask bk-fa" role="button" tabindex="0" data-k="ask:81769"');
+    expect(html("[data-bk-asks]")).toContain('class="bk-row bk-ask bk-fa" role="button" tabindex="-1" data-k="ask:81769"');
     expect((html("[data-bk-asks]") + html("[data-bk-bids]")).match(/bk-f[ab]/g)).toHaveLength(1);
     // the same level again on the next read: the other name, so it flashes again
     book = { ...BTC, asks: [[81769, 2.5], [81770, 0.03668], [81772, 0.01202]], bids: [...BTC.bids, [81765, 2]] };
@@ -622,5 +661,249 @@ describe("the line under the tab showing (HL's sliding underline)", () => {
     const types = { querySelector: (sel: string) => (sel === '[aria-selected="true"], .tk-pro.on' ? pro : null), style: { setProperty: (k: string, v: string) => void (set[k] = v) }, classList: { add() {} } };
     p.fn("bkSlideUnder")(types, '[aria-selected="true"], .tk-pro.on');
     expect(set).toEqual({ "--tab-x": "180px", "--tab-w": "90px" });
+  });
+});
+
+describe("the book and the tape the account's stream pushes (feat/paper-live p2b)", () => {
+  /** a book as the account pushes one (service.ts tellMarket): the market's key, its levels, the stream's moment, whether a side goes on */
+  const pushed = (bids: number[][], asks: number[][], more = { bids: true, asks: true }, extra: Record<string, unknown> = {}) => ({ key: "paper-1:BTC/USD", venue: "paper-1", symbol: "BTC/USD", source: "kraken", bids, asks, at: new Date().toISOString(), from: "Kraken · live", depth: "full", more, live: true, ...extra });
+  const ladder = (n: number, from: number, dir: number) => Array.from({ length: n }, (_, i) => [from + dir * i, 1 + i]);
+  const books = (p: { asked: string[] }) => p.asked.filter((x) => x.startsWith("/api/account/book")).length;
+
+  it("draws the book the stream pushes in the next frame, and reads it only once in fifteen seconds while it comes — on the two-second beat again once it stops, or the stream says the market is not live", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = page(async () => ({ ok: true, book: BTC }), { stream: true });
+      p.sandbox.Date = Date;
+      const es = p.connect();
+      const { el, html } = panel();
+      p.fn("bkMount")(el, { venue: "paper-1", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 1, rows: 3 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(books(p)).toBe(1);
+      expect(html("[data-bk-asks]")).toContain("81,769");
+      // pushed, deep enough for the three rows a side: drawn as it came, the read's book gone from the ladder
+      es.say("book", pushed(ladder(3, 60001, -1), ladder(3, 60002, 1)));
+      expect(html("[data-bk-asks]")).toContain("60,002");
+      expect(html("[data-bk-asks]")).not.toContain("81,769");
+      expect(html("[data-bk-bids]")).toContain("60,001");
+      // twelve seconds of pushes four times a second: not one read more (the slow fallback is fifteen)
+      for (let i = 0; i < 48; i++) {
+        await vi.advanceTimersByTimeAsync(250);
+        es.say("book", pushed(ladder(3, 60001 + (i % 3), -1), ladder(3, 60002 + (i % 3), 1)));
+      }
+      expect(books(p)).toBe(1);
+      // past fifteen seconds since the last read: one, as a check — and its answer, read before the pushes since, is not drawn over them
+      for (let i = 0; i < 16; i++) {
+        await vi.advanceTimersByTimeAsync(250);
+        es.say("book", pushed(ladder(3, 60010, -1), ladder(3, 60011, 1)));
+      }
+      expect(books(p)).toBe(2);
+      expect(html("[data-bk-asks]")).toContain("60,011");
+      // the pushes stop: within the push's freshness and a beat, the reads are back every two seconds
+      await vi.advanceTimersByTimeAsync(7_000);
+      const n = books(p);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(books(p) - n).toBe(3);
+      expect(html("[data-bk-asks]")).toContain("81,769");
+      // the stream says the market is not live: read on the next beat, not after the push's freshness
+      es.say("book", pushed(ladder(3, 60001, -1), ladder(3, 60002, 1)));
+      const m = books(p);
+      es.say("book", { key: "paper-1:BTC/USD", venue: "paper-1", symbol: "BTC/USD", live: false });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(books(p) - m).toBe(1);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("draws a stream that sends only the nearest levels live, with the last read's deeper ones beyond them — never one of the read's inside the stream's — says so under the book, and keeps reading on the beat for the depth", async () => {
+    vi.useFakeTimers();
+    try {
+      const deep = { bids: ladder(12, 60000, -1), asks: ladder(12, 60003, 1), at: new Date().toISOString(), from: "Kraken", depth: "full", more: { bids: true, asks: true } };
+      const p = page(async () => ({ ok: true, book: deep }), { stream: true });
+      p.sandbox.Date = Date;
+      const es = p.connect();
+      const { el, html } = panel();
+      p.fn("bkMount")(el, { venue: "paper-1", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 1, rows: 9 });
+      await vi.advanceTimersByTimeAsync(0);
+      // Hyperliquid-like: five levels a side, and a better bid than the read had (60,001): the read's 60,000 … 59,996 are inside it and go
+      es.say("book", pushed(ladder(5, 60001, -1), ladder(5, 60002, 1)));
+      const bids = [...html("[data-bk-bids]").matchAll(/data-bk-px="(\d+)"/g)].map((m) => Number(m[1]));
+      expect(bids).toEqual([60001, 60000, 59999, 59998, 59997, 59996, 59995, 59994, 59993]);
+      const asks = [...html("[data-bk-asks]").matchAll(/data-bk-px="(\d+)"/g)].map((m) => Number(m[1]));
+      // the offers drawn worst first: the stream's five (60,002 … 60,006), then the read's from 60,007 out
+      expect(asks).toEqual([60010, 60009, 60008, 60007, 60006, 60005, 60004, 60003, 60002]);
+      // the stream's own sizes for its five, the read's beyond (the read's 60,003 ask is 1; the stream's 60,003 is 2)
+      expect(html("[data-bk-asks]")).toMatch(/data-k="ask:60003"[^>]*>.*?<span class="bk-s">2<\/span>/);
+      expect(html("[data-bk-note]")).toMatch(/^Nearest 5 live · the rest as read at \d\d:\d\d:\d\d$/);
+      // the depth comes from the reads: they keep their two-second beat while the stream sends five
+      const n = books(p);
+      for (let i = 0; i < 16; i++) {
+        await vi.advanceTimersByTimeAsync(250);
+        es.say("book", pushed(ladder(5, 60001, -1), ladder(5, 60002, 1)));
+      }
+      expect(books(p) - n).toBe(2);
+      // the pure part: a side the stream sends as deep as needed, or whole, is the stream's alone
+      const c = p.fn<{ bids: number[][]; asks: number[][]; stitched?: unknown; short?: boolean; more: Record<string, boolean> }>("bkCompose");
+      const whole = c({ bids: [[10, 1]], asks: [[11, 1]], more: { bids: false, asks: false } }, deep, 9);
+      expect([whole.bids, whole.asks, whole.stitched, whole.short]).toEqual([[[10, 1]], [[11, 1]], undefined, undefined]);
+      expect(c(pushed(ladder(9, 60001, -1), ladder(9, 60002, 1)), deep, 9).stitched).toBeUndefined();
+      // shallow, with no read to lay beyond it: the stream's levels, said short (the reads keep their beat), nothing stitched
+      const alone = c(pushed(ladder(2, 60001, -1), ladder(2, 60002, 1)), null, 9);
+      expect([alone.bids.length, alone.short, alone.stitched, alone.more.bids]).toEqual([2, true, undefined, true]);
+      // a read of the best bid and ask only adds nothing
+      expect(c(pushed(ladder(2, 60001, -1), ladder(2, 60002, 1)), { ...deep, depth: "top" }, 9).bids).toHaveLength(2);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flashes a level the stream changed softer, and at most once in its 800 ms — the row keeps its flash's name through the draws within it, so the flash runs whole", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = page(async () => ({ ok: true, book: BTC }), { stream: true });
+      p.sandbox.Date = Date;
+      const es = p.connect();
+      const { el, html } = panel();
+      const classes = new Set<string>();
+      const root = { classList: { toggle: (c: string, on: boolean) => void (on ? classes.add(c) : classes.delete(c)) }, style: { setProperty() {} }, clientHeight: 0 };
+      const q0 = el.querySelector.bind(el);
+      el.querySelector = (sel: string) => (sel === ".bk" ? root : q0(sel)) as never;
+      p.fn("bkMount")(el, { venue: "paper-1", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 1, rows: 3 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(classes.has("bk-live")).toBe(false);
+      const at = (size: number) => pushed(ladder(3, 60001, -1), [[60002, size], [60003, 2], [60004, 3]]);
+      es.say("book", at(1));
+      expect(classes.has("bk-live")).toBe(true);
+      const best = () => /class="bk-row bk-ask( bk-f[ab])?" role="button" tabindex="-1" data-k="ask:60002"/.exec(html("[data-bk-asks]"))?.[1]?.trim() ?? "";
+      // the best ask's size changes on every push, four times a second: it flashes, keeps that flash 800 ms, then flashes again
+      const seen: string[] = [];
+      for (let i = 2; i <= 9; i++) {
+        await vi.advanceTimersByTimeAsync(250);
+        es.say("book", at(i));
+        seen.push(best());
+      }
+      // a flash at 250 ms, held on the draws at 500, 750 and 1000 (within its 800 ms); the next at 1,250, under the other name, held as long
+      expect(seen).toEqual(["bk-fa", "bk-fa", "bk-fa", "bk-fa", "bk-fb", "bk-fb", "bk-fb", "bk-fb"]);
+      // a level that did not change keeps no flash
+      expect(html("[data-bk-asks]")).toMatch(/class="bk-row bk-ask" role="button" tabindex="-1" data-k="ask:60003"/);
+      // softer, and none at all under reduced motion
+      const css = readFileSync(`${UI}book.css`, "utf8");
+      expect(css).toMatch(/\.bk\.bk-live \.bk-fa::after \{ animation-name: bk-flash-live-a; \}/);
+      expect(css).toMatch(/@keyframes bk-flash-live-a \{ 0% \{ opacity: 0; \} 20% \{ opacity: \.35; \} 100% \{ opacity: 0; \} \}/);
+      expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.bk\.bk-live \.bk-fa::after, \.bk\.bk-live \.bk-fb::after \{ animation: none; \}/);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lays the pushed trades and the trades read into one tape — each trade once, newest first, its own time — each row keyed by the trade itself, so a new trade is a row put in at the top", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = (s: number, price: number, side = "buy") => ({ price, size: 0.5, side, at: new Date(Date.parse("2026-10-16T12:00:00.000Z") + s * 1000).toISOString() });
+      let read = [t(2, 60002), t(1, 60001), t(0, 60000)];
+      const p = page(async (path) => (path.startsWith("/api/account/trades") ? { ok: true, trades: read } : { ok: true, book: BTC }), { stream: true });
+      p.sandbox.Date = Date;
+      const es = p.connect();
+      const { el, html, fire } = panel();
+      p.fn("bkMount")(el, { venue: "paper-1", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 1 });
+      fire("click", { target: { closest: (sel: string) => (sel === "[data-bk-tab]" ? { dataset: { bkTab: "trades" } } : null) } });
+      await vi.advanceTimersByTimeAsync(0);
+      const keys = () => [...html("[data-bk-tape]").matchAll(/data-k="t:(\d+)\|/g)].map((m) => (Number(m[1]) - Date.parse("2026-10-16T12:00:00.000Z")) / 1000);
+      expect(keys()).toEqual([2, 1, 0]);
+      // pushed: the hub's newest, overlapping the read's — each trade once
+      es.say("trades", { key: "paper-1:BTC/USD", venue: "paper-1", symbol: "BTC/USD", trades: [t(4, 60004), t(3, 60003, "sell"), t(2, 60002)], live: true });
+      expect(keys()).toEqual([4, 3, 2, 1, 0]);
+      expect(html("[data-bk-tape]")).toContain(`<span class="bk-t">${p.fn<string>("bkClock")(t(4, 0).at)}</span>`);
+      // a read while the pushes come — once in fifteen seconds, not on its four-second beat — is laid into the same tape
+      read = [t(3, 60003, "sell"), t(2, 60002), t(1, 60001)];
+      const reads = () => p.asked.filter((x) => x.startsWith("/api/account/trades")).length;
+      const n = reads();
+      for (let i = 0; i < 16; i++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        es.say("trades", { key: "paper-1:BTC/USD", venue: "paper-1", symbol: "BTC/USD", trades: [t(4, 60004), t(3, 60003, "sell"), t(2, 60002)], live: true });
+      }
+      expect(reads() - n).toBe(1);
+      es.say("trades", { key: "paper-1:BTC/USD", venue: "paper-1", symbol: "BTC/USD", trades: [t(5, 60005), t(4, 60004)], live: true });
+      expect(keys()).toEqual([5, 4, 3, 2, 1, 0]);
+      // the pure part: two trades alike in one list are two; a trade in both lists is one; newest first, the first list's order among ties
+      const m = p.fn<Array<{ price: number }>>("bkMergeTrades");
+      expect(m([t(1, 10), t(1, 10)], [t(1, 10)], 30)).toHaveLength(2);
+      expect(m([t(1, 10, "sell"), t(1, 11)], [t(2, 12)], 30).map((x) => x.price)).toEqual([12, 10, 11]);
+      expect(m([t(1, 10)], [t(1, 10)], 30)).toHaveLength(1);
+      expect(m(Array.from({ length: 40 }, (_, i) => t(i, i + 1)), [], 30).map((x) => x.price).slice(0, 2)).toEqual([40, 39]);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes back to its reads at once when the stream is no longer connected", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = page(async () => ({ ok: true, book: BTC }), { stream: true });
+      p.sandbox.Date = Date;
+      const es = p.connect();
+      const { el } = panel();
+      p.fn("bkMount")(el, { venue: "paper-1", symbol: "BTC/USD", kind: "spot", quote: "USD", priceStep: 1, rows: 3 });
+      await vi.advanceTimersByTimeAsync(0);
+      es.say("book", pushed(ladder(3, 60001, -1), ladder(3, 60002, 1)));
+      expect(p.run<WeakMap<object, { heard: { book: number } }>>("BK").get(el)!.heard.book).toBeGreaterThan(0);
+      es.fail();
+      expect(p.run<WeakMap<object, { heard: { book: number } }>>("BK").get(el)!.heard.book).toBe(0);
+      const n = books(p);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(books(p) - n).toBe(1);
+      p.fn("bkRelease")(el);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the book is one tab stop, its levels reached by the arrow keys (feat/paper-live phase 4)", () => {
+  afterEach(() => {
+    for (const m of mounted.splice(0)) m.release();
+  });
+
+  it("draws no level as a tab stop and the ladder as one; ↑ from the ladder goes to the best ask, ↓ to the best bid, ↑ ↓ Home End between levels, Enter takes a level's price", async () => {
+    const p = page(async () => ({ ok: true, book: { bids: [[100, 1], [99, 2]], asks: [[101, 1], [102, 2]], at: new Date().toISOString() } }));
+    const { el, html, fire } = panel();
+    const prices: number[] = [];
+    p.fn("bkMount")(el, { venue: "ex", symbol: "X/USD", kind: "spot", quote: "USD", priceStep: 1, onPrice: (x: number) => prices.push(x) });
+    mounted.push({ release: () => p.fn("bkRelease")(el) });
+    await settle();
+    await settle();
+    expect(html("[data-bk-asks]")).toContain('role="button" tabindex="-1"');
+    expect(html("[data-bk-asks]")).not.toContain('tabindex="0"');
+    expect(el.innerHTML).toContain('<div class="bk-ladder" tabindex="0" role="group" aria-label="Order book: the arrow keys move from level to level, Enter takes a level\'s price as the limit">');
+    // the ladder as the keys find it: the asks drawn worst first (102, 101), then the bids best first (100, 99)
+    let focused = "";
+    const row = (px: string) => ({ dataset: { bkPx: px }, focus: () => (focused = px), closest: (sel: string) => (sel === ".bk-ladder" ? ladder : sel === "[data-bk-px]" ? row(px) : null) });
+    const rows = ["102", "101", "100", "99"].map(row);
+    const ladder: Record<string, unknown> = { querySelectorAll: (sel: string) => (sel === ".bk-asks [data-bk-px]" ? rows.slice(0, 2) : rows), closest: (sel: string) => (sel === ".bk-ladder" ? ladder : null) };
+    const key = (target: unknown, k: string) => fire("keydown", { key: k, target, preventDefault() {} });
+    key(ladder, "ArrowUp");
+    expect(focused).toBe("101");
+    key(ladder, "ArrowDown");
+    expect(focused).toBe("100");
+    key(rows[2], "ArrowDown");
+    expect(focused).toBe("99");
+    key(rows[3], "ArrowDown");
+    expect(focused).toBe("99");
+    key(rows[3], "Home");
+    expect(focused).toBe("102");
+    key(rows[0], "End");
+    expect(focused).toBe("99");
+    key(rows[1], "ArrowUp");
+    expect(focused).toBe("102");
+    // Enter on a level: its price to the ticket
+    fire("keydown", { key: "Enter", target: { dataset: { bkPx: "101" }, closest: (sel: string) => (sel === "[data-bk-px]" ? { dataset: { bkPx: "101" } } : null) }, preventDefault() {} });
+    expect(prices).toEqual([101]);
+    // the stylesheet rings the ladder when the keys are on it
+    expect(readFileSync(`${UI}book.css`, "utf8")).toContain(".bk-ladder:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -1px; }");
   });
 });
