@@ -136,19 +136,36 @@
  *                       account pays its contracts out by it (paper.ts). A SEARCH at Polymarket reaches its whole list through Gamma's
  *                       GET /public-search?q= (events_status=active), beside the twenty busiest events kept
  *
- * PRICE HISTORY (`candles`), keyless too, the same reads the connected traders make (live-checked 2026-10-06 without a key):
- *   the exchanges       the library's fetchOHLCV: the latest bars since the start asked, at most 300, for a pair the exchange lists
+ * PRICE HISTORY (`candles`), keyless too, in bars of 1m, 5m, 15m, 1h, 4h, 1d and 1w, for a window (live/trade.ts CandleWindow: a chart's
+ * first view, at most HISTORY_MOST bars, or one page before the first bar it has), live-checked 2026-10-06 and 2026-10-17 without a key:
+ *   the exchanges       ONE VENUE FOR A WHOLE SERIES, with deep history (live/history-crypto.ts): Coinbase's pairs from Coinbase Exchange's
+ *                       own candles (BTC-USD back to 2015-07-20; a pair Coinbase trades on another product's book — its product's `alias`,
+ *                       ETH-USDC's ETH-USD — from that book, said so), OKX's from its history-candles (1Dutc, never the UTC+8 1D); a pair Kraken
+ *                       lists from the venue with deep history that trades it too — a dollar pair from Coinbase Exchange where its
+ *                       GET /products/{id} says "online" (a delisted product answers its candles 200 []), a USDT or USDC pair from OKX, each
+ *                       named on the page and in the chart's name for the bars — since Kraken's own OHLC keeps only its latest 720 bars
+ *                       and pages no further back (where that venue does not trade it, answers no recent bar of it, refuses or is held
+ *                       back, a first view is those 720, said why; a paper account judging the time it slept asks Kraken's own alone);
+ *                       any other exchange through the library's fetchOHLCV, page by page, for a pair it lists. A size a venue does not
+ *                       publish is folded from its finer bars, and a week from days wherever the venue's own weeks are not Monday's.
+ *                       Coinbase's and Kraken's histories are read apart from their listings (`historyApart`): a refusal of Coinbase
+ *                       Exchange or of OKX for a Kraken pair holds back that host's histories alone (hostHolds), never a listing, a book,
+ *                       the trades or a stream
  *   Kalshi              GET /trade-api/v2/markets/candlesticks?market_tickers=&start_ts=&end_ts=&period_interval= (1, 60 or 1440 minutes;
- *                       five-minute bars are five one-minute candles folded); the trades' prices, a candle with no trade left out, NO as
- *                       1 − YES
+ *                       5m and 15m bars are one-minute candles folded, 4h hourly ones, 1w daily ones from Monday); the trades' prices, a
+ *                       candle with no trade left out, NO as 1 − YES. It answers at most 10,000 candles a request, counted over the span
+ *                       asked, and no start of 0: a window one request does not hold is asked from the market's open (GET /markets/
+ *                       {ticker}) in spans of 9,999 periods, six at most (live/kalshi.ts kalshiSpans)
  *   Polymarket          GET gamma /markets/slug/{slug} for the outcome's token id (clobTokenIds, in the order of `outcomes`), then the
  *                       CLOB's GET clob.polymarket.com/prices-history?market=&startTs=&fidelity= — Polymarket's price at moments, folded
- *                       into bars, no volume
+ *                       into bars, no volume; never a startTs of 0, which it refuses (MAX asks from the first second)
  *   Polymarket US       GET gateway.polymarket.us/v1/price-history?symbol=<market slug>&fixedInterval=&fidelity= (its fixed profiles: five-
  *                       minute points for a day, three-hour points for a week or a month): its "book-derived Yes and No display prices",
  *                       longPrice from the best ask and shortPrice from one minus the best bid — not trades — folded into bars, no volume
- *   Hyperliquid         POST /info {"type":"candleSnapshot","req":{coin,interval,startTime,endTime}}: its bars of 5m, 1h or 1d, at most 300;
- *                       a HIP-3 market by its dex-prefixed coin ("io:ANTH" answers its bars; the bare "ANTH" HTTP 500, live 2026-10-08)
+ *   Hyperliquid         POST /info {"type":"candleSnapshot","req":{coin,interval,startTime,endTime}} (live/history-crypto.ts): everything in
+ *                       the window from its latest 5,000 bars at that size, the bars with no trade (its daily backfill before 2023-02-26)
+ *                       left out, a range its 5,000 do not reach drawn in a coarser size, and where its history ends said; a HIP-3
+ *                       market by its dex-prefixed coin ("io:ANTH" answers its bars; the bare "ANTH" HTTP 500, live 2026-10-08)
  *   Stock Tokens        none: Robinhood publishes no history for them
  *
  * ORDER BOOKS (`book`) AND THE LATEST TRADES (`trades`), keyless, each read checked live without a key on 2026-10-14. A book is the source's
@@ -196,12 +213,16 @@ import { no } from "../refuse.ts";
 import { categoryOf, isExcludedCategory, isIpoCategory, KALSHI_SERIES, normalWords } from "./categories.ts";
 import { exchangeSaidNo, openExchange, type ExchangeClient, type OpenExchange } from "./exchange.ts";
 import { PMUS_CATEGORIES, PMUS_GATEWAY, PMUS_PER_CATEGORY, pmusBusiest, pmusCandles, pmusLegs, pmusSearch, type PmusGet } from "./polymarket-us.ts";
+import { kalshiPage, kalshiSpans, PERIOD_MIN } from "./kalshi.ts";
 import { impliedUsd, PRE_IPO_NAMES, preIpoOf, type PreIpoMark } from "./preipo.ts";
 import { keylessExchange, PUBLIC_EXCHANGES } from "./prices.ts";
 import { ondoStocksPublic, xstocksPublic } from "./public-rwa.ts";
 import { usStocksPublic } from "./public-stocks.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS, stockTokens } from "./robinhood.ts";
-import { CANDLE_INTERVALS, inDollars, type Candle, type CandleInterval, type Market, type MarketStats, type OrderBook, type PublicTrade, type SessionClock } from "./trade.ts";
+import type { MarketHub } from "./stream-hub.ts";
+import { COINBASE_EXCHANGE_NAME, coinbaseHistory, coinbaseOnline, coinbaseProduct, hyperliquidHistory, libraryHistory, libraryNative, MONDAY_WEEKS, okxHistory, okxInstrument, PAGE_MS, type HistoryHttp } from "./history-crypto.ts";
+import { badWindow, barStart, foldBars, historyKeep, hostLane, INTERVAL_WORDS, keepMsOf, limitOf, pageWeight, windowKey, type HistoryHost, type Pace } from "./history.ts";
+import { INTERVAL_MS, inDollars, type Candle, type CandleInterval, type CandlePage, type CandleWindow, type Market, type MarketStats, type OrderBook, type PublicTrade, type SessionClock } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeWords, isStable, notTheApi, notTheApiWords, rateLimitedNo, realHttp, redirectedNo, REGION, unreachable, type Http, type HttpReply } from "./types.ts";
 
 /** a market as a public source lists it: the shared shape, and what only a listing carries */
@@ -254,12 +275,20 @@ export interface PublicSource {
   /** why nothing is traded through this listing itself, when nothing is (Stock Tokens: they trade from a connected wallet's own rows) */
   readOnly?: string | undefined;
   listings(o: ListingsQuery): Promise<Listing[] | Refusal>;
+  /** ONE MARKET'S LINE asked alone, by its own symbol, where the source can answer one market without a search — the US stocks line: one GET
+   * of Cboe at most, where a search of a short ticker reads forty (public-stocks.ts) — or null where it lists no such market now. A paper
+   * account prices a market it knows by it (live/paper.ts Pricer.find) */
+  line?(symbol: string): Promise<Listing | null | Refusal>;
+  /** the source's own reader of the markets someone is looking at now, in the venues' streams' shape (the US stocks line's background
+   * reader: live/us-quotes.ts UsQuoteFeed) — a hub the service joins with the venues' streams (stream-hub.ts joinHubs) */
+  feed?: MarketHub | undefined;
   /** the last 24 hours of the markets named (absent: the well-known ones), by symbol */
   stats?(symbols?: string[]): Promise<Map<string, MarketStats> | Refusal>;
   /** event contracts, each with its question (`group`), close time and category, busiest first */
   events?(o: EventsQuery): Promise<Listing[] | Refusal>;
-  /** one market's price history since `sinceMs`, oldest first: `symbol` as its listing names it */
-  candles?(symbol: string, interval: CandleInterval, sinceMs: number): Promise<Candle[] | Refusal>;
+  /** one market's price history in a window (live/trade.ts CandleWindow), oldest first: `symbol` as its listing names it. A page that says
+   * whether older bars exist and where the history ends (CandlePage), or a plain list where the source says nothing of it */
+  candles?(symbol: string, interval: CandleInterval, window: CandleWindow): Promise<Candle[] | CandlePage | Refusal>;
   /** one market's order book, `depth` levels a side at most (1 to 50), best first: `symbol` as its listing names it (see the top of this
    * file). A source that publishes no book has none */
   book?(symbol: string, depth: number): Promise<OrderBook | Refusal>;
@@ -292,14 +321,17 @@ export interface PublicDeps {
   clock?: (() => number) | undefined;
   /** how long one request may take, in milliseconds (8000) */
   timeoutMs?: number | undefined;
+  /** the line a price history's pages wait in, by host (live/history.ts: absent, the process's own line for each host, at its rate limit) */
+  pace?: Pace | undefined;
 }
 
 /** the only hosts a public source's own GETs go to (Hyperliquid's info endpoint, a POST, has its own guard: hyperliquidInfo): the event
- * venues, Robinhood's, Cboe's delayed-quote CDN, xStocks' and LI.FI's (public-stocks.ts, public-rwa.ts), then the eight pre-IPO perpetuals'
+ * venues, Robinhood's, Cboe's delayed-quote CDN, xStocks' and LI.FI's (public-stocks.ts, public-rwa.ts), Coinbase Exchange's, for a pair's
+ * long price history only (live/history-crypto.ts), then the eight pre-IPO perpetuals'
  * venues (Binance's USDⓈ-M futures host and Bybit's v5 host the last two; Gate's host serves the xStocks tickers too), then the US stocks'
  * real-time quotes and charts (Nasdaq's, us-quotes.ts). Polymarket's Data API (beside its CLOB) is asked for its latest trades only, keyless.
  * Polymarket US's public gateway is its keyless market data only: its signed API (api.polymarket.us) is never asked from here */
-export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "data-api.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "api.nasdaq.com", "cdn-api.cboe.com", "api.xstocks.fi", "li.quest", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
+export const PUBLIC_HOSTS: readonly string[] = ["external-api.kalshi.com", "gamma-api.polymarket.com", "clob.polymarket.com", "data-api.polymarket.com", "gateway.polymarket.us", "api.robinhood.com", "api.nasdaq.com", "cdn-api.cboe.com", "api.xstocks.fi", "li.quest", "api.exchange.coinbase.com", "www.okx.com", "api.gateio.ws", "futures.kraken.com", "www.deribit.com", "api-futures.kucoin.com", "contract.mexc.com", "fapi.binance.com", "api.bybit.com"];
 const KALSHI = "https://external-api.kalshi.com/trade-api/v2";
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
@@ -310,11 +342,8 @@ export const KEEP_MS = 90_000;
 const PRICE_MS = 60_000;
 /** a venue's list of what it trades changes rarely: a pre-IPO venue's instrument list is kept ten minutes, like the Stock Token list */
 export const LIST_MS = 600_000;
-/** price history is kept a minute */
+/** price history is kept a minute (an event market's: the exchanges' and Hyperliquid's are kept by their window, live/history.ts keepMsOf) */
 const HISTORY_MS = 60_000;
-/** the most bars one history reads */
-const BARS = 300;
-const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
 const TIMEOUT_MS = 8_000;
 /** the longest a sentence under the list may be */
 export const NOTE_MAX = 160;
@@ -388,6 +417,39 @@ export function fixedHosts(http: Http, hosts: readonly string[], timeoutMs: numb
   };
 }
 
+/** THE HOSTS A PRICE HISTORY IS READ AT APART FROM A SOURCE'S LISTINGS — Coinbase Exchange beside Coinbase's api.coinbase.com, and Coinbase
+ * Exchange and OKX for a Kraken pair (exchangeTickers): a refusal there that says the host cannot be asked just now (holdBackMs: its place
+ * rule ten minutes, a 429 a minute, no answer twenty seconds) holds back the histories asked of that host alone, for as long, in every source
+ * that asks it over the same network (the service's: one for the process) — never a source's listings, book, trades or stream, and never
+ * the venue that borrowed the bars. Lengthened only, as every hold here */
+interface HostHolds {
+  heldOf(host: HistoryHost): Refusal | undefined;
+  /** `got` passed on, its refusal held where it holds back */
+  hold<T>(host: HistoryHost, got: T | Refusal): T | Refusal;
+  clear(host: HistoryHost): void;
+}
+const HOST_HOLDS = new WeakMap<Http, Map<HistoryHost, { until: number; r: Refusal }>>();
+function hostHolds(deps: PublicDeps): HostHolds {
+  const net = deps.http ?? realHttp;
+  let held = HOST_HOLDS.get(net);
+  if (!held) HOST_HOLDS.set(net, (held = new Map()));
+  const map = held;
+  const clock = deps.clock ?? Date.now;
+  return {
+    heldOf: (host) => {
+      const x = map.get(host);
+      return x && clock() < x.until ? x.r : undefined;
+    },
+    hold: (host, got) => {
+      const ms = isRefusal(got) ? holdBackMs(got) : 0;
+      const was = map.get(host);
+      if (isRefusal(got) && ms > 0 && (!was || clock() >= was.until || clock() + ms > was.until)) map.set(host, { until: clock() + ms, r: got });
+      return got;
+    },
+    clear: (host) => void map.delete(host),
+  };
+}
+
 /** what a venue answered, on one line and cut at 220 characters — never inside the sentence it gave in its JSON, which runs to its end (up
  * to 600): Binance's 451 sentence ends past 220, "…if you believe you received this message in error.", and stays whole */
 function saidOf(text: string): string {
@@ -449,8 +511,43 @@ export function holdBackMs(r: Refusal, now: number = Date.now()): number {
   return 0;
 }
 
+/** WHEN A SOURCE'S ANSWER WAS READ FROM ITS VENUE. A listing that carries no time of its own (an exchange's ticker, Hyperliquid's mid, an
+ * event contract's price) is as old as the moment its venue answered, and every keeper here hands the same answer out for a while after
+ * that: whoever prices with it (the paper account, live/paper.ts) needs that moment, never the moment it was handed the kept answer. So
+ * each answer a keeper takes is stamped with the moment it came back — the answer itself and what is in it, objects and lists, as far down
+ * as READ_STAMP_DEPTH and READ_STAMP_MOST things — in a weak map beside it: nothing is added to the answer, and nothing is kept once the
+ * answer is let go. A listing built afresh from a kept answer (a Kalshi leg from its event's market) takes the stamp of what it was built
+ * from (readLike). Read with readAtOf */
+const READ_AT = new WeakMap<object, number>();
+const READ_STAMP_DEPTH = 6;
+const READ_STAMP_MOST = 50_000;
+/** the moment `x` was read from its venue (ms), where it was stamped: a kept answer, something in one, or a listing built from one */
+export const readAtOf = (x: unknown): number | undefined => (x !== null && typeof x === "object" ? READ_AT.get(x) : undefined);
+/** `answer` and what is in it stamped as read at `at`; something stamped already keeps its own (an older answer's part, handed on) */
+function stampRead(answer: unknown, at: number): void {
+  let left = READ_STAMP_MOST;
+  const walk = (x: unknown, depth: number): void => {
+    if (x === null || typeof x !== "object" || left <= 0 || READ_AT.has(x)) return;
+    left--;
+    READ_AT.set(x, at);
+    if (depth >= READ_STAMP_DEPTH) return;
+    for (const v of Array.isArray(x) ? x : Object.values(x as Record<string, unknown>)) if (v !== null && typeof v === "object") walk(v, depth + 1);
+  };
+  walk(answer, 0);
+}
+/** `x` (a listing, or each one of a list) stamped as read when the oldest of `from` was — each a moment (ms) or something stamped: a listing
+ * built from several answers is as old as the oldest of them. Nothing stamped where none of `from` says when. Returns `x` */
+export function readLike<T>(x: T, ...from: unknown[]): T {
+  const times = from.map((f) => (typeof f === "number" ? f : readAtOf(f))).filter((t): t is number => typeof t === "number" && Number.isFinite(t));
+  if (!times.length) return x;
+  const at = Math.min(...times);
+  for (const one of Array.isArray(x) ? x : [x]) if (one !== null && typeof one === "object") READ_AT.set(one, at);
+  return x;
+}
+
 /** an answer kept for `ms` from when it was asked (or for what `ms` says of the answer: until it has come, it is waited for up to KEEP_MS),
- * and one asked only once while it is on its way; a refusal is kept for holdBackMs (which is nothing for most), a throw is not kept */
+ * and one asked only once while it is on its way; a refusal is kept for holdBackMs (which is nothing for most), a throw is not kept. What it
+ * takes is stamped with the moment it came back (stampRead) */
 /** a keeper's answers, and `clear()`: the refusals it holds let go of, so the next ask asks the venue (a forced re-check that found the
  * venue answering this network: the place rule or edge it held was the network the user left) */
 export type Kept<T> = ((key: string, run: () => Promise<T | Refusal>) => Promise<T | Refusal>) & { clear(): void };
@@ -463,6 +560,7 @@ export function keeper<T>(clock: () => number, ms: number | ((answer: T) => numb
     const entry: { until: number; p: Promise<T | Refusal>; held?: boolean } = { until: now + (typeof ms === "number" ? ms : KEEP_MS), p: Promise.resolve() as unknown as Promise<T | Refusal> };
     entry.p = run().then(
       (r) => {
+        if (!isRefusal(r)) stampRead(r, clock());
         if (kept.get(key) !== entry) return r;
         if (isRefusal(r)) {
           const hold = holdBackMs(r);
@@ -504,18 +602,23 @@ export function getter(get: Http, venue: string, name: string, clock: () => numb
   return Object.assign(got, { clear: keep.clear });
 }
 
-/** a history's interval and start, held to what a public source takes: one of the three intervals, a start before now */
-function badHistory(venue: string, interval: string, sinceMs: number, now: number): Refusal | undefined {
-  if (!(CANDLE_INTERVALS as readonly string[]).includes(interval)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: `price history comes in bars of ${CANDLE_INTERVALS.join(", ")}, not "${String(interval).slice(0, 12)}"` });
-  if (!(Number.isFinite(sinceMs) && sinceMs >= 0 && sinceMs < now)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: "price history starts before now" });
-  return undefined;
+/** a history's interval and window, held to what a public source takes (live/history.ts badWindow): one of the bar sizes, a start before now */
+export function badHistory(venue: string, interval: string, w: CandleWindow, now: number): Refusal | undefined {
+  const why = badWindow(interval, w, now);
+  return why ? no("E_ACCOUNT_BAD_ACTION", { venue, message: why }) : undefined;
 }
 
-/** prices at moments (`t` in seconds) folded into bars of `step` ms: open and close the first and last, high and low the extremes */
-function foldPoints(points: Array<{ t: number; p: number }>, step: number): Candle[] {
+/** where an event market's history starts, for a window that names no start (one page before a chart's first bar): that many bars before
+ * its end — and never before the first second: Polymarket answers a startTs of 0 HTTP 400 "the time component is mandatory" (live
+ * 2026-10-17), which is what MAX would ask */
+export const startOf = (interval: CandleInterval, w: CandleWindow, now: number): number => Math.max(1_000, w.since ?? (w.until ?? now) - Math.min(w.limit ?? 300, 1_000) * INTERVAL_MS[interval]);
+
+/** prices at moments (`t` in seconds) folded into bars of `interval` (live/history.ts barStart: a week from Monday): open and close the
+ * first and last, high and low the extremes */
+export function foldPoints(points: Array<{ t: number; p: number }>, interval: CandleInterval): Candle[] {
   const bars = new Map<number, Candle>();
   for (const { t, p } of [...points].sort((a, b) => a.t - b.t)) {
-    const at = Math.floor((t * 1000) / step) * step;
+    const at = barStart(t * 1000, interval);
     const b = bars.get(at);
     if (!b) bars.set(at, { t: at, o: p, h: p, l: p, c: p });
     else {
@@ -706,7 +809,13 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
   const open = deps.open ?? openExchange;
   const clock = deps.clock ?? Date.now;
   const keep = keeper<Listing[]>(clock, KEEP_MS);
-  const history = keeper<Candle[]>(clock, HISTORY_MS);
+  // a price history's answers, kept by their window, a few dozen at most and bounded by their bars (live/history.ts)
+  const history = historyKeep<Candle[] | CandlePage>({ entries: 32, most: 60_000, weigh: pageWeight, clock });
+  const hist: HistoryHttp = { http: fixedHosts(deps.http ?? realHttp, PUBLIC_HOSTS, PAGE_MS), pace: deps.pace ?? hostLane, clock };
+  // the history hosts apart from the listings, held back apart from them (hostHolds); and whether Coinbase Exchange trades a product a
+  // Kraken pair would be charted from, kept ten minutes
+  const hosts = hostHolds(deps);
+  const online = keeper<"online" | "offline" | "unlisted">(clock, LIST_MS);
   const books = keeper<OrderBook>(clock, BOOK_MS);
   const tape = keeper<PublicTrade[]>(clock, TRADES_MS);
   // the library keeps a failed load of the markets and answers it again: after a failure they are loaded afresh
@@ -787,11 +896,16 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
       history.clear();
       books.clear();
       tape.clear();
+      online.clear();
       held = undefined;
+      if (id === "coinbase" || id === "okx") hosts.clear(id);
     },
     kind: "exchange",
     connectTo: id,
     connector: `live:exchange:${id}`,
+    // Coinbase's history is Coinbase Exchange's (api.exchange.coinbase.com), its listings api.coinbase.com's; a Kraken pair's is charted from
+    // Coinbase Exchange or OKX: a refusal of the history holds back the history alone (the service's read cache, and hostHolds here)
+    ...(id === "coinbase" || id === "kraken" ? { historyApart: true as const } : {}),
     async listings(o) {
       const got = await read(undefined, o.q);
       if (isRefusal(got)) return got;
@@ -802,32 +916,42 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
       if (isRefusal(got)) return got;
       return new Map(got.map((m) => [m.symbol, { price: m.price, changePct24h: m.changePct24h, change24h: m.change24h, volumeUsd24h: m.volumeUsd24h }]));
     },
-    /** fetchOHLCV, keyless: only for a pair the exchange lists (the library is asked for nothing it has not listed), at most 300 bars, the
-     * volume in the coin (a spot market's) */
-    candles: (symbol, interval, sinceMs) => {
+    /** a pair's price history, keyless (see the top of this file): only for a pair the exchange lists priced in dollars (the library is
+     * asked for nothing it has not listed). Coinbase's from Coinbase Exchange, OKX's from OKX's history-candles, Kraken's from the venue with
+     * deep history that trades the pair (krakenHistory: its own latest 720 where none does, and always where its own bars alone are asked),
+     * any other exchange's through the library, page by page; the volume in the coin (a spot market's) */
+    candles: (symbol, interval, w) => {
       const back = heldBack();
-      return back ? Promise.resolve(back) : history(`${symbol}|${interval}|${Math.floor(sinceMs / 60_000)}`, async () => {
-        const bad = badHistory(id, interval, sinceMs, clock());
+      return back ? Promise.resolve(back) : history.get(`${symbol}|${windowKey(interval, w)}`, keepMsOf(interval, w), async () => {
+        const bad = badHistory(id, interval, w, clock());
         if (bad) return bad;
         try {
           const x = await keylessSpot(id, open);
           if (!x) return no("E_WALLET_UNKNOWN_VENUE", { venue: id, message: `the exchange library knows no exchange called "${id}"` });
           await x.loadMarkets?.(reload);
           reload = false;
-          if (!x.fetchOHLCV) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} has no price history the library can read` });
-          const m = x.markets?.[symbol] as CcxtMarket | undefined;
+          const m = x.markets?.[symbol] as (CcxtMarket & { id?: unknown }) | undefined;
           if (!m || m.spot === false || !inDollars(str(m.quote) ?? "")) return no("E_VENUE_REJECTED", { venue: id, message: `${name} lists no market ${symbol.slice(0, 40)} priced in dollars` });
-          if (x.timeframes !== undefined && rec(x.timeframes)[interval] === undefined) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} keeps no ${interval} bars` });
-          const from = Math.max(Math.floor(sinceMs), clock() - BARS * BAR_MS[interval]);
-          const rows = await x.fetchOHLCV(symbol, interval, from, BARS);
-          const bars = new Map<number, Candle>();
-          for (const r of Array.isArray(rows) ? rows : []) {
-            if (!Array.isArray(r)) continue;
-            const [t, o, h, l, c, v] = [fin(r[0]), pos(r[1]), pos(r[2]), pos(r[3]), pos(r[4]), nonNeg(r[5])];
-            if (t === undefined || t < from || o === undefined || h === undefined || l === undefined || c === undefined) continue;
-            bars.set(t, { t, o, h, l, c, ...(v !== undefined ? { v } : {}) });
+          const base = (str(m.base) ?? symbol.split("/")[0]!).toUpperCase();
+          const quote = (str(m.quote) ?? "").toUpperCase();
+          // the venue's own name for the market where the library carries it (Coinbase's BTC-USD, OKX's BTC-USDT), else built from the pair
+          const own = typeof m.id === "string" && /^[A-Z0-9]{1,20}-[A-Z0-9]{1,10}$/.test(m.id) ? m.id : undefined;
+          if (id === "coinbase") {
+            // a pair Coinbase trades on another product's book says so (its Advanced Trade product's `alias`: ETH-USDC is ETH-USD's,
+            // live 2026-10-17; Coinbase Exchange lists ETH-USDC as delisted, its bars ending in 2023): that book's history is the pair's
+            const alias = str(rec(rec(m).info).alias)?.toUpperCase();
+            const product = alias && /^[A-Z0-9]{1,20}-[A-Z0-9]{1,10}$/.test(alias) ? alias : (own ?? coinbaseProduct(`${base}/${quote}`)!);
+            // Coinbase Exchange's refusal holds back the history from it alone: the listings, the book and the trades are api.coinbase.com's
+            const got = hosts.heldOf("coinbase") ?? hosts.hold("coinbase", await coinbaseHistory(hist, id, product, interval, w));
+            return !isRefusal(got) && product !== own && alias ? { ...got, note: `Coinbase trades ${symbol} on its ${alias} book: the history is that book's` } : got;
           }
-          return [...bars.values()].sort((a, b) => a.t - b.t);
+          if (id === "okx") return hold(hosts.hold("okx", await okxHistory(hist, id, own ?? okxInstrument(`${base}/${quote}`)!, interval, w)));
+          if (id === "kraken") return krakenHistory(x, symbol, base, quote, interval, w);
+          if (!x.fetchOHLCV) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} has no price history the library can read` });
+          const native = libraryNative(x as ExchangeClient & { fetchOHLCV: NonNullable<ExchangeClient["fetchOHLCV"]> }, interval, MONDAY_WEEKS.has(id));
+          if (!native) return no("E_VENUE_RAIL_CLOSED", { venue: id, message: `${name} keeps no ${interval} bars` });
+          const lib = { fetchOHLCV: (sym: string, tf: string, since: number, limit: number) => x.fetchOHLCV!(sym, tf, since, limit), timeframes: x.timeframes };
+          return hold(await libraryHistory(lib, { name, symbol, inCoin: true, pageBars: id === "binance" ? 1_000 : 300, clock, no: (err) => exchangeNo(id, name, err) }, interval, native, w));
         } catch (err) {
           reload = true;
           return hold(exchangeNo(id, name, err));
@@ -875,6 +999,44 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
       });
     },
   };
+  /** A KRAKEN PAIR'S HISTORY (see the top of this file). Kraken's own OHLC keeps only its latest 720 bars, so a chart is drawn from the venue
+   * with deep history that trades the pair — a dollar pair from Coinbase Exchange where it trades that product now (GET /products/{id}: a
+   * delisted product answers its candles empty, 200 [], ENJ-USD, GALA-USD and JUP-USD on 2026-10-17), a USDT or USDC pair from OKX — named
+   * on the page. A first view falls back to Kraken's own latest bars, said why, where that venue does not trade the pair, answers no bar of
+   * it near the window's end, refuses, or is held back; a page scrolled left stays with the venue of the series (one venue for a whole
+   * series: Kraken's own first view says where its 720 end, and is never paged). The other venue's refusal is its own: it holds back that
+   * host's histories (hostHolds), and is passed on scoped to it (`detail.scope`), so it holds back nothing of Kraken's. Where the venue's own
+   * bars alone are asked (CandleWindow.own: the paper account's time asleep), Kraken's own, always */
+  async function krakenHistory(x: ExchangeClient, symbol: string, base: string, quote: string, interval: CandleInterval, w: CandleWindow): Promise<CandlePage | Refusal> {
+    if (w.own) return krakenLatest(x, name, symbol, interval, w, clock());
+    const dollars = quote === "USD";
+    const host: HistoryHost = dollars ? "coinbase" : "okx";
+    const deepName = dollars ? COINBASE_EXCHANGE_NAME : "OKX";
+    const market = dollars ? `${base}-USD` : `${base}-${quote}`;
+    const page = w.since === undefined;
+    const scoped = (r: Refusal): Refusal => ({ ...r, detail: { ...(r.detail as Record<string, unknown> | undefined), scope: `${deepName}'s history` } });
+    const fallBack = (why: string): Promise<CandlePage | Refusal> => krakenLatest(x, name, symbol, interval, w, clock(), why);
+    const held = hosts.heldOf(host);
+    if (held) return page ? scoped(held) : fallBack(`${deepName} is not asked just now: ${held.message}`);
+    if (dollars) {
+      const trades = hosts.hold(host, await online(market, () => coinbaseOnline(hist, id, market)));
+      if (isRefusal(trades)) return page ? scoped(trades) : fallBack(`${deepName} did not say whether it trades ${market}: ${trades.message}`);
+      if (trades === "unlisted") return fallBack(`no venue with a longer history lists ${symbol}`);
+      if (trades === "offline") return fallBack(`${deepName} no longer trades ${market}`);
+    }
+    const deep = hosts.hold(host, dollars ? await coinbaseHistory(hist, id, market, interval, w) : await okxHistory(hist, id, market, interval, w));
+    if (isRefusal(deep)) {
+      if (deep.code === "E_VENUE_REJECTED" && !hosts.heldOf(host)) return fallBack(`no venue with a longer history lists ${symbol}`);
+      return page ? scoped(deep) : fallBack(`${deepName} did not answer: ${deep.message}`);
+    }
+    if (page) return deep;
+    // a first view whose deep venue has no bar of the pair near the window's end (a quiet product, a market gone quiet): Kraken's own
+    const end = Math.min(clock(), w.until ?? Number.POSITIVE_INFINITY);
+    const newest = deep.bars[deep.bars.length - 1]?.t;
+    if (newest === undefined || newest < end - 300 * INTERVAL_MS[interval]) return fallBack(`${deepName} has no recent ${market} bars`);
+    return deep;
+  }
+
   /** the keyless client, with its markets loaded, for a pair it lists priced in dollars; or why not. A load of the markets that fails is
    * loaded afresh next time (the library would answer the failure again) */
   async function pairAt(symbol: string): Promise<BookClient | Refusal> {
@@ -891,6 +1053,38 @@ export function exchangeTickers(id: string, deps: PublicDeps = {}): PublicSource
     if (!m || m.spot === false || !inDollars(str(m.quote) ?? "")) return no("E_VENUE_REJECTED", { venue: id, message: `${name} lists no market ${symbol.slice(0, 40)} priced in dollars` });
     return x;
   }
+}
+
+/** KRAKEN'S OWN LATEST BARS, where no venue with deep history charts the pair (krakenHistory, `why` says why) and where Kraken's own alone
+ * are asked: one fetchOHLCV with no start — Kraken answers its latest 720 bars whatever start is asked, and nothing older
+ * (history-sources.md) — a size it lacks folded from a finer one, and its week always from its days (its own 10080 starts on Thursday:
+ * libraryNative), Monday weeks. The bars in the window asked; the page says that Kraken's history ends at its first bar only where the window
+ * starts before it, and why the longer history was not drawn */
+async function krakenLatest(x: ExchangeClient, name: string, symbol: string, interval: CandleInterval, w: CandleWindow, now: number, why?: string): Promise<CandlePage | Refusal> {
+  if (!x.fetchOHLCV) return no("E_VENUE_RAIL_CLOSED", { venue: "kraken", message: `${name} has no price history the library can read` });
+  const native = libraryNative(x as ExchangeClient & { fetchOHLCV: NonNullable<ExchangeClient["fetchOHLCV"]> }, interval, MONDAY_WEEKS.has("kraken"));
+  if (!native) return no("E_VENUE_RAIL_CLOSED", { venue: "kraken", message: `${name} keeps no ${interval} bars` });
+  const rows = await x.fetchOHLCV(symbol, native, undefined, 720);
+  const all: Candle[] = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!Array.isArray(r)) continue;
+    const [t, o, h, l, c, v] = [fin(r[0]), pos(r[1]), pos(r[2]), pos(r[3]), pos(r[4]), nonNeg(r[5])];
+    if (t === undefined || o === undefined || h === undefined || l === undefined || c === undefined) continue;
+    all.push({ t, o, h, l, c, ...(v !== undefined ? { v } : {}) });
+  }
+  all.sort((a, b) => a.t - b.t);
+  const folded = native !== interval;
+  const G = INTERVAL_MS[interval];
+  const whole = (t: number): number => (barStart(t, interval) === t ? t : barStart(t, interval) + G);
+  const out = folded ? foldBars(all, interval, "utc", all[0] ? whole(all[0].t) : 0) : all;
+  // the window asked: from its start (a page scrolled left, its `limit` bars before its end) to its end
+  const until = w.until ?? Number.POSITIVE_INFINITY;
+  const start = w.since ?? Math.min(until, now) - limitOf(w) * G;
+  const bars = out.filter((b) => b.t >= (w.since ?? Number.NEGATIVE_INFINITY) && b.t < until);
+  // Kraken's latest 720 do not reach back to the window's start: its history at this size ends at its first bar
+  const short = !all.length || all[0]!.t > start;
+  const ends = short ? `Kraken keeps only the latest 720 bars at this size${why ? `, and ${why}` : ""}` : undefined;
+  return { bars, more: false, ...(ends ? { ends } : {}), ...(why && !ends ? { note: `Kraken's own latest bars: ${why}` } : {}), source: `${name} · ${symbol}`, ...(folded ? { folded: `${INTERVAL_WORDS[interval]} bars folded from Kraken's ${INTERVAL_WORDS[native]} bars${interval === "1w" ? " (weeks from Monday, UTC; its own weeks start on Thursday)" : ""}` } : {}) };
 }
 
 /** what reads a book and trades through the library, beyond what exchange.ts names: the book as {bids, asks: [[price, amount, …]],
@@ -1036,7 +1230,7 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
       .filter(({ m }) => !window || (whenMs(m.close_time) > now && whenMs(m.close_time) <= now + window))
       .sort((a, b) => kalshiBusier(a.m, b.m))
       .slice(0, Math.max(1, o.limit))
-      .flatMap(({ m, ev }) => kalshiLegs(m, ev));
+      .flatMap(({ m, ev }) => readLike(kalshiLegs(m, ev), m));
   };
   return {
     id,
@@ -1117,31 +1311,54 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
       const tagged = KALSHI_SERIES.filter((s) => s.tags?.length);
       return [`Kalshi: the busiest market in each of ${plain.length} series — ${plain.map((s) => s.word).join(", ")}.`, ...(tagged.length ? [`Kalshi: and ${tagged.map((s) => s.word).join(", ")} — the busiest market of each.`] : [])];
     },
-    /** a market's price history, keyless (see the top of this file): `<ticker>:YES` or `<ticker>:NO` */
-    async candles(symbol, interval, sinceMs) {
+    /** a market's price history, keyless (see the top of this file): `<ticker>:YES` or `<ticker>:NO`. A window one request does not hold
+     * (Kalshi answers 9,999 periods at most, and no start of 0: live/kalshi.ts kalshiSpans) is asked from the market's open (its GET
+     * /markets/{ticker}, kept as every answer here), in spans */
+    async candles(symbol, interval, w) {
       const now = clock();
-      const bad = badHistory(id, interval, sinceMs, now);
+      const bad = badHistory(id, interval, w, now);
       if (bad) return bad;
       const k = /^([A-Za-z0-9][A-Za-z0-9._-]{0,80}):(YES|NO)$/i.exec(symbol.trim());
       if (!k) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a Kalshi market here is <ticker>:YES or <ticker>:NO, not "${symbol.slice(0, 40)}"` });
       const ticker = k[1]!.toUpperCase();
       const yes = k[2]!.toUpperCase() === "YES";
       const period = KALSHI_PERIOD[interval];
-      const body = await get(`${KALSHI}/markets/candlesticks?market_tickers=${encodeURIComponent(ticker)}&start_ts=${Math.floor(sinceMs / 1000)}&end_ts=${Math.floor(now / 60_000) * 60}&period_interval=${period}`);
-      if (isRefusal(body)) return body;
-      const row = list(rec(body).markets).filter(isRec).find((x) => String(x.market_ticker ?? "").toUpperCase() === ticker);
-      if (!row) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no market ${ticker}` });
-      const fold = interval === "5m" ? 5 * 60_000 : 0;
+      const end = Math.min(now, w.until ?? now);
+      const endTs = Math.floor(end / 60_000) * 60;
+      let asked = kalshiSpans(interval, w, endTs);
+      if (asked.wide) {
+        const m = await get(`${KALSHI}/markets/${encodeURIComponent(ticker)}`);
+        const open = isRefusal(m) ? NaN : Date.parse(str(rec(rec(m).market).open_time) ?? "");
+        if (Number.isFinite(open)) asked = kalshiSpans(interval, w, endTs, open);
+      }
+      const sticks: Rec[] = [];
+      let partial = false;
+      for (const [i, sp] of asked.spans.entries()) {
+        const body = await get(`${KALSHI}/markets/candlesticks?market_tickers=${encodeURIComponent(ticker)}&start_ts=${sp.start}&end_ts=${sp.end}&period_interval=${period}`);
+        if (isRefusal(body)) {
+          if (i === 0) return body;
+          partial = true;
+          break;
+        }
+        const row = list(rec(body).markets).filter(isRec).find((x) => String(x.market_ticker ?? "").toUpperCase() === ticker);
+        if (!row) {
+          if (i === 0) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no market ${ticker}` });
+          break;
+        }
+        sticks.push(...list(row.candlesticks).filter(isRec));
+      }
+      // a size Kalshi does not keep is folded from the one it does: 5m and 15m from minutes, 4h from hours, a week (from Monday) from days
+      const fold = period * 60_000 !== INTERVAL_MS[interval];
       const bars = new Map<number, Candle>();
-      for (const c of list(row.candlesticks).filter(isRec).sort((a, b) => (fin(a.end_period_ts) ?? 0) - (fin(b.end_period_ts) ?? 0))) {
+      for (const c of sticks.sort((a, b) => (fin(a.end_period_ts) ?? 0) - (fin(b.end_period_ts) ?? 0))) {
         const p = rec(c.price);
         const [yo, yh, yl, yc] = [fin(p.open_dollars), fin(p.high_dollars), fin(p.low_dollars), fin(p.close_dollars)];
-        const end = fin(c.end_period_ts);
-        if (yo === undefined || yh === undefined || yl === undefined || yc === undefined || end === undefined || !(end > 0)) continue;
+        const stop = fin(c.end_period_ts);
+        if (yo === undefined || yh === undefined || yl === undefined || yc === undefined || stop === undefined || !(stop > 0)) continue;
         const [o, h, l, cl] = yes ? [yo, yh, yl, yc] : [round(1 - yo, 4), round(1 - yl, 4), round(1 - yh, 4), round(1 - yc, 4)];
         const v = nonNeg(c.volume_fp);
-        const start = (end - period * 60) * 1000;
-        const t = fold ? Math.floor(start / fold) * fold : start;
+        const start = (stop - period * 60) * 1000;
+        const t = fold ? barStart(start, interval) : start;
         const b = bars.get(t);
         if (!b) bars.set(t, { t, o, h, l, c: cl, ...(v !== undefined ? { v } : {}) });
         else {
@@ -1151,13 +1368,13 @@ export function kalshiPublic(deps: PublicDeps = {}): PublicSource {
           if (v !== undefined) b.v = round((b.v ?? 0) + v, 2);
         }
       }
-      return [...bars.values()];
+      return kalshiPage([...bars.values()], asked, w, partial, `${name}'s ${ticker}`);
     },
   };
 }
 
-/** Kalshi keeps candles of 1, 60 and 1440 minutes: five-minute bars are folded from one-minute candles */
-const KALSHI_PERIOD: Record<CandleInterval, number> = { "5m": 1, "1h": 60, "1d": 1440 };
+/** Kalshi keeps candles of 1, 60 and 1440 minutes: every other size is folded from the finer one it keeps (live/kalshi.ts PERIOD_MIN) */
+const KALSHI_PERIOD = PERIOD_MIN;
 
 // ---- Polymarket -----------------------------------------------------------------------------------------------
 
@@ -1332,7 +1549,7 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
       })
       .sort(hotterFirst)
       .slice(0, Math.max(1, o.limit))
-      .flatMap(({ m, ev }) => polymarketLegs(m, ev.e, ev.tags));
+      .flatMap(({ m, ev }) => readLike(polymarketLegs(m, ev.e, ev.tags), m));
   };
   return {
     id,
@@ -1419,10 +1636,11 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
       return { settled: true, payout: round(paid, 6), ...(Number.isFinite(whenMs) ? { at: new Date(whenMs).toISOString() } : {}) };
     },
     /** an outcome's price history, keyless (see the top of this file): `<slug>:<outcome>`, as the listing names it */
-    async candles(symbol, interval, sinceMs) {
+    async candles(symbol, interval, w) {
       const now = clock();
-      const bad = badHistory(id, interval, sinceMs, now);
+      const bad = badHistory(id, interval, w, now);
       if (bad) return bad;
+      const sinceMs = startOf(interval, w, now);
       const i = symbol.indexOf(":");
       const slug = i > 0 ? symbol.slice(0, i).trim() : "";
       const outcome = i > 0 ? symbol.slice(i + 1).trim() : "";
@@ -1434,18 +1652,20 @@ export function polymarketPublic(deps: PublicDeps = {}): PublicSource {
       const at = names.findIndex((n) => n.toLowerCase() === outcome.toLowerCase());
       const token = at >= 0 ? tokens[at] : undefined;
       if (!token || !/^\d{1,90}$/.test(token)) return no("E_VENUE_REJECTED", { venue: id, message: `${name} has no outcome "${outcome.slice(0, 40)}" in ${slug.slice(0, 60)}` });
-      // Polymarket refuses a start-to-end range longer than about fifteen days; a longer history is asked from its start alone
-      const range = now - sinceMs > 14 * 86_400_000 ? "" : `&endTs=${Math.floor(now / 60_000) * 60}`;
+      // Polymarket refuses a start-to-end range longer than about fifteen days; a longer history is asked from its start alone (and a page
+      // that ends before now is cut at its end here)
+      const end = Math.min(now, w.until ?? now);
+      const range = end - sinceMs > 14 * 86_400_000 ? "" : `&endTs=${Math.floor(end / 60_000) * 60}`;
       const body = await clob(`${CLOB}/prices-history?market=${token}&startTs=${Math.floor(sinceMs / 1000)}${range}&fidelity=${POLY_FIDELITY[interval]}`);
       if (isRefusal(body)) return body;
-      const points = list(rec(body).history).filter(isRec).map((x) => ({ t: fin(x.t), p: fin(x.p) })).filter((x): x is { t: number; p: number } => x.t !== undefined && x.t > 0 && x.p !== undefined && x.p >= 0 && x.p <= 1);
-      return foldPoints(points, BAR_MS[interval]);
+      const points = list(rec(body).history).filter(isRec).map((x) => ({ t: fin(x.t), p: fin(x.p) })).filter((x): x is { t: number; p: number } => x.t !== undefined && x.t > 0 && x.t * 1000 < end + 60_000 && x.p !== undefined && x.p >= 0 && x.p <= 1);
+      return foldPoints(points, interval);
     },
   };
 }
 
 /** the minutes between the prices a Polymarket bar is folded from */
-const POLY_FIDELITY: Record<CandleInterval, number> = { "5m": 1, "1h": 5, "1d": 60 };
+const POLY_FIDELITY: Record<CandleInterval, number> = { "1m": 1, "5m": 1, "15m": 5, "1h": 5, "4h": 60, "1d": 60, "1w": 60 };
 
 // ---- Polymarket US --------------------------------------------------------------------------------------------
 
@@ -1483,7 +1703,7 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
         return end > now && end <= now + window;
       })
       .slice(0, Math.max(1, o.limit))
-      .flatMap(legs);
+      .flatMap((m) => readLike(legs(m), m));
   };
   return {
     id,
@@ -1529,7 +1749,7 @@ export function polymarketUsPublic(deps: PublicDeps = {}): PublicSource {
     },
     notes: (o) => [o.q?.trim() ? "Polymarket US: its own search, which reaches every market it lists." : `Polymarket US: the most traded open markets of ${PMUS_CATEGORIES.slice(0, -1).join(", ")} and ${PMUS_CATEGORIES.at(-1)}, in turn (its lists give no volume figure).`],
     /** a market's price history, keyless (see the top of this file): `<market slug>:YES` or `<market slug>:NO`, as the listing names it */
-    candles: (symbol, interval, sinceMs) => pmusCandles((path) => history(`${PMUS_GATEWAY}${path}`), id, symbol, interval, sinceMs, clock()),
+    candles: (symbol, interval, w) => pmusCandles((path) => history(`${PMUS_GATEWAY}${path}`), id, symbol, interval, w, clock()),
   };
 }
 
@@ -1594,27 +1814,21 @@ async function hlAsk(info: ReturnType<typeof hyperliquidInfo>, id: string, name:
   return r.status === 200 && r.body !== undefined && r.body !== null ? r.body : publicNo(id, name, r);
 }
 
-/** one Hyperliquid perpetual's bars, keyless: its listing's `<COIN>-PERP` (a HIP-3 market's coin carries its dex: io:ANTH-PERP), the latest
- * at most 300 since the start asked, the volume in the coin; kept a minute. `form`: the coins this source lists */
-function hyperliquidBars(info: ReturnType<typeof hyperliquidInfo>, id: string, name: string, clock: () => number, form: { test: (coin: string) => boolean; example: string }): NonNullable<PublicSource["candles"]> & { clear(): void } {
-  const history = keeper<Candle[]>(clock, HISTORY_MS);
-  const ask = (symbol: string, interval: CandleInterval, sinceMs: number) =>
-    history(`${symbol}|${interval}|${Math.floor(sinceMs / 60_000)}`, async () => {
+/** one Hyperliquid perpetual's bars, keyless: its listing's `<COIN>-PERP` (a HIP-3 market's coin carries its dex: io:ANTH-PERP), as
+ * live/history-crypto.ts hyperliquidHistory reads them — everything in the window from Hyperliquid's latest 5,000 bars at the size, the
+ * bars with no trade left out, a range those do not reach drawn coarser — the volume in the coin; kept by its window (live/history.ts).
+ * `form`: the coins this source lists */
+function hyperliquidBars(info: ReturnType<typeof hyperliquidInfo>, id: string, name: string, clock: () => number, form: { test: (coin: string) => boolean; example: string }, pace: Pace): NonNullable<PublicSource["candles"]> & { clear(): void } {
+  const history = historyKeep<Candle[] | CandlePage>({ entries: 32, most: 60_000, weigh: pageWeight, clock });
+  const ask = (symbol: string, interval: CandleInterval, w: CandleWindow) =>
+    history.get(`${symbol}|${windowKey(interval, w)}`, keepMsOf(interval, w), async () => {
       const now = clock();
-      const bad = badHistory(id, interval, sinceMs, now);
+      const bad = badHistory(id, interval, w, now);
       if (bad) return bad;
       const k = /^(.+)-PERP$/i.exec(symbol.trim());
       const coin = k?.[1];
       if (!coin || !HL_COIN.test(coin) || !form.test(coin)) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a ${name} perpetual here is ${form.example}, not "${symbol.slice(0, 40)}"` });
-      const body = await hlAsk(info, id, name, { type: "candleSnapshot", req: { coin, interval, startTime: Math.max(Math.floor(sinceMs), now - BARS * BAR_MS[interval]), endTime: now } });
-      if (isRefusal(body)) return body;
-      const bars = new Map<number, Candle>();
-      for (const c of list(body).filter(isRec)) {
-        const [t, o, h, l, cl, v] = [fin(c.t), pos(c.o), pos(c.h), pos(c.l), pos(c.c), nonNeg(c.v)];
-        if (t === undefined || o === undefined || h === undefined || l === undefined || cl === undefined) continue;
-        bars.set(t, { t, o, h, l, c: cl, ...(v !== undefined ? { v } : {}) });
-      }
-      return [...bars.values()].sort((a, b) => a.t - b.t);
+      return hyperliquidHistory((req) => hlAsk(info, id, name, { type: "candleSnapshot", req }), pace, clock, name, coin, interval, w);
     });
   return Object.assign(ask, { clear: history.clear });
 }
@@ -1738,7 +1952,7 @@ export function hyperliquidPublic(deps: PublicDeps = {}): PublicSource {
       });
       return out.sort((a, b) => (b.volumeUsd24h ?? -1) - (a.volumeUsd24h ?? -1));
     });
-  const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" });
+  const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" }, deps.pace ?? hostLane);
   const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" });
   return {
     id,
@@ -1841,7 +2055,7 @@ export function stockTokensPublic(deps: PublicDeps = {}): PublicSource {
         const halted = q?.isTradingHalt === true;
         const why = refusedFor.get(t.symbol)?.message.slice(0, NOTE_MAX) ?? "Robinhood gave no price for it just now";
         // the issuer and whom it says the tokens are not for, in its own words (robinhood.ts): Markets shows them beside the price
-        return { symbol: t.symbol, name: t.name, kind: "token", base: t.symbol, quote: "USD", price: mid(bid, ask) ?? bid ?? ask, bid, ask, open: q !== undefined && !halted, ...(halted ? { note: "Robinhood has halted trading in it" } : q ? {} : { note: why }), types: [], issuer: STOCK_TOKEN_ISSUER, eligibility: STOCK_TOKEN_TERMS };
+        return readLike({ symbol: t.symbol, name: t.name, kind: "token", base: t.symbol, quote: "USD", price: mid(bid, ask) ?? bid ?? ask, bid, ask, open: q !== undefined && !halted, ...(halted ? { note: "Robinhood has halted trading in it" } : q ? {} : { note: why }), types: [], issuer: STOCK_TOKEN_ISSUER, eligibility: STOCK_TOKEN_TERMS }, q);
       });
     },
     notes: (o) => (!o.q?.trim() && shown && shown.of < shown.total ? [`${name}: ${shown.of} of ${shown.total} shown · search for the rest`] : []),
@@ -2291,7 +2505,7 @@ export function preIpoPublic(v: PreIpoVenue, deps: PublicDeps = {}): PublicSourc
           continue;
         }
         const listing = preIpoListing(i, dayOf(i.day ?? {}, q), name);
-        if (listing) out.push(listing);
+        if (listing) out.push(readLike(listing, q));
       }
       // every contract refusing is the venue's refusal; one failing while the others answer is left out this time
       if (!out.length && refused) return refused;
@@ -2374,7 +2588,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
     });
   // the dexes the last listing with nothing searched for showed, for the sentence under it
   let shown: string[] | undefined;
-  const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" });
+  const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" }, deps.pace ?? hostLane);
   const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" });
   return {
     id,
@@ -2417,7 +2631,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
         const day = since(price, pos(c.prevDayPx));
         const venueName = `${name} · ${m.dex}`;
         const listing = preIpoListing({ symbol: `${m.coin}-PERP`, base: m.base, quote: m.quote, open: true, maxLeverage: pos(universe[at]!.maxLeverage), mark: m.mark }, { price, changePct24h: day.changePct, change24h: day.change, volumeUsd24h: volume, fundingRate: fin(c.funding), nextFundingAt }, venueName);
-        if (listing) out.push({ ...listing, venueName });
+        if (listing) out.push(readLike({ ...listing, venueName }, c));
       }
       if (!out.length && refused) return refused;
       const pool = out.sort(busierFirst).slice(0, Math.max(1, o.limit));

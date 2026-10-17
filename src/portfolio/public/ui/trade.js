@@ -30,17 +30,21 @@ function tkSignNotes(p, ev) {
   return Object.keys(out).length ? out : null;
 }
 
-/** change an open order in place: a new size, limit or stop. The account values it afresh and shows what it would be worth; your signature changes it */
-function openAmend(o) {
+/** change an open order in place: a new size, limit or stop. The account values it afresh and shows what it would be worth; your signature
+ * changes it. `init`: a new limit or stop already chosen — a line dragged on the chart (ui/terminal.js ttLineDragged) — written in its field,
+ * so the sheet opens prepared for it, waiting for the signature */
+function openAmend(o, init = {}) {
   if (!o) return;
   const limited = o.type === "limit" || o.type === "stop_limit";
   const stopped = o.type === "stop" || o.type === "stop_limit";
   const ev = o.kind === "event";
   const was = (n) => (ev ? String(Number((Number(n) * 100).toFixed(2))) : String(n));
+  const typed = (k) => (Number(init[k]) > 0 ? ` value="${esc(was(init[k]))}"` : "");
+  const dragged = Number(init.limitPrice) > 0 || Number(init.stopPrice) > 0;
   quoteDialog({
     title: `Change ${o.id}`,
-    sub: esc(`${o.venueName} · ${o.side === "buy" ? "Buy" : "Sell"} ${qtyOf(o.qty)} ${ev ? "contracts" : o.base} · ${typeText(o)}. Leave a field empty to keep it.`),
-    fields: `<div class="row">${field("Size", `<input name="qty" inputmode="decimal" placeholder="${esc(String(o.qty))}" autocomplete="off" />`)}${stopped ? field(ev ? "Stop (¢)" : "Stop price", `<input name="stopPrice" inputmode="decimal" placeholder="${esc(was(o.stopPrice))}" autocomplete="off" />`) : ""}${limited ? field(ev ? "Limit (¢)" : "Limit price", `<input name="limitPrice" inputmode="decimal" placeholder="${esc(was(o.limitPrice))}" autocomplete="off" />`) : ""}</div>`,
+    sub: esc(`${o.venueName} · ${o.side === "buy" ? "Buy" : "Sell"} ${qtyOf(o.qty)} ${ev ? "contracts" : o.base} · ${typeText(o)}. ${dragged ? "Moved on the chart: nothing changes until you sign." : "Leave a field empty to keep it."}`),
+    fields: `<div class="row">${field("Size", `<input name="qty" inputmode="decimal" placeholder="${esc(String(o.qty))}" autocomplete="off" />`)}${stopped ? field(ev ? "Stop (¢)" : "Stop price", `<input name="stopPrice" inputmode="decimal" placeholder="${esc(was(o.stopPrice))}"${typed("stopPrice")} autocomplete="off" />`) : ""}${limited ? field(ev ? "Limit (¢)" : "Limit price", `<input name="limitPrice" inputmode="decimal" placeholder="${esc(was(o.limitPrice))}"${typed("limitPrice")} autocomplete="off" />`) : ""}</div>`,
     draft: (form) => {
       const f = formFields(form);
       const d = { type: "liveAmend", venue: o.venue, order: o.id, qty: String(f.qty || "").trim(), limitPrice: tkPriceIn(f.limitPrice, ev), stopPrice: tkPriceIn(f.stopPrice, ev) };
@@ -204,6 +208,25 @@ onRoute((tab, params) => {
   } else if (!sig && !/^tile:/.test(TK.routed)) TK.routed = "";
 });
 
+/* A MARKET THE ADDRESS NAMES AT AN ACCOUNT NOT ON THE ACCOUNT NOW (a paper account disconnected since the address was written, a link from
+   another browser): never asked of the account — it would only refuse ("not a venue connected live") and leave an empty screen. The same
+   symbol at a paper account of yours that trades it, as a market opens where nobody named the account (B7, tkFirstLeg); none: the kind
+   alone, at rest, its terminal starting on the busiest market as any visit does. Either way the address is written again from what opens
+   (terminal.js ttUrl). A preset that names no venue, or one on the account (waiting or not), is as it was */
+/** a market asked for at an account that is not on the account while the account is still restoring after a restart (A.restore.state
+ * "restoring"): it is waited for, not routed elsewhere — the restart brings the account back in a moment, and a page opened in that moment
+ * (a reload, a link) would otherwise lose the market it named. Once restoring is over, an account still missing is routed as before */
+function tkWaitsForRestore(p) {
+  return !!(p && p.venue && A && A.restore && A.restore.state === "restoring" && !(A.venues || []).some((v) => v.id === p.venue));
+}
+
+function tkRouteVenue(p) {
+  if (!p || !p.venue || !A || (A.venues || []).some((v) => v.id === p.venue)) return p;
+  const paper = (A.venues || []).find((v) => v.paper && v.live && v.trade && canTrade(v));
+  if (paper && p.symbol) return { ...p, venue: paper.id, quiet: true };
+  return { kind: p.kind || TK.kind, rest: true };
+}
+
 /** the Trade pane: the head and a line of state, the kind seg (drawn by hand: its buttons carry icons), the picker for the kind chosen,
  * what is under way; the panel on the right keeps the ticket (or the composer) across redraws */
 function renderTrade({ el, owner, lens, params }) {
@@ -234,12 +257,17 @@ function renderTrade({ el, owner, lens, params }) {
   const traders = A.venues.filter((v) => v.live && v.trade && canTrade(v)).map((v) => v.id).sort().join(",");
   if (TK.tradersSeen !== undefined && TK.tradersSeen !== traders && !redone && !TK.connecting && typeof TK.refindIdle === "function") TK.refindIdle();
   TK.tradersSeen = traders;
-  // what was asked for before the pane was drawn (a Markets row, a quick action, the route) opens now
-  if (TK.pending) {
-    const p = TK.pending;
+  // what was asked for before the pane was drawn (a Markets row, a quick action, the route) opens now — a market at an account no longer on
+  // it (an address from before a disconnect) at one that is (tkRouteVenue)
+  // A market named at an account the restart has not brought back YET waits for it: opened at the render after the account is restored,
+  // never replaced by another account's or dropped meanwhile (tkWaitsForRestore)
+  if (TK.pending && !tkWaitsForRestore(TK.pending)) {
+    const p = tkRouteVenue(TK.pending);
     TK.pending = null;
     tkOpen(p);
   }
+  // the market showing is at an account disconnected since: the address no longer names it (terminal.js ttUrl leaves it out)
+  if (typeof TT === "object" && TT.at && !A.venues.some((v) => v.id === TT.at.venue) && typeof ttUrl === "function") ttUrl();
   // every read of the account comes through here (a fill included): the ticket's Available to trade and Current position follow it
   if (typeof TK.refreshAvail === "function") TK.refreshAvail();
   void params;
@@ -266,6 +294,7 @@ function tkDrawPane(el, owner, lens) {
       if (c && !c.disabled) openPicker();
     });
   }
+  tkOnboard(el.querySelector("[data-tt-onboard]"), owner);
   tkDrawKinds(el.querySelector("[data-tp-kinds]"), kinds);
   tkPicker(el.querySelector("[data-tp-pick]"), TK.kind, mine, lens);
   tkDrawOpen(el.querySelector("[data-tp-open]"), owner);
@@ -273,6 +302,138 @@ function tkDrawPane(el, owner, lens) {
   if (typeof mkWatchPane === "function") mkWatchPane(el);
   tkReadKinds();
 }
+/* PAPER ONBOARDING (P18): while the account has no paper account, one card over the terminal offers to open one — paper money, the public
+   venues' real prices, the account's own fill rule; nothing real moves — signed by the owner as any connection is (connectVenue, the
+   account's own paper account: live:paper). A book kept on this machine that no connection has open is offered to continue instead, by its
+   name, its id and the day it was opened (two books opened from the card are both "Paper account"), and its paper cash (connecting its id
+   continues it: GET /api/account/paper/books). The id a new one takes is picked from the books kept here AS THEY ARE when the owner presses
+   Open — read afresh then, never from a list a minute old: a book disconnected since is kept, and connecting its id would continue it with
+   the amount typed unused (B10; the account refuses that too, service.ts paperKeptRule). "Not now" puts the card away in this browser.
+   Never on a server that connects nothing, places no orders, or offers no paper account; in a browser that only looks, its button is off and
+   says why */
+const TK_ONBOARD_OFF = "account.paperCardOff";
+const TK_PAPER_CASH = 10_000;
+const TK_BOOKS_PATH = "/api/account/paper/books";
+const tkOnboardOff = () => {
+  if (TK.obOff) return true;
+  try {
+    return localStorage.getItem(TK_ONBOARD_OFF) === "1";
+  } catch {
+    return false;
+  }
+};
+/* the id a new paper account takes: paper-1, else the next number no venue on the account and no book kept here has */
+function tkPaperId(books = []) {
+  const taken = new Set([...(A.venues || []).map((v) => v.id), ...(books || []).map((b) => b.venue)]);
+  let n = 1;
+  while (taken.has(`paper-${n}`)) n++;
+  return `paper-${n}`;
+}
+/* a kept book's button, told apart from another of the same name: its name, its id and the day it was opened, and its paper cash — the
+   same words, whole, for a screen reader */
+function tkKeptButton(b, look) {
+  const opened = b.createdAt ? ny(b.createdAt, { day: "numeric", month: "short" }) : "";
+  const label = `Continue “${b.name}” (${b.venue}${opened && opened !== "—" ? `, opened ${opened}` : ""}) · ${money(b.cashUsd)}`;
+  return `<button type="button" class="btn" data-ob-keep="${esc(b.venue)}" data-fk="ob-keep:${esc(b.venue)}" aria-label="${esc(`${label} of paper cash`)}"${look}>${esc(label)}</button>`;
+}
+function tkOnboard(box, owner) {
+  if (!box) return;
+  const offered = !!A.connectLive && writesOn() && typeof connectionOf === "function" && !!connectionOf("live:paper");
+  const want = offered && !(A.venues || []).some((v) => v.paper) && !tkOnboardOff();
+  // the card wanted again — the last paper account disconnected, say: the books kept here are read afresh, the one just disconnected now
+  // among them, never the list from before it
+  if (want && !box.tkWanted) {
+    TK.paperBooksAt = 0;
+    forget(TK_BOOKS_PATH);
+  }
+  box.tkWanted = want;
+  box.hidden = !want;
+  if (!want) return void paint(box, "");
+  const books = TK.paperBooks || [];
+  const look = owner ? "" : ` disabled title="${esc("This browser only looks: pair it to sign")}"`;
+  const keep = books.slice(0, 2).map((b) => tkKeptButton(b, look)).join("");
+  // drawn once and kept: the amount typed in it stands while the page refreshes (paint keeps a focused field's words)
+  paint(box, `<div class="tt-ob"><div class="tt-ob-t"><b>Practise on paper first</b><span class="dim">A paper account trades the public venues' real prices with paper money, by the account's own fill rule. Nothing real moves, and it says Paper wherever it shows. Opening it is signed, as any connection is.</span></div><form class="tt-ob-f" data-ob-form novalidate><label class="fld">Paper money<input name="usd" inputmode="decimal" placeholder="${esc(String(TK_PAPER_CASH))}" autocomplete="off" /></label><button type="submit" class="btn btn-primary" data-ob-go data-fk="ob-go"${look}>Open a paper account</button>${keep}<button type="button" class="link" data-ob-off data-fk="ob-off">Not now</button></form><p class="msg" data-ob-msg role="status"></p></div>`);
+  // the books kept on this machine, read once a while (a minute): the card is drawn again with them
+  if (!TK.paperBooksAt || Date.now() - TK.paperBooksAt > 60_000) {
+    TK.paperBooksAt = Date.now();
+    api(TK_BOOKS_PATH, { ttl: 60_000 }).then((b) => tkBooksHeard(box, b && b.ok !== false && Array.isArray(b.books) ? b.books : []));
+  }
+  if (box.tkHeard) return;
+  box.tkHeard = true;
+  const say = (text, state = "") => {
+    const m = box.querySelector("[data-ob-msg]");
+    if (!m) return;
+    m.className = `msg${text && state ? ` ${state}` : ""}`;
+    m.textContent = text || "";
+  };
+  /* the connection signed: a new book with the paper money typed (empty: the default), or a kept one continued under its own id and name.
+     What is said once it is open is the card's own short words — the fill rule stays folded in "How it fills here", never a toast of it */
+  let opening = false;
+  const open = async (draft, words) => {
+    if (busy || !owns()) return;
+    say("Opening the paper account…", "wait");
+    busy = true;
+    let r;
+    try {
+      r = await Owner.act(draft);
+    } finally {
+      busy = false;
+    }
+    if (refusedAt(r)) return void say(Owner.why(r) || "Refused", "no");
+    said = words;
+    flash = "";
+    await load();
+  };
+  /* a new one: the books kept here read afresh first (no keep), the id picked from that answer — none read, none opened */
+  const openNew = async (usd) => {
+    if (opening || busy || !owns()) return;
+    opening = true;
+    try {
+      say("Opening the paper account…", "wait");
+      forget(TK_BOOKS_PATH);
+      const got = await api(TK_BOOKS_PATH);
+      if (!got || got.ok === false || !Array.isArray(got.books)) return void say(`The paper accounts kept on this machine could not be read${refusalOf(got) ? ` (${refusalOf(got)})` : ""}, so none was opened: try again.`, "no");
+      tkBooksHeard(box, got.books);
+      const cash = usd ? Number(usd) : TK_PAPER_CASH;
+      await open({ type: "connectVenue", venue: tkPaperId(got.books), connector: "live:paper", label: "", credentialRef: usd }, `Paper account opened: ${money(cash)} of paper money`);
+    } finally {
+      opening = false;
+    }
+  };
+  box.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = e.target.closest && e.target.closest("[data-ob-form]");
+    if (!f) return;
+    const usd = String(f.elements.usd.value || "").trim().replace(/,/g, "");
+    if (usd && !/^\$?\d{1,9}(\.\d{1,2})?$/.test(usd)) return void say(`Paper money is a number of dollars, like 25000; leave it empty for ${money(TK_PAPER_CASH)}.`, "no");
+    void openNew(usd.replace(/^\$/, ""));
+  });
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("button");
+    if (!b || !box.contains(b) || b.disabled) return;
+    if (b.hasAttribute("data-ob-off")) {
+      TK.obOff = true;
+      try {
+        localStorage.setItem(TK_ONBOARD_OFF, "1");
+      } catch {
+        // storage off: put away for this visit only
+      }
+      box.hidden = true;
+      return;
+    }
+    const kept = b.dataset.obKeep && (TK.paperBooks || []).find((x) => x.venue === b.dataset.obKeep);
+    if (kept) void open({ type: "connectVenue", venue: kept.venue, connector: "live:paper", label: tkPaperless(kept.name), credentialRef: "" }, `${tkPaperless(kept.name)} continued: ${money(kept.cashUsd)} of paper cash`);
+  });
+}
+/* the books kept here, as a read answered them: kept, and the card drawn again with them where they changed */
+function tkBooksHeard(box, got) {
+  TK.paperBooksAt = Date.now();
+  if (JSON.stringify(got) === JSON.stringify(TK.paperBooks || [])) return;
+  TK.paperBooks = got;
+  if (box && box.isConnected && !box.hidden) tkOnboard(box, owns());
+}
+
 /* the pane drawn again from where it stands, after a read landed: only while it is the pane showing */
 function tkRedraw() {
   const el = $("pane-trade");
@@ -372,6 +533,48 @@ function tkRecentAdd(e) {
   }
 }
 
+/* THE STARRED MARKETS, the picker's own short list kept in this browser (nothing signed, nothing the account or an agent reads — the
+   account's watchlist, which agents read, is Markets' ★): per kind, newest first, at most TK_STARS_MOST in all. Each kept with what opens it
+   again — its row's key, its name and logo, and where it was picked at, when an account of yours trades it */
+const TK_STARS = "account.starred";
+const TK_STARS_MOST = 60;
+function tkStarsAll() {
+  try {
+    const l = JSON.parse(localStorage.getItem(TK_STARS) || "[]");
+    return Array.isArray(l) ? l.filter((r) => r && typeof r === "object" && typeof r.key === "string" && r.key && TK_KIND_IDS.includes(r.kind)) : [];
+  } catch {
+    return [];
+  }
+}
+const tkStars = (kind) => tkStarsAll().filter((r) => r.kind === kind);
+const tkStarred = (kind, key) => !!key && tkStarsAll().some((r) => r.kind === kind && r.key === key);
+/** a market starred, or its star taken off: the list kept again (storage off — a private window — keeps nothing, and says nothing) */
+function tkStarToggle(e) {
+  if (!e || !e.key || !TK_KIND_IDS.includes(e.kind)) return false;
+  const all = tkStarsAll();
+  const on = !all.some((r) => r.kind === e.kind && r.key === e.key);
+  const next = on ? [{ kind: e.kind, key: e.key, name: String(e.name || e.key).slice(0, 120), base: e.base || "", ...(e.venue && e.symbol ? { venue: e.venue, symbol: e.symbol } : {}), ...(tkLogoUrl(e.icon) ? { icon: e.icon } : {}), at: Date.now() }, ...all] : all.filter((r) => !(r.kind === e.kind && r.key === e.key));
+  try {
+    localStorage.setItem(TK_STARS, JSON.stringify(next.slice(0, TK_STARS_MOST)));
+  } catch {
+    // storage off: nothing is kept
+  }
+  return on;
+}
+/** a starred market opened: its row as this page read it (the kind's own list), else its row read again by its key — the ticket on it, at a
+ * paper account of yours that trades it where there is one (tkPickOpen); a row no longer listed opens where it was starred, else its search */
+async function tkStarOpen(r, kind) {
+  const loaded = tkLoaded().find((x) => x.key === r.key);
+  if (loaded) return void tkPickOpen(loaded, kind);
+  const got = await tkReadKind(kind, tkQueryOf(r), r.key);
+  const x = got.items.find((y) => y.key === r.key);
+  if (x) return void tkPickOpen(x, kind);
+  if (r.venue && r.symbol) return void tkOpen({ kind, venue: r.venue, symbol: r.symbol, side: "buy" });
+  tkOpen({ kind, symbol: r.base || r.name });
+}
+/* a row's star, as the picker's lists carry it: what tkStarToggle keeps of it */
+const tkStarOf = (x, kind) => { const at = tkFirstLeg(x); return { kind, key: x.key, name: tkName(x), base: x.base || "", icon: x.icon || "", ...(at ? { venue: at.venue, symbol: at.symbol } : {}) }; };
+
 /* an implied company valuation in a few figures ($2.08T): Markets' own formatter where it is, else dollars */
 const tkValuation = (usd) => (typeof mkValuation === "function" ? mkValuation(usd) : money(usd));
 /* a row's connected legs, "venue|symbol": what the Markets poller asks fresh prices for (its mkWatchPane watches this pane's rows) */
@@ -391,7 +594,7 @@ function tkPicker(sec, kind) {
     sec.dataset.kind = kind;
     TK.drawnKind = kind;
     TK.pq = "";
-    sec.innerHTML = `<div class="sec-head"><h2 class="h2" id="tp-pick-h">${esc(k.label)}</h2><form class="tk-pfind" role="search" data-live>${icon("search", "sm")}<label class="sr" for="tk-pq">Search ${esc(k.label)}</label><input type="search" id="tk-pq" name="q" placeholder="${esc(k.hint)}" autocomplete="off" spellcheck="false" /></form></div><div class="tk-pg" data-pg="hold"></div><div class="tk-pg" data-pg="recent"></div><div class="tk-pg" data-pg="top"></div><div data-pg="foot"></div>`;
+    sec.innerHTML = `<div class="sec-head"><h2 class="h2" id="tp-pick-h">${esc(k.label)}</h2><form class="tk-pfind" role="search" data-live>${icon("search", "sm")}<label class="sr" for="tk-pq">Search ${esc(k.label)}</label><input type="search" id="tk-pq" name="q" placeholder="${esc(k.hint)}" autocomplete="off" spellcheck="false" /></form></div><div class="tk-pg" data-pg="star"></div><div class="tk-pg" data-pg="hold"></div><div class="tk-pg" data-pg="recent"></div><div class="tk-pg" data-pg="top"></div><div data-pg="foot"></div>`;
     const form = sec.querySelector("form");
     form.addEventListener("submit", (e) => e.preventDefault());
     let timer = 0;
@@ -401,10 +604,15 @@ function tkPicker(sec, kind) {
         const q = form.elements.q.value.trim();
         TK.pq = q;
         if (!q) return void tkPickLists(sec, kind);
-        tkReadKind(kind, q).then((got) => sec.dataset.kind === kind && TK.pq === q && tkPickLists(sec, kind, got));
+        tkReadKind(kind, q).then((got) => {
+          if (sec.dataset.kind !== kind || TK.pq !== q) return;
+          TK.pqGot = got;
+          tkPickLists(sec, kind, got);
+        });
       }, 300);
     });
     tkPickLists(sec, kind);
+    tkPickKeys(sec);
     // the lists come in: one of two names, so a fresh animation runs each time (the same name set twice would not restart it)
     const a = sec.classList.contains("tk-in-a");
     sec.classList.toggle("tk-in-a", !a);
@@ -433,7 +641,9 @@ function tkPickLists(sec, kind, search) {
   const g = (name) => sec.querySelector(`[data-pg="${name}"]`);
   g("hold").hidden = !!q;
   g("recent").hidden = !!q;
+  if (g("star")) g("star").hidden = !!q;
   if (!q) {
+    if (g("star")) tkGroup(g("star"), "Starred", tkStars(kind).map((r) => tkStarRow(r, kind)), "");
     tkHoldGroup(g("hold"), kind, mine);
     const rec = tkRecent(kind).filter((r) => tkVenueIn(r.venue, lens));
     tkGroup(g("recent"), "Recent", rec.map((r) => tkRecentRow(r, kind)), "");
@@ -449,7 +659,14 @@ function tkPickLists(sec, kind, search) {
 /* one list: its name, its rows (each a button), or a skeleton while its rows are being read, or the words for none */
 function tkGroup(el, title, rows, empty) {
   if (!el) return;
-  const body = rows === null ? '<div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel" style="width:70%"></span></div>' : rows.length ? `<ul class="tk-list" role="list">${rows.map((r, i) => `<li data-k="${esc(r.fk)}"><button type="button" data-i="${i}" data-fk="${esc(r.fk)}"${r.pairs && r.pairs.length ? ` data-pairs="${esc(r.pairs.join(","))}"` : ""}${r.title ? ` title="${esc(r.title)}"` : ""}>${r.av}<span class="tk-rn"><b>${esc(r.name)}</b><span class="dim small">${esc(r.sub)}</span></span><span class="tk-rp">${r.right}</span></button></li>`).join("")}</ul>` : empty ? `<p class="empty">${esc(empty)}</p>` : "";
+  // each row's star (tkStarToggle: this browser's own short list) beside it, never inside its button — out of the tab order: S on a row stars
+  // it from the keys (tkPickKeys)
+  const starBtn = (r, i) => {
+    if (!r.star) return "";
+    const on = tkStarred(r.star.kind, r.star.key);
+    return `<button type="button" class="tk-star${on ? " on" : ""}" data-star="${i}" tabindex="-1" aria-pressed="${String(on)}" aria-label="${esc(`${on ? "Unstar" : "Star"} ${r.name}`)}" title="${on ? "Starred in this browser's picker: press to take it off" : "Star it: kept at the top of this list in this browser (S on the row)"}">${icon("star", "sm")}</button>`;
+  };
+  const body = rows === null ? '<div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel" style="width:70%"></span></div>' : rows.length ? `<ul class="tk-list" role="list">${rows.map((r, i) => `<li data-k="${esc(r.fk)}"><button type="button" data-i="${i}" data-fk="${esc(r.fk)}"${r.pairs && r.pairs.length ? ` data-pairs="${esc(r.pairs.join(","))}"` : ""}${r.title ? ` title="${esc(r.title)}"` : ""}>${r.av}<span class="tk-rn"><b>${esc(r.name)}</b><span class="dim small">${esc(r.sub)}</span></span><span class="tk-rp">${r.right}</span></button>${starBtn(r, i)}</li>`).join("")}</ul>` : empty ? `<p class="empty">${esc(empty)}</p>` : "";
   el.hidden = !body;
   // the rows a click opens are the ones last drawn; heard once, on the list itself (its rows are kept in place by their key)
   el.tkRows = rows || [];
@@ -461,9 +678,59 @@ function tkGroup(el, title, rows, empty) {
   if (el.tkHeard) return;
   el.tkHeard = true;
   el.addEventListener("click", (e) => {
+    const st = e.target.closest && e.target.closest("button[data-star]");
+    if (st && el.contains(st)) return void tkStarPress(el, el.tkRows[Number(st.dataset.star)]);
     const b = e.target.closest && e.target.closest("button[data-i]");
     const r = b && el.contains(b) ? el.tkRows[Number(b.dataset.i)] : null;
     if (r) r.open();
+  });
+}
+/* a row's star pressed (or S on the row): kept or taken off, and the picker's lists drawn again from where they stand — the Starred list and
+   every star with it — the key left on the row it was on */
+function tkStarPress(list, r) {
+  if (!r || !r.star) return;
+  const on = tkStarToggle(r.star);
+  const sec = list && list.closest ? list.closest("[data-tp-pick]") : null;
+  if (sec && sec.dataset && sec.dataset.kind) tkPickLists(sec, sec.dataset.kind, TK.pq && TK.pqGot ? TK.pqGot : undefined);
+  if (typeof toast === "function") toast(`${on ? "Starred" : "Unstarred"} ${r.name}`, "ok", { ms: 1600 });
+}
+/** THE PICKER FROM THE KEYS: from its search, ↓ goes to the first market listed; on a market, ↑ and ↓ move through every list shown (Starred,
+ * You hold, Recent, Most traded or the search's results) in their order, Home and End to the first and the last, ↑ from the first back to the
+ * search; Enter opens it (it is a button), S stars it or takes its star off. Heard once, on the picker's section */
+function tkPickKeys(sec) {
+  if (!sec || sec.tkKeys) return;
+  sec.tkKeys = true;
+  sec.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (!t || e.altKey || e.ctrlKey || e.metaKey) return;
+    const rows = [...sec.querySelectorAll(".tk-pg:not([hidden]) .tk-list button[data-i]")];
+    const at = rows.indexOf(t);
+    const search = t.matches && t.matches("input[type='search']");
+    let to = null;
+    if (search && e.key === "ArrowDown") to = rows[0];
+    else if (at >= 0 && e.key === "ArrowDown") to = rows[Math.min(rows.length - 1, at + 1)];
+    else if (at >= 0 && e.key === "ArrowUp") to = at === 0 ? sec.querySelector("input[type='search']") : rows[at - 1];
+    else if (at >= 0 && e.key === "Home") to = rows[0];
+    else if (at >= 0 && e.key === "End") to = rows[rows.length - 1];
+    else if (at >= 0 && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      const list = t.closest(".tk-pg");
+      const fk = t.dataset.fk;
+      const row = list && list.tkRows ? list.tkRows[Number(t.dataset.i)] : null;
+      const key = row && row.star ? row.star.key : "";
+      tkStarPress(list, row);
+      // the lists were drawn again: the key back on the same market — its own row where it still is; else that market's row in another list
+      // (one unstarred from Starred leaves that list: its row under Most traded, the search's results or Recent); else the row now at the
+      // same place; else the search. Never nowhere: a keyboard is never left outside the picker
+      const now = [...sec.querySelectorAll(".tk-pg:not([hidden]) .tk-list button[data-i]")];
+      const rowOf = (b) => { const g = b.closest ? b.closest(".tk-pg") : null; return g && g.tkRows ? g.tkRows[Number(b.dataset.i)] : null; };
+      const again = (fk && now.find((b) => b.dataset.fk === fk)) || (key && now.find((b) => { const r = rowOf(b); return !!(r && r.star && r.star.key === key); })) || now[Math.min(at, now.length - 1)] || sec.querySelector("input[type='search']");
+      if (again) again.focus({ preventScroll: false });
+      return;
+    }
+    if (!to) return;
+    e.preventDefault();
+    to.focus({ preventScroll: false });
   });
 }
 /* a market's name in a list: an event's short name — its event's title and the market's own words (markets.js mkShort) — its whole question
@@ -477,13 +744,37 @@ function tkItemRow(x, kind) {
   const q = pair ? ` data-q="${esc(pair)}"` : "";
   const imp = kind === "preipo" ? x.implied || ((x.at || []).find((a) => a.implied) || {}).implied : null;
   const right = x.kind === "event" ? `<span class="tab-nums"${q} data-fmt="c">${esc(tkCents(x.price))}</span>${x.closeTime ? `<span class="dim small">${esc(typeof mkLeft === "function" ? mkLeft(Date.parse(x.closeTime) - Date.now()) : nyDay(x.closeTime))}</span>` : ""}` : imp && imp.usd ? `<span class="tab-nums">${esc(tkValuation(imp.usd))} <span class="tag">implied</span></span><span class="dim small tab-nums"${q} data-fmt="usd">${x.price ? `$${esc(px(x.price))}` : ""}</span>` : `<span class="tab-nums"${q} data-fmt="usd">${x.price ? `$${esc(px(x.price))}` : ""}</span>${chg(x.changePct24h)}`;
-  return { fk: `pick:${x.key}`, pairs: tkPairs(x), av: avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm", x.icon || ""), name: tkName(x), title: tkTitle(x), sub: [kind === "preipo" ? "Pre-IPO" : x.kind === "event" ? x.category || "" : "", tkWhereWords(x)].filter(Boolean).join(" · "), right, open: () => tkPickOpen(x, kind) };
+  return { fk: `pick:${x.key}`, pairs: tkPairs(x), av: avatar(x.kind === "event" ? String(x.category || "Event").slice(0, 4) : x.base || x.name, "sm", x.icon || ""), name: tkName(x), title: tkTitle(x), sub: [kind === "preipo" ? "Pre-IPO" : x.kind === "event" ? x.category || "" : "", tkWhereWords(x)].filter(Boolean).join(" · "), right, star: tkStarOf(x, kind), open: () => tkPickOpen(x, kind) };
 }
 /* a market picked before, from this browser's own list */
-const tkRecentRow = (r, kind) => ({ fk: `recent:${r.venue}:${r.symbol}`, pairs: A.venues.some((v) => v.id === r.venue && v.live) ? [`${r.venue}|${r.symbol}`] : [], av: avatar(r.base || r.name, "sm", tkRecentIcon(r)), name: r.name, sub: `${r.venueName || nameOf(r.venue)} · ${nyDay(r.at)}`, right: "", open: () => tkOpen({ kind, venue: r.venue, symbol: r.symbol, side: "buy", key: r.key, base: r.base, name: r.name }) });
-/* a row picked: the ticket on it, at the first of your accounts that trades it (none: the public venues say Connect to trade there) */
+const tkRecentRow = (r, kind) => ({ fk: `recent:${r.venue}:${r.symbol}`, pairs: A.venues.some((v) => v.id === r.venue && v.live) ? [`${r.venue}|${r.symbol}`] : [], av: avatar(r.base || r.name, "sm", tkRecentIcon(r)), name: r.name, sub: `${r.venueName || nameOf(r.venue)} · ${nyDay(r.at)}`, right: "", ...(r.key ? { star: { kind, key: r.key, name: r.name, base: r.base || "", icon: tkRecentIcon(r), venue: r.venue, symbol: r.symbol } } : {}), open: () => tkOpen({ kind, venue: r.venue, symbol: r.symbol, side: "buy", key: r.key, base: r.base, name: r.name }) });
+/* a starred market, from this browser's own list: its price ticking in place where it is one of the rows read now */
+const tkStarRow = (r, kind) => {
+  const x = tkLoaded().find((y) => y.key === r.key);
+  const pair = x ? tkPairs(x)[0] || "" : "";
+  const right = x && x.kind !== "event" && x.price ? `<span class="tab-nums"${pair ? ` data-q="${esc(pair)}" data-fmt="usd"` : ""}>$${esc(px(x.price))}</span>${chg(x.changePct24h)}` : "";
+  return { fk: `star:${r.key}`, pairs: x ? tkPairs(x) : [], av: avatar(r.base || r.name, "sm", tkLogoUrl(r.icon) ? r.icon : tkKeyIcon(r.key)), name: r.name, sub: x ? tkWhereWords(x) : r.venue ? nameOf(r.venue) : "", right, star: r, open: () => void tkStarOpen(r, kind) };
+};
+/** WHERE A MARKET OPENS when nobody named the account: a PAPER account of yours that trades it, whenever there is one — real money is
+ * chosen only by the owner's own pick (the Where list, the Real money | Paper switch, a market opened at a venue, the Real money lens or a
+ * venue's own lens). The lens is the owner's pick too: under Real money a real account comes first (else the first of yours that trades
+ * it, else the first connected), under a venue's lens that venue. Where no paper account trades it and the lens picked no real one —
+ * every account, Paper, an agent's, or a venue's lens whose venue does not trade it — nothing is picked (null): the ticket opens with no
+ * account chosen and asks the owner where it trades, real money (a paper account that lists it and cannot trade it now still opens, to
+ * say why) */
+function tkFirstLeg(x, lens = lensNow()) {
+  const legs = (x && Array.isArray(x.at) ? x.at : []).filter((a) => a.connected);
+  const able = legs.filter((a) => a.canTrade !== false);
+  const paper = (a) => !!a.paper || paperVenue(a.venue);
+  const kind = lens ? lens.kind : "all";
+  if (kind === "real") return able.find((a) => !paper(a)) || able[0] || legs[0] || null;
+  const own = kind === "venue" ? able.find((a) => a.venue === lens.id) : null;
+  return own || able.find(paper) || legs.find(paper) || null;
+}
+/* a row picked: the ticket on it, at a paper account of yours that trades it where there is one, else the first of your accounts that
+   trades it (tkFirstLeg; none: the public venues say Connect to trade there) */
 function tkPickOpen(x, kind) {
-  const at = (x.at || []).find((a) => a.connected && a.canTrade !== false) || (x.at || []).find((a) => a.connected) || null;
+  const at = tkFirstLeg(x);
   tkOpen({ kind, item: x, venue: at ? at.venue : "", symbol: at ? at.symbol : "", side: "buy" });
   tkShowPanel();
 }
@@ -507,7 +798,9 @@ function tkHoldGroup(el, kind, venues) {
       if (!e.venues.some((x) => x.id === v.id)) e.venues.push({ id: v.id, name: v.name });
       by.set(h.asset, e);
     }
-    const rows = [...by.values()].sort((a, b) => b.usd - a.usd).slice(0, 6).map((e) => ({ fk: `hold:${e.asset}`, pairs: [], av: avatar(e.asset.split(":")[0], "sm", e.icon || (cls === "event" ? tkEventIcon(e.asset) : "")), name: e.asset, sub: `${qtyOf(e.amount)}${cls === "event" ? " contracts" : ""} · ${e.venues.map((v) => v.name).join(", ")}`, right: `<span class="tab-nums">${money(e.usd)}</span>`, open: () => tkOpen(cls === "event" ? { kind, venue: e.venues[0].id, symbol: e.asset, side: "sell" } : { kind, venue: e.venues[0].id, base: e.asset, side: "buy" }) }));
+    // held at several accounts: it opens at a paper one where it is held there (tkFirstLeg's rule: real money is the owner's own pick)
+    const where = (e) => e.venues.find((v) => paperVenue(v.id)) || e.venues[0];
+    const rows = [...by.values()].sort((a, b) => b.usd - a.usd).slice(0, 6).map((e) => ({ fk: `hold:${e.asset}`, pairs: [], av: avatar(e.asset.split(":")[0], "sm", e.icon || (cls === "event" ? tkEventIcon(e.asset) : "")), name: e.asset, sub: `${qtyOf(e.amount)}${cls === "event" ? " contracts" : ""} · ${e.venues.map((v) => v.name).join(", ")}`, right: `<span class="tab-nums">${money(e.usd)}</span>`, open: () => tkOpen(cls === "event" ? { kind, venue: where(e).id, symbol: e.asset, side: "sell" } : { kind, venue: where(e).id, base: e.asset, side: "buy" }) }));
     return void tkGroup(el, "You hold", rows, "");
   }
   // perpetuals: the positions read (kept ten seconds; another part's forget() drops it)
@@ -656,6 +949,57 @@ const TK_TIF_NAMES = { gtc: "Until canceled", ioc: "Fill now, rest canceled", fo
 const TK_LIMITED = ["limit", "stop_limit"];
 const TK_STOPPED = ["stop", "stop_limit"];
 
+/* THE TICKET FOLLOWS THE MARKET AS IT MOVES (P8): its bid and ask, the limit's placeholder, the Mid and BBO buttons and its exits' percents
+   take each pushed quote of its market (ui/stream.js) and each read of it (the terminal's bar, ui/terminal.js ttPoll), and the order already
+   prepared is prepared again — quietly, the button kept on the order as shown until the new one replaces it in the same moment — once the
+   market moved and what it shows is TK_FRESH_MS old: an estimate is never more than a few seconds behind the market */
+const TK_FRESH_MS = 3_000;
+/* HOW OLD THE MARKET AS READ MAY BE AND STILL BE ITS TOP NOW, where the stream does not carry it live (ui/trade.js topNow): the bar reads it
+   every five seconds while the stream does not push it (terminal.js ttWaitMs), each read kept three seconds (api ttl) — a top from the last
+   read is now; one older than that (the reads failing, the source silent, the stream down) is not, and Mid, BBO, the placeholder and the
+   exits' percents take nothing from it. A delayed quote (Cboe's) never is, at any age */
+const TK_TOP_LIVE_MS = 8_000;
+/* what a read of the market brings that the ticket follows (the rest — its steps, its types, its rules — is what it was picked with) */
+const TK_LIVE_FIELDS = ["price", "bid", "ask", "quoteAt", "quoteFrom", "delayMs", "changePct24h", "change24h", "fundingRate", "nextFundingAt", "session", "open", "note", "refusesNow", "leverage"];
+/* what the take-profit's and the stop-loss's percents mean, on their fields: only the prices beside them are signed */
+const TK_EXIT_PCT_SAYS = "How far the price moves from the entry — the limit, else the ask for a buy and the bid for a sell now — before leverage. Typing a percent writes the price beside it, which is what is signed";
+/* a price written to a market's own step, as a field takes it (no float tails); no step, as it is */
+const tkToStep = (x, step, mode = "round") => {
+  const v = Number(x);
+  const st = Number(step);
+  if (!Number.isFinite(v) || !(st > 0)) return v;
+  const n = mode === "down" ? Math.floor(v / st + 1e-9) : mode === "up" ? Math.ceil(v / st - 1e-9) : Math.round(v / st);
+  return Number((n * st).toFixed(Math.min(12, Math.max(0, -Math.floor(Math.log10(st)) + 2))));
+};
+/** AN EXIT'S PRICE FROM ITS PERCENT: the entry `ref` moved by `pct` percent — a buy's take-profit above it and its stop-loss under it, a
+ * sell's the other way round — to the market's price step; "" where there is no entry or no percent (or one that would leave no price) */
+function tkExitPrice(ref, pct, { buy, tp, step }) {
+  const r = Number(ref);
+  const p = Number(String(pct ?? "").trim());
+  if (!(r > 0) || String(pct ?? "").trim() === "" || !Number.isFinite(p) || p < 0) return "";
+  const up = buy === tp;
+  const x = tkToStep(r * (1 + ((up ? 1 : -1) * p) / 100), step);
+  return x > 0 ? tkPlain(x) : "";
+}
+/** an exit's percent from its price, the other way round (two decimals); "" where either is not a price */
+function tkExitPct(ref, price, { buy, tp }) {
+  const r = Number(ref);
+  const x = Number(String(price ?? "").trim());
+  if (!(r > 0) || String(price ?? "").trim() === "" || !(x > 0)) return "";
+  const up = buy === tp;
+  return String(Number((((up ? x - r : r - x) / r) * 100).toFixed(2)));
+}
+/** THE PRICE MID AND BBO WRITE as the limit: Mid the middle of the best bid and the best ask, to the market's step (a buy's down, a sell's up,
+ * so a middle between two steps never crosses the book); BBO the best price on the order's own side — the best bid for a buy, the best ask for
+ * a sell — where it rests at the top of the book. Undefined where the book's top is not known */
+function tkTopPrice(which, top, { side, step }) {
+  const bid = Number(top && top.bid);
+  const ask = Number(top && top.ask);
+  if (!(bid > 0) || !(ask > 0) || bid > ask) return undefined;
+  if (which === "bbo") return side === "sell" ? ask : bid;
+  return tkToStep((bid + ask) / 2, step, side === "sell" ? "up" : "down");
+}
+
 /** an order's draft from the ticket's fields: the market and side picked, the size in dollars or in the market's units, the limit and stop
  * (an event contract's typed in cents), the time in force and the flags the market takes */
 function tkOrderDraft(f, { venue, symbol, side, event }) {
@@ -779,7 +1123,10 @@ const TK_OTAB_ON = '[aria-selected="true"], .tk-pro.on';
  * your accounts first; a venue not connected says "Connect to trade"), then the order as that market takes it: the side, the amount, what it
  * is paid with (a coin held: two steps), the type and its prices, the leverage (a perpetual), the rest under Advanced, and the face's own
  * block — what the owner should know of this kind of market before ordering. The account prepares the exact order; you see it in words and
- * what you sign; your signature places it */
+ * what you sign; your signature places it — that order and no other: any change to a field turns Sign off at once, until the account has
+ * prepared the order as it is typed now, and a quick Enter after a change prepares it again and signs nothing. A refusal of the signed
+ * order is said under the button and as a toast (the line under a sticky button is often out of view). Where nobody named the account, a
+ * paper account of yours that trades the market is picked first: real money only by your own pick (tkFirstLeg) */
 function tkTicket(panel, kind0, preset) {
   const gen = ++TK.gen;
   let kind = TK_KIND_IDS.includes(kind0) ? kind0 : "crypto";
@@ -798,15 +1145,16 @@ function tkTicket(panel, kind0, preset) {
       <label class="fld tk-otype" hidden>Order<select name="orderType"><option value="market">Market</option><option value="limit">Limit</option></select></label>
       <div class="tk-side" data-side></div>
       <div class="tk-avail" data-avail></div>
-      <div class="row2" data-limit-row hidden><label class="fld" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /></label></div>
+      <div class="row2" data-limit-row hidden><label class="fld tk-limit-f" data-limit hidden><span data-limit-l>Limit price</span><input name="limitPrice" inputmode="decimal" autocomplete="off" /><span class="tk-pxb-w" data-px-btns hidden><button type="button" class="tk-pxb" data-px="mid" title="The middle of the best bid and the best ask now">Mid</button><button type="button" class="tk-pxb" data-px="bbo" title="The best price on your own side now: the best bid for a buy, the best ask for a sell — the order rests at the top of the book">BBO</button></span></label></div>
       <div class="row2"><label class="fld">Size<input name="amount" inputmode="decimal" placeholder="" autocomplete="off" /></label><label class="fld"><span data-unit-l>In</span><select name="unit"><option value="usd">Dollars</option><option value="qty">Units</option></select></label></div>
       <div class="tk-pct" data-pct hidden><input type="range" name="pct" min="0" max="100" step="1" value="0" aria-label="Share of what is available" /><span class="tab-nums" data-pct-v>0%</span></div>
       <div class="row2" data-pay-w hidden><label class="fld">Pay with<select name="pay"></select></label><span class="dim small tk-pay-n" data-pay-n></span></div>
-      <div class="tk-flags"><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce only</label><label class="chk1" data-tpsl hidden><input type="checkbox" name="tpsl" /> Take profit / Stop loss</label></div>
+      <div class="tk-flags"><label class="chk1" data-reduce hidden><input type="checkbox" name="reduceOnly" /> Reduce only</label><label class="chk1" data-tpsl hidden><input type="checkbox" name="tpsl" /> Take profit / Stop loss</label><label class="chk1 tk-eh" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div>
+      <p class="dim small tk-eh-s" data-eh-s hidden></p>
       <div class="row2" data-stop hidden><label class="fld"><span data-stop-l>Stop price</span><input name="stopPrice" inputmode="decimal" autocomplete="off" /></label></div>
       <div class="row2" data-trail hidden><label class="fld">Trail by<input name="trail" inputmode="decimal" placeholder="2" autocomplete="off" /></label><label class="fld"><span>In</span><select name="trailBy"><option value="percent">Percent</option><option value="price">Price</option></select></label></div>
-      <div class="row2" data-exits hidden><label class="fld">Take profit<input name="takeProfit" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label><label class="fld">Stop loss<input name="stopLoss" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label></div>
-      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label><label class="chk1" data-eh hidden><input type="checkbox" name="extendedHours" /> Extended hours</label></div></div></details>
+      <div class="tk-exits" data-exits hidden><div class="row2"><label class="fld">TP price<input name="takeProfit" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label><label class="fld" data-pct-f title="${esc(TK_EXIT_PCT_SAYS)}">Gain %<input name="tpPct" inputmode="decimal" placeholder="—" autocomplete="off" /></label></div><div class="row2"><label class="fld">SL price<input name="stopLoss" inputmode="decimal" placeholder="Optional" autocomplete="off" /></label><label class="fld" data-pct-f title="${esc(TK_EXIT_PCT_SAYS)}">Loss %<input name="slPct" inputmode="decimal" placeholder="—" autocomplete="off" /></label></div></div>
+      <details class="tk-adv" data-adv hidden><summary><span class="tk-adv-t">Advanced</span><span class="tk-adv-s" data-adv-sum></span>${icon("chevron", "sm")}</summary><div class="tk-adv-b"><div class="tk-more" data-more hidden><span data-tif></span><label class="chk1" data-post hidden><input type="checkbox" name="postOnly" /> Post-only</label></div></div></details>
       <button type="submit" class="btn btn-primary btn-block" data-go disabled${LOOK ? ` title="${esc(LOOK)}"` : ""}>Sign and place</button>
       <div class="quote real" data-q><span class="dim">Type an amount.</span></div>
       <div data-sign></div>
@@ -836,15 +1184,38 @@ function tkTicket(panel, kind0, preset) {
   let outcome = preset.outcome || "";
   let side = preset.side === "sell" ? "sell" : "buy";
   let mk = null;
+  // when the ticket last had its market read (fit, TK.marketRead): the age of a read that says no moment of its own (quoteAt)
+  let mkAt = 0;
   let prepared = null;
   let ranked = null;
   let seq = 0;
   let stopLeft = () => {};
   let presetUsed = false;
-  // the extended-hours switch is set on for a market whose session takes one, until the owner touches it
+  // the order prepared, when it was and at which top of the book (P8: prepared again quietly once the market moved and it is TK_FRESH_MS old)
+  let preparedAt = 0;
+  let preparedTop = "";
+  let refreshing = false;
+  /* the ticket's headline prices drawn again at the price now (headPrices, defined below with the market's top): what a list drawn anew
+     (the Where box) calls, so its price is now's from the moment it is drawn, never the Markets row's of minutes ago */
+  let pricesNow = () => {};
+  // THE EXTENDED-HOURS SWITCH, in view (P3: never folded under Advanced): set on for a limit in a market whose session takes one now, until
+  // the owner touches it — and the order a limit, which is all an extended session takes, until a type is chosen (the owner's pick, or the
+  // type the ticket was opened with: that one stays, unticked unless it is a limit). Ticked with another type, the order becomes a limit;
+  // another type picked, it is unticked (that order waits for the regular session); a limit picked, ticked while the owner has not touched it
   let ehTouched = false;
+  let typeTouched = false;
   form.addEventListener("change", (e) => {
-    if (e.target && e.target.name === "extendedHours") ehTouched = true;
+    const n = e.target && e.target.name;
+    if (n === "extendedHours") {
+      ehTouched = true;
+      if (form.elements.extendedHours.checked && form.elements.orderType.value !== "limit" && [...form.elements.orderType.options].some((o) => o.value === "limit")) form.elements.orderType.value = "limit";
+    } else if (n === "orderType") {
+      typeTouched = true;
+      if (form.elements.orderType.value !== "limit" && form.elements.extendedHours.checked) {
+        form.elements.extendedHours.checked = false;
+        ehTouched = true;
+      } else if (form.elements.orderType.value === "limit" && !ehTouched && mk && mk.session && mk.session.extendedHours) form.elements.extendedHours.checked = true;
+    }
   });
   // paying with a coin held (Crypto, a buy): the two-step plan and, once its sale went, the buy waiting for the fill
   let pay = "";
@@ -871,6 +1242,9 @@ function tkTicket(panel, kind0, preset) {
   };
   q("[data-side]").innerHTML = seg([["buy", "Buy"], ["sell", "Sell"]], side, (v) => {
     side = v;
+    sideButton();
+    placeholderNow();
+    exitPcts();
     drawAvail();
     panelTitle();
     drawOutcomes();
@@ -1012,7 +1386,7 @@ function tkTicket(panel, kind0, preset) {
     const both = hasReal && hasPaper;
     const onPaper = pickedRow ? !!pickedRow.paper : lensNow().kind === "paper";
     const listed = (r) => !both || (r.state === "public" ? !onPaper : !!r.paper === onPaper);
-    const money = `<div class="tk-money-row" data-money-row>${both ? `<div class="seg tk-money-seg" role="group" aria-label="Real money or paper"><button type="button" data-money="real" aria-pressed="${String(!!pickedRow && !pickedRow.paper)}">Real money</button><button type="button" data-money="paper" aria-pressed="${String(!!pickedRow && !!pickedRow.paper)}">Paper</button></div>` : ""}<span data-money-band>${tkMoneyBand(pickedRow)}</span></div>`;
+    const money = `<div class="tk-money-row" data-money-row>${both ? `<div class="seg tk-money-seg" role="group" aria-label="Real money or paper"><button type="button" data-money="real" aria-pressed="${String(!!pickedRow && !pickedRow.paper)}">Real money</button><button type="button" data-money="paper" aria-pressed="${String(!!pickedRow && !!pickedRow.paper)}">Paper</button></div>` : ""}<span data-money-band>${pickedRow ? tkMoneyBand(pickedRow) : tkPickWhere(hasPaper)}</span></div>`;
     // the public venues that list it are folded under one line when an account of yours trades it: the order panel stays the order's
     const fold = !none && rows.some((r) => r.state === "public");
     const pubCount = rows.filter((r) => r.state === "public").length;
@@ -1027,9 +1401,11 @@ function tkTicket(panel, kind0, preset) {
       // a paper account's own name, without the "paper" its tag says already ("Momentum · paper" → "Momentum" with its Paper tag)
       const name = r.paper ? tkPaperless(r.venueName) : r.venueName;
       if (r.state === "off") return `<div class="tk-at off"><span><b>${esc(name)}</b>${r.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(r.why)}${r.how ? ` ${esc(r.how)}` : ""}</span></span></div>`;
-      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(name)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why tk-at-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r">${priceOf(r)}${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
+      return `<button type="button" class="tk-at" data-at="${i}" aria-pressed="${String(!!picked && picked.venue === r.venue)}"><span><b>${esc(name)}</b>${r.paper ? ' <span class="tag paper" title="A paper account: no real money">Paper</span>' : ""}${r.best ? ' <span class="tag up">Best</span>' : ""}${r.closed ? ' <span class="tag">Closed</span>' : ""}${r.note ? `<span class="why tk-at-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ""}${unitOf(r)}</span><span class="tab-nums tk-at-r"><span data-at-px>${priceOf(r)}</span>${r.worse ? `<span class="why">${esc(Math.abs(r.worse).toFixed(2))}% ${r.worse > 0 ? "worse" : "better, check"}</span>` : ""}</span></button>`;
     }).join("")}${fold && !onPaper ? `<details class="tk-pubs"><summary>${esc(pubCount === 1 ? "1 other venue lists it" : `${pubCount} other venues list it`)} <span class="dim">· connect one to trade there</span></summary>${rows.map((r, i) => (r.state !== "public" ? "" : pubRow(r, i, false))).join("")}</details>` : ""}`;
     for (const b of box2.querySelectorAll("button[data-at]")) b.addEventListener("click", () => choose(rows[Number(b.dataset.at)]));
+    // the picked row's price, now's at once (its row was drawn with the list's price, from when the list was read)
+    pricesNow();
     // the switch: the best (else the first) account of that kind, the form kept as it is; the list then shows that kind's accounts
     for (const b of box2.querySelectorAll("button[data-money]")) b.addEventListener("click", () => {
       const want = b.dataset.money === "paper";
@@ -1048,10 +1424,13 @@ function tkTicket(panel, kind0, preset) {
     });
     const able = rows.filter((r) => r.state === "able");
     if (!picked || !able.some((r) => r.venue === picked.venue)) {
-      // the lens decides which kind is picked first: a paper account under Paper, a real one under Real money (and otherwise too)
+      // A PAPER ACCOUNT FIRST, whenever one of yours trades it: real money is picked only by the owner (the list, the switch, a market opened
+      // at a venue — `prefer`, preset.venue — or the Real money lens). Under a venue's lens, that venue. Where none of that picks one and no
+      // paper account trades it, nothing is picked: the list asks the owner where it trades (the band: "Pick where it trades — real money")
       const lens = lensNow();
-      const wanted = (r) => (lens.kind === "paper" ? !!r.paper : !r.paper);
-      const first = (prefer && able.find((r) => r.venue === prefer.venue && (!prefer.symbol || r.symbol === prefer.symbol))) || (preset.venue && able.find((r) => r.venue === preset.venue)) || able.find((r) => wanted(r) && r.best) || able.find(wanted) || able.find((r) => r.best) || able[0];
+      const wanted = (r) => (lens.kind === "venue" ? r.venue === lens.id : lens.kind === "real" ? !r.paper : !!r.paper);
+      const fallback = lens.kind === "real" ? able.find((r) => r.best) || able[0] : able.find((r) => r.paper);
+      const first = (prefer && able.find((r) => r.venue === prefer.venue && (!prefer.symbol || r.symbol === prefer.symbol))) || (preset.venue && able.find((r) => r.venue === preset.venue)) || able.find((r) => wanted(r) && r.best) || able.find(wanted) || fallback;
       if (first) choose(first);
       else {
         picked = null;
@@ -1137,7 +1516,12 @@ function tkTicket(panel, kind0, preset) {
     q("[data-trail]").hidden = t !== "trailing_stop";
     q("[data-exits]").hidden = !(brackets && form.elements.tpsl.checked);
     q("[data-post]").hidden = !(mk && mk.postOnly && t === "limit");
-    q("[data-eh]").hidden = !(mk && mk.session && mk.session.extendedHours && t === "limit");
+    const ehOn = !!(mk && mk.session && mk.session.extendedHours);
+    q("[data-eh]").hidden = !ehOn;
+    const ehSays = ehOn ? tkEhWords(mk, t, form.elements.extendedHours.checked) : "";
+    const ehBox = q("[data-eh-s]");
+    if (ehBox.textContent !== ehSays) ehBox.textContent = ehSays;
+    ehBox.hidden = !ehSays;
     // the times in force this order type takes here (a venue may take "Today only" for a stop and not for a limit); the select's options
     // are rewritten only when they differ, so one open under the pointer stays open
     const sel = q("[data-tif] select");
@@ -1174,7 +1558,10 @@ function tkTicket(panel, kind0, preset) {
   const levNow = () => {
     const set = TK.lev && picked && mk && TK.lev.venue === picked.venue && TK.lev.symbol === mk.symbol ? TK.lev : null;
     const h = held();
-    return set ? { leverage: Number(set.leverage), marginMode: set.marginMode || "" } : h && h.leverage ? { leverage: Number(h.leverage), marginMode: h.marginMode || "" } : null;
+    // else the leverage the venue says is set for the market (a paper account's 1x unless set): what an order opens at, never "Leverage"
+    // over an order prepared at 1x
+    const said = mk && Number(mk.leverage) >= 1 ? { leverage: Number(mk.leverage), marginMode: (mk.marginModes || []).length === 1 ? mk.marginModes[0] : "" } : null;
+    return set ? { leverage: Number(set.leverage), marginMode: set.marginMode || "" } : h && h.leverage ? { leverage: Number(h.leverage), marginMode: h.marginMode || "" } : said;
   };
   /* the two buttons at the panel's head and the field under them: the margin mode where the venue said one, and the leverage now ("3x"),
      else "Leverage"; the field takes the leverage now while the owner has not typed another; Set leverage… waits for a whole number
@@ -1224,11 +1611,15 @@ function tkTicket(panel, kind0, preset) {
   };
   const fit = (m) => {
     mk = m;
+    mkAt = Date.now();
     const v = venueOf();
     // the order types and times in force as the venue lists them for this market: set without rebuilding a select the owner has open
     const types = m.types && m.types.length ? m.types : ["market"];
     const keepType = form.elements.orderType.value;
-    setOptions(form.elements.orderType, types.map((t) => [t, TK_TYPE_NAMES[t] || t]), types.includes(preset.orderType) && !presetUsed ? preset.orderType : types.includes(keepType) ? keepType : types[0]);
+    // the type the ticket was opened with (a draft restored, an entry that names one) is a type chosen, as the owner's own pick is: it stays
+    const presetType = !presetUsed && types.includes(preset.orderType) ? preset.orderType : "";
+    if (presetType) typeTouched = true;
+    setOptions(form.elements.orderType, types.map((t) => [t, TK_TYPE_NAMES[t] || t]), presetType || (types.includes(keepType) ? keepType : types[0]));
     const tifBox = q("[data-tif]");
     if (!(m.tifs && m.tifs.length)) tifBox.innerHTML = "";
     else {
@@ -1243,13 +1634,20 @@ function tkTicket(panel, kind0, preset) {
     // outside the regular session, where the venue trades the session that is on, a limit goes with extended hours unless the owner says not
     const takesEh = !!(m.session && m.session.extendedHours);
     if (!takesEh) form.elements.extendedHours.checked = false;
-    else if (!ehTouched) form.elements.extendedHours.checked = true;
+    else if (!ehTouched) {
+      // the session on takes a limit with extended hours, and nothing else trades in it: the order is one until a type is chosen — and a
+      // type chosen (the owner's, or the one the ticket was opened with) stays what it is, the switch ticked only for a limit, so a market
+      // order's words ("Tick Extended hours to trade now, as a limit") never stand beside a box already ticked
+      if (!typeTouched && types.includes("limit")) form.elements.orderType.value = "limit";
+      form.elements.extendedHours.checked = form.elements.orderType.value === "limit";
+    }
     const more = q("[data-more]");
-    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly && !takesEh;
+    more.hidden = !(m.tifs && m.tifs.length) && !m.postOnly;
     // Advanced is folded and holds only what the market takes; a market that takes none of it has no Advanced
     q("[data-adv]").hidden = more.hidden;
     if (!pay || isDollar(pay)) form.elements.unit.options[1].textContent = unitName(m);
-    if (m.price) form.elements.limitPrice.placeholder = m.kind === "event" ? String(Number((m.price * 100).toFixed(1))) : String(Number(Number(m.price).toPrecision(10)));
+    placeholderNow();
+    pxButtons();
     if (!presetUsed) {
       // what the ticket was opened with, once
       if (preset.amount) form.elements.amount.value = String(preset.amount);
@@ -1354,16 +1752,209 @@ function tkTicket(panel, kind0, preset) {
     if (mk.kind === "perp" || mk.kind === "future" || mk.kind === "event") readPositions(mk);
     else drawAvail();
   };
-  /* a price pressed in the order book: the order becomes a limit at it (where the market takes limits) */
-  TK.setLimit = (p) => {
+  /* a price pressed in the order book, or Mid or BBO pressed: the order becomes a limit at it (where the market takes limits) — the order shown
+     is not the one the fields say any more, so Sign is off until it is prepared again (B6) */
+  const setLimitTo = (p) => {
     if (!live() || !mk || !(p > 0)) return;
     const types = [...form.elements.orderType.options].map((o) => o.value);
     if (!types.includes("limit")) return;
     if (!TK_LIMITED.includes(form.elements.orderType.value)) form.elements.orderType.value = "limit";
     form.elements.limitPrice.value = mk.kind === "event" ? String(Number((p * 100).toFixed(2))) : tkPlain(p);
     shape();
+    exitPcts();
     keep();
+    staleNow();
     later(0);
+  };
+  TK.setLimit = setLimitTo;
+
+  // ---- the market as it moves (P8): its top now, the placeholder, Mid and BBO, the exits' percents, the estimate prepared again ----
+  /* THE MARKET'S TOP NOW — only where it IS now: the stream's latest quote of this market where it carries it live (the account's own word,
+     `live`: a venue's stream heard within seconds, a US share's real-time quote fresh by its own stamp) and it is no older than the market's
+     own read — its best bid and ask, the price it stands for (ui/stream.js stPrice); else the market as last read, while that read is
+     real-time (no delay: never Cboe's quote, fifteen minutes behind — delayMs) and no older than TK_TOP_LIVE_MS by its own moment (quoteAt,
+     else when the ticket had it). Otherwise none of the three (undefined): Mid and BBO are not offered, the limit's placeholder and the
+     exits' percents have no price to start from — a price fifteen minutes old, or one last read before the stream went down, is never
+     written into an order as the price now. With the moment they are from */
+  const topNow = () => {
+    const none = { bid: undefined, ask: undefined, price: undefined, at: NaN };
+    if (!mk) return none;
+    const ok = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+    const own = Date.parse(String(mk.quoteAt || ""));
+    const readAt = Number.isFinite(own) ? own : mkAt;
+    const read = !(Number(mk.delayMs) > 0) && readAt > 0 && Date.now() - readAt <= TK_TOP_LIVE_MS ? { bid: ok(mk.bid), ask: ok(mk.ask), price: ok(mk.price) } : {};
+    const sq = picked && typeof stQuoteOf === "function" ? stQuoteOf(picked.venue, picked.symbol) : null;
+    const seen = sq ? Date.parse(String(sq.seenAt || sq.at || "")) : NaN;
+    if (sq && sq.live === true && !(Number(sq.delayMs) > 0) && !(Number.isFinite(own) && Number.isFinite(seen) && seen < own)) {
+      const price = typeof stPrice === "function" ? ok(stPrice(sq, mk.kind === "perp" || mk.kind === "future")) : undefined;
+      return { bid: ok(sq.bid) ?? read.bid, ask: ok(sq.ask) ?? read.ask, price: price ?? read.price, at: seen };
+    }
+    return read.bid !== undefined || read.ask !== undefined || read.price !== undefined ? { ...read, at: readAt } : none;
+  };
+  const topKey = () => { const t = topNow(); return [t.bid, t.ask, t.price].join("|"); };
+  /* the market as read, its top laid over as it is now: what the face's block and the smallest-order check read */
+  const mkNow = () => {
+    if (!mk) return mk;
+    const t = topNow();
+    return { ...mk, ...(t.bid !== undefined ? { bid: t.bid } : {}), ...(t.ask !== undefined ? { ask: t.ask } : {}), ...(t.price !== undefined ? { price: t.price } : {}) };
+  };
+  /* the limit's placeholder: the price on the order's own side now (a buy's ask, a sell's bid, else the last price), as the field takes it;
+     none while no price is now (topNow) — never the last one left standing as if it were */
+  const placeholderNow = () => {
+    if (!mk) return;
+    const t = topNow();
+    const p = (side === "sell" ? t.bid : t.ask) ?? t.price;
+    const ph = !(p > 0) ? "" : mk.kind === "event" ? String(Number((p * 100).toFixed(1))) : String(Number(Number(p).toPrecision(10)));
+    if (form.elements.limitPrice.placeholder !== ph) form.elements.limitPrice.placeholder = ph;
+  };
+  /* Mid and BBO, beside the limit: offered where the book's top is known NOW (topNow) — and taken away when it is no longer: a top from the
+     market as read goes out of date by itself, with no word from anywhere, so the ticket looks again the moment it would (topTimer) */
+  let topTimer = 0;
+  const pxButtons = () => {
+    const w = q("[data-px-btns]");
+    const t = topNow();
+    const on = !!mk && t.bid > 0 && t.ask > 0;
+    if (w.hidden === on) w.hidden = !on;
+    clearTimeout(topTimer);
+    if (Number.isFinite(t.at) && (t.bid !== undefined || t.ask !== undefined || t.price !== undefined)) topTimer = setTimeout(() => live() && liveTick(), Math.max(0, t.at + TK_TOP_LIVE_MS - Date.now()) + 100);
+  };
+  q("[data-px-btns]").addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("button[data-px]");
+    if (!b || !mk) return;
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    const p = tkTopPrice(b.dataset.px, topNow(), { side, step: mk.priceStep });
+    if (p > 0) setLimitTo(p);
+  });
+  /* the sign button in the side's colour: Sell and Short red, as HL's own (trade.css) */
+  const sideButton = () => {
+    if (btn.dataset) btn.dataset.side = side;
+  };
+  /* the entry an exit's percent is counted from: the limit typed (a limit order), else the price on the order's side now */
+  const exitRef = () => {
+    const lim = TK_LIMITED.includes(form.elements.orderType.value) ? Number(String(form.elements.limitPrice.value || "").trim()) : NaN;
+    if (lim > 0) return lim;
+    const t = topNow();
+    return (side === "sell" ? t.bid : t.ask) ?? t.price;
+  };
+  const EXITS = [["takeProfit", "tpPct", true], ["stopLoss", "slPct", false]];
+  /* each exit's percent from its price — the price is what is signed — where the owner is not typing in that percent */
+  const exitPcts = () => {
+    if (!mk) return;
+    for (const [priceName, pctName, tp] of EXITS) {
+      const el = form.elements[pctName];
+      if (!el || document.activeElement === el) continue;
+      const v = tkExitPct(exitRef(), form.elements[priceName].value, { buy: side === "buy", tp });
+      if (el.value !== v) el.value = v;
+    }
+  };
+  // a percent typed writes its price (heard on the field itself, before the form hears the change: the price is then what is prepared)
+  for (const [priceName, pctName, tp] of EXITS) {
+    form.elements[pctName].addEventListener("input", () => {
+      if (!mk) return;
+      form.elements[priceName].value = tkExitPrice(exitRef(), form.elements[pctName].value, { buy: side === "buy", tp, step: mk.priceStep });
+    });
+  }
+  /* THE MARKET MOVED (a pushed quote of it, a read of it): what the ticket shows of its price follows in the next frame — the placeholder,
+     Mid and BBO, the face's block (its bid and ask), the exits' percents — and the order prepared is prepared again where the market moved
+     since and it is TK_FRESH_MS old (refresh) */
+  let tickDue = false;
+  const liveTick = () => {
+    if (tickDue) return;
+    tickDue = true;
+    nextFrame(() => {
+      tickDue = false;
+      if (!live() || !mk) return;
+      placeholderNow();
+      pxButtons();
+      exitPcts();
+      headPrices();
+      drawKind();
+      void refresh();
+    });
+  };
+  /* THE TICKET'S TWO HEADLINE PRICES follow the market too: the market picked (its row's price, beside its day's change) and the account
+     picked under Where — at the price now (topNow: the stream's, or the market as read while that is now), else at the market as last read
+     with its age said (core ageWords: "16 min old" for a share Cboe alone prices) — never the Markets row's price from when it was picked,
+     standing as now. A pre-IPO company's (its implied valuation) and an event's (cents, by its outcome) are left as their rows say them */
+  /* THE MARKET'S PRICE NOW, in words: the price now (topNow), else the market as last read with its age said — and, where its only quote
+     is a delayed one (Cboe's, fifteen minutes behind), how far behind it is. `unit`: said after the price (the ticket's headline: "62,517
+     USD"), else in dollars ("$62,517"); an event's in cents. "" where there is no price */
+  const priceWords = (unit) => {
+    if (!mk) return "";
+    const t = topNow();
+    const now = t.price > 0;
+    const p = now ? t.price : Number(mk.price);
+    if (!(p > 0)) return "";
+    const late = now ? "" : [ageWords(mk.quoteAt), Number(mk.delayMs) > 0 ? `${Math.round(Number(mk.delayMs) / 60_000)} min delayed` : ""].filter(Boolean).join(", ");
+    const ev = mk.kind === "event" || (item && item.kind === "event");
+    return `${ev ? tkCents(p) : unit ? `${px(p)} ${unit}` : `$${px(p)}`}${late ? ` · ${late}` : ""}`;
+  };
+  const headPrices = () => {
+    if (!mk || !item) return;
+    // the headline of a ticket with nothing typed yet: the market's price now, its age when it is not
+    const big = q("[data-q-px]");
+    if (big) setText(big, priceWords(mk.quote) || "no price");
+    if (tkPre(item)) return;
+    const text = priceWords("");
+    if (!text) return;
+    const ev = item.kind === "event";
+    const rp = ev ? null : q("[data-picked] .tk-rp .tab-nums");
+    if (rp) setText(rp, text);
+    const at = picked ? q('[data-where] button.tk-at[aria-pressed="true"] [data-at-px]') : null;
+    if (at) setText(at, text);
+  };
+  pricesNow = headPrices;
+  const offQuote = typeof stOn === "function" ? stOn("quote", (x) => {
+    if (!live()) return void offQuote();
+    if (x && picked && x.venue === picked.venue && x.symbol === picked.symbol) liveTick();
+  }) : () => {};
+  // the stream connecting or going down changes what is now (stQuoteOf says nothing while it is down): the ticket looks again
+  const offHealth = typeof stOn === "function" ? stOn("health", () => {
+    if (!live()) return void offHealth();
+    liveTick();
+  }) : () => {};
+  // the ticket this one replaces stops listening now, not at the next quote (with no stream, none would come)
+  if (typeof TK.offQuote === "function") TK.offQuote();
+  if (typeof TK.offHealth === "function") TK.offHealth();
+  TK.offQuote = offQuote;
+  TK.offHealth = offHealth;
+  /* the market read again (the terminal's bar reads it on its beat): its price, its top, its session and its words laid into the market the
+     ticket holds — the same object, so what waits on it (its positions read, Pay with) still knows it — and the ticket follows */
+  TK.marketRead = (at, m) => {
+    if (!live() || !picked || !mk || !at || at.venue !== picked.venue || !m || m.symbol !== mk.symbol) return;
+    const was = JSON.stringify([mk.session || null, mk.open]);
+    for (const k of TK_LIVE_FIELDS) mk[k] = m[k];
+    mkAt = Date.now();
+    if (JSON.stringify([mk.session || null, mk.open]) !== was) shape();
+    liveTick();
+  };
+  /** THE ESTIMATE PREPARED AGAIN, QUIETLY (P8): the order prepared — the one the fields say, nothing on its way, no second step — is
+   * prepared again once the market moved since it was and it is TK_FRESH_MS old; the button stays on the order shown until the new one
+   * lands, and the new one replaces it, its words and what is signed, in the same moment. A refusal is shown as a refusal (requote) */
+  const refresh = async () => {
+    if (!live() || !prepared || second || busy || refreshing || !picked || !mk) return;
+    if (payPlan && payPlan.mode === "two") return;
+    if (draftKey() !== asked || Date.now() - preparedAt < TK_FRESH_MS || topKey() === preparedTop) return;
+    refreshing = true;
+    const my = seq;
+    const key = asked;
+    const top = topKey();
+    let r;
+    try {
+      r = await Owner.prepare(draft());
+    } finally {
+      refreshing = false;
+    }
+    if (!live() || my !== seq || asked !== key || draftKey() !== key || busy || second || !prepared) return;
+    if (!r || r.status !== 200) return void requote(true);
+    const open = !!sign.querySelector("details[open]");
+    prepared = r.body;
+    preparedAt = Date.now();
+    preparedTop = top;
+    showPrepared();
+    signed(whatYouSign(prepared, { open, notes: tkSignNotes(prepared, mk.kind === "event") }));
+    pctOf(prepared);
+    leftNow();
   };
 
   // ---- Pay with (Crypto, a buy): the venue's dollars for it first, then coins held there — a coin is two steps, two signatures ----
@@ -1438,7 +2029,7 @@ function tkTicket(panel, kind0, preset) {
   let cross = () => {};
   const drawKind = () => {
     const f = formFields(form);
-    const html = tkKindBlock(kind, mk, picked ? tkWhereRows(item, ranked, kind).find((r) => r.venue === picked.venue) || picked : null, item, { side, outcome, amount: f.amount, unit: f.unit, leverage: f.leverage, held: held(), positions, chains, prepared, pay: payCoin() });
+    const html = tkKindBlock(kind, mkNow(), picked ? tkWhereRows(item, ranked, kind).find((r) => r.venue === picked.venue) || picked : null, item, { side, outcome, amount: f.amount, unit: f.unit, leverage: f.leverage, held: held(), positions, chains, prepared, pay: payCoin() });
     kb.hidden = !html;
     paint(kb, html);
   };
@@ -1504,13 +2095,38 @@ function tkTicket(panel, kind0, preset) {
   /* the order prepared again from the fields: not when nothing changed and its ten minutes have a while to run; what is signed stays open
      if it was. Paying with a coin: the sale prepared, the buy estimated from what it would bring now */
   let asked = "";
+  /* the order as the fields say it now, as text (requote's key): a prepared order is for exactly this one, or it is stale */
+  const draftKey = () => {
+    if (!picked || !mk) return "";
+    const plan = payPlanNow();
+    const two = !!(plan && plan.mode === "two");
+    return JSON.stringify([two ? plan.legs[0] : draft(), two]);
+  };
+  /* a field changed: the order shown is not the one the fields say any more — the sign button goes off at once, before the account is
+     asked again (later(), a moment after the typing stops), so a quick Enter or click never signs the order prepared before the change.
+     Both ways: a change taken back before the account was asked again (100 typed over 10, then 10 again; a slider dragged and let back)
+     leaves the fields saying exactly the order prepared, and the button comes back on for it — requote then has nothing to ask */
+  const staleNow = () => {
+    if (second || !prepared) return;
+    if (draftKey() !== asked) {
+      btn.disabled = true;
+      btn.title = "The order changed: it is being prepared again";
+    } else signableAgain();
+  };
+  /* the order prepared is the one the fields say: signable, as requote left it when it came back (the owner's browser, writes on) — not
+     while one is on its way (core busy): the button stays off until it is placed or refused */
+  const signableAgain = () => {
+    btn.disabled = busy || !owns() || !writesOn();
+    btn.title = LOOK;
+  };
   const requote = async (force = false) => {
     if (!live() || !picked || !mk || second) return;
     payPlan = payPlanNow();
     const two = !!(payPlan && payPlan.mode === "two");
     const d = two ? payPlan.legs[0] : draft();
     const key = JSON.stringify([d, two]);
-    if (!force && prepared && key === asked && prepared.action.deadline - Date.now() > 30_000) return;
+    // nothing to ask: the order prepared is still the one the fields say — and signable (a change taken back may have turned it off)
+    if (!force && prepared && key === asked && prepared.action.deadline - Date.now() > 30_000) return void signableAgain();
     const open = !!sign.querySelector("details[open]");
     const my = ++seq;
     prepared = null;
@@ -1535,16 +2151,20 @@ function tkTicket(panel, kind0, preset) {
     const noChance = mk.kind === "event" && ((TK_LIMITED.includes(d.orderType) && tkCentsBad(typed.limitPrice)) || (TK_STOPPED.includes(d.orderType) && tkCentsBad(typed.stopPrice)));
     const noTrail = !two && d.orderType === "trailing_stop" && !(Number(d.trailPercent || d.trailPrice) > 0);
     if (noChance || !(amount > 0) || noTrail || (!two && TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0)) || (!two && TK_STOPPED.includes(d.orderType) && !(Number(d.stopPrice) > 0))) {
-      show(`<div class="big"><span>${esc(mk.name)}</span><span>${mk.kind === "event" ? esc(tkCents(mk.price)) : mk.price ? `${esc(px(mk.price))} ${esc(mk.quote)}` : "no price"}</span></div><div class="path">${two ? `${esc(tkSwapHow(payPlan))} ` : ""}${noChance ? "A price in cents is between 0 and 100: a contract pays $1.00 at most." : !(amount > 0) ? "Type an amount." : noTrail ? "Type how far the stop trails: a percent or a price." : TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0) ? "Type the limit price." : "Type the stop price."}</div>`);
+      show(`<div class="big"><span>${esc(mk.name)}</span><span data-q-px>${esc(priceWords(mk.quote) || "no price")}</span></div><div class="path">${two ? `${esc(tkSwapHow(payPlan))} ` : ""}${noChance ? "A price in cents is between 0 and 100: a contract pays $1.00 at most." : !(amount > 0) ? "Type an amount." : noTrail ? "Type how far the stop trails: a percent or a price." : TK_LIMITED.includes(d.orderType) && !(Number(d.limitPrice) > 0) ? "Type the limit price." : "Type the stop price."}</div>`);
       return;
     }
     // below the smallest order the venue takes (its own rules, as the market read gave them): said at once, nothing asked of the account
-    const small = two ? "" : tkTooSmall(mk, d, picked.venueName || nameOf(picked.venue));
+    const small = two ? "" : tkTooSmall(mkNow(), d, picked.venueName || nameOf(picked.venue));
     if (small) return void show(`<div class="msg no">${esc(small)}</div>`);
     show(`<span class="dim">Asking ${esc(picked.venueName || nameOf(picked.venue))}…</span>`);
     const r = await Owner.prepare(d);
     if (!live() || my !== seq) return;
-    if (r.status !== 200) return void show(`<div class="msg no">${esc(Owner.why(r) || "Refused")}</div>${tkHowToFix(picked.venue, r)}`);
+    // refused: the reason under the button, and on the button itself (its title), so a button that stays off says why where it is
+    if (r.status !== 200) {
+      btn.title = Owner.why(r) || "Refused";
+      return void show(`<div class="msg no">${esc(Owner.why(r) || "Refused")}</div>${tkHowToFix(picked.venue, r)}`);
+    }
     let thenWords = "";
     if (two) {
       // the buy as it would be if the sale brought what it is worth now: an estimate; it is prepared again, and signed, once the sale fills
@@ -1554,11 +2174,13 @@ function tkTicket(panel, kind0, preset) {
       thenWords = `<div class="path"><b>2 · then</b> ${r2.status === 200 ? `${esc(r2.body.quote.order.words)}, with about ${money(est)} of ${esc(payPlan.via)}: sized by what the sale brings, prepared and signed once it has filled.` : `buy ${esc(item.base)}: ${esc(Owner.why(r2) || "refused")}`}</div>`;
     }
     prepared = r.body;
-    const now = levNow();
-    show(`${two ? '<div class="path"><b>Two steps, two signatures.</b> 1 · first</div>' : ""}${tkOrderWords(prepared, two ? payPlan.market : mk, { lev: now ? now.leverage : 0 })}${thenWords}<div class="left-t" data-left></div>`);
+    preparedAt = Date.now();
+    preparedTop = topKey();
+    showPrepared(two ? { lead: '<div class="path"><b>Two steps, two signatures.</b> 1 · first</div>', then: thenWords, market: payPlan.market } : {});
     signed(whatYouSign(prepared, { open, notes: tkSignNotes(prepared, mk.kind === "event") }));
     btn.textContent = two ? "Sign the sale (1 of 2)" : tkSignWord(venueOf());
-    btn.disabled = !owns() || !writesOn();
+    // a field changed while the account was asked: this is the order before the change, shown, never signable — the next ask is coming
+    btn.disabled = !owns() || !writesOn() || draftKey() !== key;
     drawKind();
     pctOf(prepared);
     leftNow();
@@ -1578,6 +2200,11 @@ function tkTicket(panel, kind0, preset) {
     if (el.value !== v) el.value = v;
     setText(q("[data-pct-v]"), `${v}%`);
     pctFill(v);
+  };
+  /* the order prepared, in words (tkOrderWords) with the minutes it stands under them — a two-step's sale with its lead and the buy after it */
+  const showPrepared = ({ lead = "", then = "", market = null } = {}) => {
+    const now = levNow();
+    show(`${lead}${tkOrderWords(prepared, market || mk, { lev: now ? now.leverage : 0, venueName: picked ? picked.venueName || nameOf(picked.venue) : "" })}${then}<div class="left-t" data-left></div>`);
   };
   const later = debounce(requote);
   /* the buy of a two-step, from what the sale brought: prepared, shown, signed on its own */
@@ -1613,7 +2240,9 @@ function tkTicket(panel, kind0, preset) {
     // the leverage typed is set on its own (Set leverage…): it changes nothing the account prepares for the order
     if (n === "leverage" || n === "marginMode") return void levReady();
     if (n === "q" || n === "chain") return;
+    if (n === "takeProfit" || n === "stopLoss" || n === "limitPrice") exitPcts();
     keep();
+    staleNow();
     if (n === "amount" || n === "unit") {
       clearTimeout(rankTimer);
       rankTimer = setTimeout(rank, 600);
@@ -1642,14 +2271,22 @@ function tkTicket(panel, kind0, preset) {
     }
     keep();
     shape();
+    exitPcts();
+    staleNow();
     later(0);
   });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!prepared || busy || !owns()) return;
+    const leg2 = !!second;
+    // the order shown is not the one the fields say now (a change, then Enter before the account was asked again): it is prepared again
+    // for what is typed, shown, and signed only when the owner signs that one
+    if (!leg2 && draftKey() !== asked) {
+      say("The order changed: here it is again as the account prepares it. Check it, then sign.", "wait");
+      return void requote(true);
+    }
     const p = prepared;
     const two = !!(payPlan && payPlan.mode === "two") && !second;
-    const leg2 = !!second;
     btn.disabled = true;
     say(`Placing it at ${nameOf(p.action.venue)}…`, "wait");
     busy = true;
@@ -1663,14 +2300,20 @@ function tkTicket(panel, kind0, preset) {
     }
     if (!live()) return void load();
     if (refusedAt(r)) {
+      // said where the owner looks: under the button, and as a toast — the line under a sticky button is often out of view
       say(Owner.why(r) || "Refused", "no");
+      toast(Owner.why(r) || "Refused", "no");
       return void (leg2 ? prepSecond() : requote(true));
     }
     prepared = null;
-    // the order is placed: the positions kept are the ones before it, so the next read (the panel's position line) asks the venues afresh
-    forget("/api/account/positions");
+    // the order is placed: the positions and the statement kept are the ones before it, so the next read (the panel's position line, the
+    // history tabs) asks the account afresh
+    afterAction();
     let o = r.body.kind === "order" ? r.body.order : null;
     let words = saidOf(r.body);
+    // what the toast says: the order's words — or nothing where its fill was said already (the account pushed it during the call, before the
+    // answer: core orderWordsOnce), and the push that comes after it says nothing. The words under the button stay whatever came first
+    const toastIt = orderWordsOnce(r.body, true) !== "" || !(o && num(o.filledQty) > 0);
     let bad = false;
     if (o && o.walletTxs && !o.ref) {
       try {
@@ -1705,8 +2348,12 @@ function tkTicket(panel, kind0, preset) {
       second = null;
     }
     if (bad) flash = words;
-    else said = words;
+    else if (toastIt) said = words;
     form.elements.amount.value = "";
+    // the slider back at nothing with the size: it follows the next order prepared, never the last one's share
+    form.elements.pct.value = "0";
+    setText(q("[data-pct-v]"), "0%");
+    pctFill(0);
     tkDraftKeep(null);
     say(words, bad ? "no" : "ok");
     await load();
@@ -1716,6 +2363,8 @@ function tkTicket(panel, kind0, preset) {
     const f = formFields(form);
     openHandToAgent({ kind, venue: picked ? picked.venue : preset.venue || "", symbol: picked ? picked.symbol : "", side, outcome: item && item.kind === "event" ? outcome : "", usd: f.unit === "usd" ? String(f.amount || "").trim() : "" });
   });
+
+  sideButton();
 
   // ---- what the ticket was opened with ----
   // a ticket the owner opened (not the panel at rest) — or one at rest on a market (a draft reopened, the terminal's own start) — is left
@@ -1728,7 +2377,16 @@ function tkTicket(panel, kind0, preset) {
     if (typeof ttSetItem === "function") ttSetItem(null);
   };
   if (preset.item && typeof preset.item === "object") pick(preset.item, preset.venue ? { venue: preset.venue, symbol: preset.symbol } : undefined);
-  else if (preset.venue && preset.symbol) tkPresetItem(preset).then((x) => live() && (x ? pick(x, { venue: preset.venue, symbol: preset.symbol }) : onNone()));
+  else if (preset.venue && preset.symbol)
+    tkPresetItem(preset).then((x) => {
+      if (!live()) return;
+      if (x) return void pick(x, { venue: preset.venue, symbol: preset.symbol });
+      // a market the address named, not listed at the paper account it was tried at (tkRouteVenue): the kind at rest, the terminal free to
+      // start on its busiest market as any visit does
+      if (!preset.quiet) return void onNone();
+      if (typeof TT === "object") TT.started = false;
+      tkOpen({ kind, rest: true });
+    });
   else if (preset.venue && preset.base) tkPresetByBase(preset, kind).then((x) => {
     if (!live()) return;
     if (x) pick(x, { venue: preset.venue });
@@ -1772,6 +2430,9 @@ function tkOfFace(r, face) {
  * a key ("Connect to trade"; a read-only server offers no connection: the line is a price). A pre-IPO venue carries its implied valuation
  * and unit, which differ by venue */
 /* the band above the venues: which kind of account the order picked is for — PAPER (no real money) or REAL MONEY — and at which venue */
+/* the band while no account is picked (none was named and no paper account trades it: tkFirstLeg): the owner picks where it trades, and
+   what that is, said before the pick — real money where only real accounts trade it */
+const tkPickWhere = (hasPaper) => `<span class="tk-money pick">${hasPaper ? "Pick where it trades" : "Pick where it trades — real money"}</span>`;
 const tkMoneyBand = (r) => (!r ? "" : r.paper ? `<span class="tk-money paper" title="A paper account: no real money changes hands">PAPER · no real money · ${esc(tkPaperless(r.venueName))}</span>` : `<span class="tk-money real" title="A real account: real money">REAL MONEY · ${esc(r.venueName)}</span>`);
 /* a paper account's name without the word its Paper tag already says: "Momentum · paper" is "Momentum" beside the tag. A name that is only
    that word stays as it is */
@@ -1857,10 +2518,14 @@ function tkHowToFix(venue, r) {
 
 /** an order the account prepared, in words — HL's summary under its button: a headline (the side as the ticket's toggle says it, Long or
  * Short on a perpetual; the size; about what it is worth), then label · value rows from the prepared order itself — its value, the margin it
- * needs at the leverage the venue holds the market at (`lev`, where the venue said one: tkTicket levNow), the most a market buy may cost,
- * the worst price it may fill at — then how it goes, its flags and the venue's note. Every figure is the prepared order's, so nothing here
- * can disagree with what is signed. An event contract's in cents, with what it pays */
-function tkOrderWords(p, m, { lev = 0 } = {}) {
+ * needs at the leverage it would stand at (the venue's own estimate where it gave one, else the leverage the venue holds the market at:
+ * `lev`, tkTicket levNow), the most a market buy may cost, the worst price it may fill at (a share's market order out of its session says
+ * too that it waits for the open, and fills at the open's price — never past those two, which are what is signed: an open past them cancels
+ * it, live/paper.ts judge), its FEE — the venue's own figure where it says one before the order (a paper
+ * account's rule), else that the venue charges it — and a perpetual's ESTIMATED LIQUIDATION PRICE where the venue's rule gives one — then how
+ * it goes, its flags and the venue's note. Every figure is the prepared order's, so nothing here can disagree with what is signed. An event
+ * contract's in cents, with what it pays */
+function tkOrderWords(p, m, { lev = 0, venueName = "" } = {}) {
   const a = p.action;
   const q = p.quote.order;
   const ev = q.kind === "event";
@@ -1876,11 +2541,20 @@ function tkOrderWords(p, m, { lev = 0 } = {}) {
   const sideWord = perp ? (a.side === "sell" ? "Short" : "Long") : a.side === "buy" ? "Buy" : "Sell";
   const value = Number(q.notionalUsd);
   const atMarket = a.orderType === "market" || a.orderType === "stop" || a.orderType === "trailing_stop";
+  // the price it was valued at, and how old it is once it is not the last few seconds' (core ageWords): never an estimate from an old price
+  // passed off as now
+  const age = ageWords(q.quoteAt);
+  const levAt = Number(q.leverage) > 0 ? Number(q.leverage) : lev;
+  const fee = Number.isFinite(Number(q.feeUsd)) && q.feeUsd !== undefined && q.feeUsd !== null ? `${fine(q.feeUsd)}${Number.isFinite(Number(q.feeBps)) && q.feeBps !== undefined ? ` <span class="tk-qsub">${esc(`${(Number(q.feeBps) / 100).toFixed(2)}%`)}</span>` : ""}` : `<span class="tk-qsub">${esc(`as ${venueName || "the venue"} charges it`)}</span>`;
   const rows = [
     ["Order value", money(value)],
-    perp && lev > 0 && value > 0 ? ["Margin required", `${money(value / lev)} at ${esc(String(lev))}x`] : null,
+    perp && levAt > 0 && value > 0 ? ["Margin required", `${money(value / levAt)} at ${esc(String(levAt))}x`] : null,
+    q.queued ? ["Queued for the open", `<span class="tk-qsub">fills at the open's price, never past what you sign: an open past it cancels it</span>`] : null,
     atMarket && a.side === "buy" && Number(q.maxUsd) > value ? ["Most it may cost", money(q.maxUsd)] : null,
     atMarket && q.worstPrice !== undefined ? ["Fills no worse than", esc(at(q.worstPrice))] : null,
+    ["Fee", fee],
+    perp && Number(q.liquidationPrice) > 0 ? ["Est. liquidation price", esc(at(q.liquidationPrice))] : null,
+    age ? ["Price", `${esc(at(q.price))} <span class="tk-age">${esc(`${q.quoteFrom ? `${q.quoteFrom}, ` : ""}${age}`)}</span>`] : null,
   ].filter(Boolean);
   return `<div class="big"><span>${esc(sideWord)} ${esc(a.qty)} ${esc(ev ? `contracts · ${what}` : what)}</span><span>≈ ${money(value)}</span></div><dl class="tk-qrows">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl><div class="path">${esc(q.name)} ${how}</div>${ev && a.side === "buy" && n > 0 ? `<div class="path"><b>Pays ${money(n)}</b> if it happens (the most it can pay) · costs about ${money(value)}</div>` : ""}${ev && a.side === "sell" && n > 0 ? `<div class="path">You get about ${money(value)} for ${esc(plural(n, "contract"))} now, instead of $1.00 each if it happens.</div>` : ""}${flags ? `<div class="path">${esc(flags)}</div>` : ""}${q.note ? `<details class="path tk-qnote"><summary>How it fills here</summary>${esc(q.note)}</details>` : ""}`;
 }
@@ -1914,7 +2588,9 @@ async function tkPresetItem(preset) {
   const v = A.venues.find((x) => x.id === preset.venue);
   const body = await api(`/api/account/market?${new URLSearchParams({ venue: preset.venue, symbol: preset.symbol })}`, { ttl: 3_000 });
   if (!body || body.ok === false) {
-    toast(refusalOf(body) || `${(v && v.name) || preset.venue} lists no ${preset.symbol}`, "no");
+    // a market the address named at an account gone, tried at a paper account instead (tkRouteVenue): one it does not list is no error
+    // of the owner's — the kind opens at rest instead, without a word
+    if (!preset.quiet) toast(refusalOf(body) || `${(v && v.name) || preset.venue} lists no ${preset.symbol}`, "no");
     return null;
   }
   const m = body.market;
@@ -1955,15 +2631,27 @@ function tkConnectTo(a) {
  * (its times in force, per type where they differ; whether a limit may be post-only or an order reduce-only), never invented */
 function tkAdvSummary(m, f = {}) {
   const t = f.orderType || "market";
-  const eh = !!(m.session && m.session.extendedHours);
-  const set = [f.tif ? TK_TIF_NAMES[f.tif] || f.tif : "", t === "limit" && f.postOnly ? "post-only" : "", f.reduceOnly ? "reduce-only" : "", t === "limit" && eh && f.extendedHours ? "extended hours" : ""].filter(Boolean);
+  // extended hours is not Advanced's: its switch is in view in the order panel (tkEhWords)
+  const set = [f.tif ? TK_TIF_NAMES[f.tif] || f.tif : "", t === "limit" && f.postOnly ? "post-only" : "", f.reduceOnly ? "reduce-only" : ""].filter(Boolean);
   if (set.length) return set.join(" · ");
   const allowed = (m.tifsByType && m.tifsByType[t]) || m.tifs || [];
   const word = (x) => (TK_TIF_NAMES[x] || x).toLowerCase();
-  if (!allowed.length && !m.postOnly && !m.reduceOnly && !eh) return "The venue's defaults: no time in force, post-only or reduce-only is set from here";
+  if (!allowed.length && !m.postOnly && !m.reduceOnly) return "The venue's defaults: no time in force, post-only or reduce-only is set from here";
   if (allowed.length && allowed.every((x) => x === "ioc" || x === "fok")) return `A ${(TK_TYPE_NAMES[t] || t).toLowerCase()} order here fills now or is cancelled (${allowed.join("/")})`;
   if (allowed.length && !allowed.includes("gtc")) return `Never rests until cancelled here: ${allowed.map(word).join(" or ")}`;
-  return `${allowed.length ? `The venue's default · ${allowed.map(word).join(" · ")}` : "The venue's default time in force"}${m.postOnly && t === "limit" ? " · post-only possible" : ""}${m.reduceOnly ? " · reduce-only possible" : ""}${eh && t === "limit" ? " · extended hours possible" : ""}`;
+  return `${allowed.length ? `The venue's default · ${allowed.map(word).join(" · ")}` : "The venue's default time in force"}${m.postOnly && t === "limit" ? " · post-only possible" : ""}${m.reduceOnly ? " · reduce-only possible" : ""}`;
+}
+
+/** THE EXTENDED-HOURS SWITCH'S WORDS, under it in the order panel (P3), for a market whose session takes one now: which session is on and
+ * until when, New York time, and what the switch does to this order — ticked, a limit that trades in it now; not ticked, an order that waits
+ * for the regular session (a market order too: ticked, it becomes a limit). "" where the session takes none */
+function tkEhWords(m, t, on) {
+  const s = m && m.session;
+  if (!s || !s.extendedHours) return "";
+  const name = { pre: "Pre-market", after: "After-hours", overnight: "The overnight session" }[s.phase] || "An extended session";
+  const until = s.phaseEndsAt && Number.isFinite(Date.parse(s.phaseEndsAt)) ? ` until ${nyTime(s.phaseEndsAt)} New York` : "";
+  if (on && t === "limit") return `${name} is on${until}: this limit order trades now.`;
+  return `${name} is on${until}: ${t === "limit" ? "this limit order" : `a ${(TK_TYPE_NAMES[t] || t).toLowerCase()} order`} waits for the regular session. Tick Extended hours to trade now${t === "limit" ? "" : ", as a limit"}.`;
 }
 
 /** Advanced's line in a few letters, as HL writes its own ("TIF GTC"): the time in force set, by its code (GTC, IOC, FOK, DAY) — else, where
@@ -1973,8 +2661,7 @@ function tkAdvShort(m, f = {}) {
   const t = f.orderType || "market";
   const allowed = (m.tifsByType && m.tifsByType[t]) || m.tifs || [];
   const tif = f.tif ? String(f.tif).toUpperCase() : allowed.length && allowed.every((x) => x === "ioc" || x === "fok") ? allowed.map((x) => String(x).toUpperCase()).join("/") : "Default";
-  const eh = !!(m.session && m.session.extendedHours);
-  return [tif, t === "limit" && f.postOnly ? "Post-only" : "", t === "limit" && eh && f.extendedHours ? "Extended hours" : ""].filter(Boolean).join(" · ");
+  return [tif, t === "limit" && f.postOnly ? "Post-only" : ""].filter(Boolean).join(" · ");
 }
 
 /* a stock market's session as the face says it — open now and when it closes, or closed and when it opens — from the venue's own clock or
@@ -2003,6 +2690,13 @@ const tkCrossLine = (kind) => {
   return x.kind === "rwas" ? `Also as a token: ${esc(it.name)}${it.price ? ` $${esc(px(it.price))}` : ""} → <button type="button" class="link" data-cross-kind="rwas">RWAs</button>` : `Also as shares: ${esc(it.name)}${it.price ? ` $${esc(px(it.price))}` : ""} → <button type="button" class="link" data-cross-kind="stocks">Stocks</button>`;
 };
 
+/* a venue's words in the face's block: said as they are while they are short; a long rule (a paper account's whole fill rule) folded under one
+   line, opened on purpose — so the panel's foot is never a wall of words, on a phone least of all */
+const TK_NOTE_FOLD = 400;
+const tkNoteHtml = (note) => {
+  const t = String(note || "").trim();
+  return t.length > TK_NOTE_FOLD ? `<details class="tk-kbnote"><summary>How it fills here</summary><p>${esc(t)}</p></details>` : esc(t);
+};
 /** THE FACE'S BLOCK: what the owner should know of this kind of market before ordering, from the market as the venue lists it (`m`), the
  * place picked (`at`: a Where row), the Markets row (`item`) and the ticket's state (`c`: side, outcome, amount, unit, leverage typed, the
  * position held, the positions read, the chains read, what it is paid with). A pre-IPO row speaks from the row itself when no market is
@@ -2016,12 +2710,16 @@ function tkKindBlock(kind, m, at, item, c = {}) {
   if (kind === "crypto") {
     if (m.bid || m.ask) L.push(`Bid ${esc(px(m.bid))} · ask ${esc(px(m.ask))} ${esc(m.quote)}${m.changePct24h !== undefined ? ` · 24h ${chg(m.changePct24h)}` : ""}`);
     // a wallet's route, its slippage and gas in the venue's own words; an exchange says nothing more
-    if (m.open && m.note) L.push(said(m.note));
+    if (m.open && m.note) L.push(tkNoteHtml(m.note));
     if (c.pay) L.push(`Paid with <b>${esc(c.pay.asset)}</b>: sold first, then ${esc(m.base)} bought with what it brings — two orders, two signatures.`);
   } else if (kind === "stocks") {
     // the session (when the venue keeps one), then the venue's own words verbatim; no session said: its words alone. A stock that takes no
     // order now says so in the line above
-    if (m.open) L.push([tkSessionLine(m.session), m.note ? said(m.note) : ""].filter(Boolean).join(" · "));
+    if (m.open) {
+      const long = !!m.note && String(m.note).trim().length > TK_NOTE_FOLD;
+      L.push([tkSessionLine(m.session), m.note && !long ? said(m.note) : ""].filter(Boolean).join(" · "));
+      if (long) L.push(tkNoteHtml(m.note));
+    }
     if (m.qtyStep === 1) L.push("Whole shares only here.");
     if (m.bid || m.ask) L.push(`Bid ${esc(px(m.bid))} · ask ${esc(px(m.ask))} ${esc(m.quote)}`);
     L.push(tkCrossLine(kind));
@@ -2033,7 +2731,7 @@ function tkKindBlock(kind, m, at, item, c = {}) {
     const chains = c.chains && c.chains.length > 1 ? `<label class="fld tk-chain">Chain${select("chain", c.chains.map((x) => [x.symbol, `${x.chain} · ${x.quote}`]), m.symbol)}</label>` : "";
     L.push(`Paid in <b>${esc(m.quote)}</b>${chain && !chains ? ` on ${esc(chain)}` : ""}.${chains}`);
     // the route's own line: its fee, slippage and gas, and whom it excludes
-    if (m.open && m.note) L.push(said(m.note));
+    if (m.open && m.note) L.push(tkNoteHtml(m.note));
     L.push(tkCrossLine(kind));
   } else if (kind === "perps" || pre) {
     const imp = pre ? (at && at.implied) || (item && item.implied) || (m && m.implied) || null : null;
@@ -2056,7 +2754,7 @@ function tkKindBlock(kind, m, at, item, c = {}) {
       if (set && !(h && String(h.leverage) === String(set.leverage))) L.push(`Leverage ${esc(String(set.leverage))}x${set.marginMode ? `, ${esc(set.marginMode)}` : ""} — set now, as ${esc(at.venueName || nameOf(at.venue))} confirmed${h && h.leverage !== undefined ? `; its positions read still says ${esc(String(h.leverage))}x` : ""}.`);
       if (h) L.push(`You hold ${esc(h.side)} ${esc(qtyOf(h.qty))}${h.leverage ? ` at ${esc(String(h.leverage))}x` : ""}${h.liquidationPrice ? ` · liquidation at ${esc(px(h.liquidationPrice))}` : ""}${h.entryPrice ? ` · entry ${esc(px(h.entryPrice))}` : ""}.`);
       else if (c.positions) L.push("Nothing held here yet: the venue names a liquidation price once a position is open.");
-      if (m.open && m.note) L.push(said(m.note));
+      if (m.open && m.note) L.push(tkNoteHtml(m.note));
     }
     if (pre) {
       const el = (item && item.eligibility) || (m && m.eligibility) || "";
@@ -2071,27 +2769,56 @@ function tkKindBlock(kind, m, at, item, c = {}) {
     const close = m.closeTime || (item && item.closeTime);
     if (close) L.push(`<span data-tk-close="${esc(close)}">${esc(typeof mkLeft === "function" ? mkLeft(Date.parse(close) - Date.now()) : "Closes")}</span> · ${esc(nyDay(close))} ${esc(nyTime(close))} New York`);
     if (m.sellsReduce) L.push(`Sells only what you hold${c.held ? ` · ${esc(qtyOf(c.held.qty))} held` : c.positions ? " · none held" : ""}.`);
-    if (m.open && m.note) L.push(said(m.note));
+    if (m.open && m.note) L.push(tkNoteHtml(m.note));
   }
+  // the venue's own rule for every market (a paper account's fill rule), folded under one line, apart from what is said of this one now
+  if (m && m.rule) L.push(`<details class="tk-kbnote"><summary>How it fills here</summary><p>${esc(String(m.rule).trim())}</p></details>`);
   return L.filter(Boolean).map((l) => `<div>${l}</div>`).join("");
 }
 
-/** a perpetual's leverage from the ticket: prepared, shown field by field, then its own signature; `after` runs once the venue confirmed */
+/** a perpetual's leverage from the ticket: prepared, shown field by field, then its own signature; `after` runs once the venue confirmed.
+ * The same rule as the order's (B6): what is signed is what was prepared AND is what the fields say — a leverage or a margin mode typed
+ * after Set leverage… answered takes its Sign away at once (Set leverage… again prepares the new one), an answer that lands after such a
+ * change offers nothing to sign, and Sign itself checks once more before it signs */
 function tkLeverage(box, at, m, live, after) {
   const out = box.querySelector("[data-lev-sign]");
+  const input = box.querySelector('input[name="leverage"]');
+  const modeSel = box.querySelector('select[name="marginMode"]');
+  // what the fields say now, as text: a prepared leverage is for exactly this, or it is stale
+  const typed = () => JSON.stringify([String((input && input.value) || "").trim(), modeSel ? modeSel.value : ""]);
+  let asked = "";
+  const CHANGED = '<span class="dim small">The leverage changed: Set leverage… again to sign it.</span>';
+  const stale = () => {
+    if (!asked || typed() === asked) return;
+    asked = "";
+    out.innerHTML = CHANGED;
+  };
+  for (const el of [input, modeSel]) {
+    if (!el) continue;
+    el.addEventListener("input", stale);
+    el.addEventListener("change", stale);
+  }
   box.querySelector("[data-lev-prep]").addEventListener("click", async () => {
-    const lev = String(box.querySelector('input[name="leverage"]').value || "").trim();
-    const modeSel = box.querySelector('select[name="marginMode"]');
+    const lev = String((input && input.value) || "").trim();
     const mode = modeSel ? modeSel.value : "";
+    const want = typed();
+    asked = "";
     if (!/^\d{1,3}$/.test(lev) || !(Number(lev) >= 1)) return void (out.innerHTML = '<div class="msg no">Leverage is a whole number, 1 or more.</div>');
     out.innerHTML = '<span class="dim small">Asking…</span>';
     const r = await Owner.prepare({ type: "liveLeverage", venue: at.venue, symbol: m.symbol, leverage: lev, marginMode: mode });
     if (!live()) return;
     if (r.status !== 200) return void (out.innerHTML = `<div class="msg no">${esc(Owner.why(r) || "Refused")}</div>`);
+    // the fields changed while the venue was asked: this answer is for the leverage before the change — nothing of it is offered to sign
+    if (typed() !== want) return void (out.innerHTML = CHANGED);
     const p = r.body;
+    asked = want;
     out.innerHTML = `<div class="path">${esc(m.name)}: ${esc(lev)}x${mode ? `, ${esc(mode)}` : ""} at ${esc(at.venueName || nameOf(at.venue))}.</div>${whatYouSign(p, { open: true })}<button type="button" class="btn btn-sm" data-lev-go${owns() ? "" : " disabled"}>Sign leverage</button>`;
     out.querySelector("[data-lev-go]").addEventListener("click", async (e) => {
+      // the leverage shown is not what the fields say any more (changed without an input event: set from the page): not signed
+      if (asked !== want || typed() !== want) return void stale();
       e.target.disabled = true;
+      // signed once: its answer (set, or the refusal) stays where it is said, a later change of the fields does not overwrite it
+      asked = "";
       const s = await Owner.submit(p);
       if (!live()) return;
       const res = s.body && s.body.result;
@@ -2123,7 +2850,8 @@ const tkCardVenue = (c) => ((c.shown || []).find((f) => f.name === "venue") || {
  * place), money on its way, money going in or out of earn — in the lens. Drawn again only when it changed, the focused button (by its
  * data-fk) focused again: core paint */
 function tkDrawOpen(sec, owner) {
-  const orders = tkOpenOrders();
+  // the ticket's account's orders first (terminal.js ttTicketFirst)
+  const orders = typeof ttTicketFirst === "function" ? ttTicketFirst(tkOpenOrders()) : tkOpenOrders();
   const cards = A.cards.filter((c) => tkTradeCard(c) && inLens(tkCardVenue(c), c.agent));
   const pays = A.payments.filter((p) => p.live && ["pending", "authorized"].includes(p.status) && inLens(p.from, p.agent));
   const earns = (A.earns || []).filter((x) => x.status === "pending" && inLens(x.venue, x.agent));
@@ -2134,7 +2862,7 @@ function tkDrawOpen(sec, owner) {
   const who = (r) => (r.c ? r.c.agentName || "An agent" : byOf(r.o || r.p || r.x));
   const byLine = (r) => { const b = who(r); return `by ${b === "You" || b === "An agent" ? b.toLowerCase() : b}`; };
   const all = owner && cancellable.length > 1 ? `<button type="button" class="link" data-cancel-all data-fk="cancel-all">Cancel all ${cancellable.length}</button>` : "";
-  const ordersHtml = orders.length ? `<div class="t-wrap"><table class="t tt-t tk-open-t"><thead><tr><th>Time</th><th>Type</th><th>Market</th><th>Direction</th><th class="r">Size</th><th class="r">Original size</th><th class="r">Order value</th><th class="r">Price</th><th>Reduce only</th><th>Trigger</th><th>Status</th><th>By</th><th class="r">${all || '<span class="sr">Actions</span>'}</th></tr></thead><tbody>${orders.map((o) => tkOpenRow(o, owner)).join("")}</tbody></table></div>` : '<p class="empty">No open orders yet.</p>';
+  const ordersHtml = orders.length ? `<div class="t-wrap"><table class="t tt-t tk-open-t"><thead><tr>${typeof ttTimeTh === "function" ? ttTimeTh() : "<th>Time</th>"}<th>Type</th><th>Market</th><th>Direction</th><th class="r">Size</th><th class="r">Original size</th><th class="r">Order value</th><th class="r">Price</th><th>Reduce only</th><th>Trigger</th><th>Status</th><th>By</th><th class="r">${all || '<span class="sr">Actions</span>'}</th></tr></thead><tbody>${orders.map((o) => tkOpenRow(o, owner)).join("")}</tbody></table></div>` : '<p class="empty">No open orders yet.</p>';
   const rest = rows.length ? `<h3 class="label tk-open-also">Also under way</h3>${table([
     { label: "What", cell: (r) => `${tkOpenWhat(r)}<span class="why tp-wb">${esc(whereOf(r))} · ${esc(byLine(r))}</span>` },
     { label: "Status", cell: (r) => tkOpenStatus(r) },
@@ -2163,11 +2891,46 @@ function tkDrawOpen(sec, owner) {
     })(b);
     if (!b.hasAttribute("data-cancel-all")) return;
     const all = sec.tkCancellable || [];
-    if (!(await confirmSheet(`Cancel all ${all.length} open orders${lensNow().kind === "all" ? "" : ` in ${lensNow().name}`}? Each comes off its venue's book, one signature each.`, { title: "Cancel every open order", yes: `Cancel ${all.length} orders`, no: "Keep them", danger: true }))) return;
-    for (const o of all) await own({ type: "liveCancel", venue: o.venue, order: o.id });
+    // how many of them are real money and how many paper, said before any is canceled: under the All accounts lens, a ticket on Paper
+    // never takes real-money orders with it unsaid
+    const paper = all.filter((o) => o.paper).length;
+    const real = all.length - paper;
+    const kinds = real && paper ? ` — ${real} real-money, ${paper} paper` : real ? " — all real money" : " — all paper";
+    if (!(await confirmSheet(`Cancel all ${all.length} open orders${lensNow().kind === "all" ? "" : ` in ${lensNow().name}`}${kinds}? Each comes off its venue's book, one signature each, all at once.`, { title: "Cancel every open order", yes: `Cancel ${all.length} orders`, no: "Keep them", danger: true }))) return;
+    await tkCancelAll(all);
   });
 }
-/** one open order as a row of HL's Open orders: when it was placed (New York), its type, the market by its name (the venue beside it,
+/** CANCEL ALL, the owner's (Open orders' head): every order listed comes off its venue's book at once — each its own signature, all asked
+ * together rather than one after another, so the last is never kept waiting on the first one's venue, and none is dropped for being second
+ * (core own() takes one action at a time). What was canceled and what was refused, in each venue's words, is said once; the account is then
+ * read again once */
+async function tkCancelAll(list) {
+  if (busy || !owns() || !list || !list.length) return null;
+  busy = true;
+  document.body.classList.add("busy");
+  let out = [];
+  try {
+    out = await Promise.all(list.map((o) => Owner.act({ type: "liveCancel", venue: o.venue, order: o.id }).then((r) => ({ o, r }), () => ({ o, r: null }))));
+  } finally {
+    busy = false;
+    document.body.classList.remove("busy");
+  }
+  const no = out.filter((x) => refusedAt(x.r));
+  const done = out.length - no.length;
+  if (done) afterAction();
+  flash = no.length ? `${done} of ${out.length} canceled. ${no.map((x) => `${x.o.id}: ${(x.r && Owner.why(x.r)) || "the account did not answer"}`).join(" · ")}`.slice(0, 400) : "";
+  said = no.length ? "" : `Canceled ${plural(done, "order")}.`;
+  try {
+    await load();
+  } catch {
+    render();
+  }
+  return out;
+}
+/* an open order that can be changed in place from here (Change in Open orders, a line dragged on the chart): not waiting for a wallet, not
+   being canceled, still followed, at a venue that amends */
+const tkAmendable = (o) => !!o && !(o.walletTxs && !o.ref) && !o.canceling && !o.unfollowed && !!((A.venues.find((x) => x.id === o.venue) || {}).trade || {}).amend;
+/** one open order as a row of HL's Open orders: when it was placed (its whole date, on the screen's one clock: core yourClock), its type, the market by its name (the venue beside it,
  * quieter; the account's id and the venue on hover — never the raw symbol), the side in its word and colour, what is left of it and what it
  * was, what it is worth, its limit (Market for one at market; an event's in cents), whether it only reduces, what triggers it, its state,
  * who placed it, and its buttons */
@@ -2178,7 +2941,8 @@ function tkOpenRow(o, owner) {
   const unit = ev || o.contractSize ? " contracts" : "";
   const trigger = o.type === "stop" || o.type === "stop_limit" ? `${o.side === "buy" ? "Rises to" : "Falls to"} ${at(o.stopPrice)}` : o.type === "trailing_stop" ? `Trails ${o.trailPercent !== undefined ? esc(`${o.trailPercent}%`) : at(o.trailPrice)}` : "—";
   const r = { o };
-  return `<tr><td class="tab-nums nw">${esc(nyDay(o.at))} ${esc(nyTime(o.at))}</td><td class="nw">${esc(TK_TYPE_NAMES[o.type] || o.type || "—")}</td><td class="tt-c-mkt" title="${esc(`${o.id} · ${o.venueName}`)}"><b>${esc(o.name || o.base)}</b>${o.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(o.venueName)}</span></td><td class="${o.side === "sell" ? "down" : "up"}">${o.side === "sell" ? "Sell" : "Buy"}</td><td class="r">${esc(qtyOf(left))}${unit}</td><td class="r">${esc(qtyOf(o.qty))}${unit}</td><td class="r">${o.usd !== undefined ? money(o.usd) : "—"}</td><td class="r">${o.limitPrice !== undefined ? at(o.limitPrice) : "Market"}</td><td>${o.reduceOnly ? "Yes" : "No"}</td><td class="nw">${trigger}</td><td>${tkOpenStatus(r)}</td><td>${esc(byOf(o))}</td><td class="r">${owner ? tkOpenActs(r) : ""}</td></tr>`;
+  // keyed by the account's id for it (data-k): a pushed state is drawn over its own row, the others left as they are
+  return `<tr data-k="${esc(o.id)}"><td class="tab-nums nw" title="${esc(yourClock(o.at))}">${esc(yourClock(o.at, { year: false, seconds: false }))}</td><td class="nw">${esc(TK_TYPE_NAMES[o.type] || o.type || "—")}</td><td class="tt-c-mkt" title="${esc(`${o.name || o.base} · ${o.venueName} · ${o.id}`)}"><b>${esc(o.name || o.base)}</b>${o.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(o.venueName)}</span></td><td class="${o.side === "sell" ? "down" : "up"}">${o.side === "sell" ? "Sell" : "Buy"}</td><td class="r">${esc(qtyOf(left))}${unit}</td><td class="r">${esc(qtyOf(o.qty))}${unit}</td><td class="r">${o.usd !== undefined ? money(o.usd) : "—"}</td><td class="r">${o.limitPrice !== undefined ? at(o.limitPrice) : "Market"}</td><td>${o.reduceOnly ? "Yes" : "No"}</td><td class="nw">${trigger}</td><td>${tkOpenStatus(r)}</td><td>${esc(byOf(o))}</td><td class="r">${owner ? tkOpenActs(r) : ""}</td></tr>`;
 }
 function tkOpenWhat(r) {
   if (r.c) return `${esc(r.c.reason)}<details class="inl"><summary>details</summary><pre class="tk-pre">${esc((r.c.shown || []).map((f) => `${f.name}: ${f.value}`).join("\n"))}</pre></details>`;
@@ -2198,7 +2962,7 @@ function tkOpenStatus(r) {
     // an order the account stopped following (the owner's cancel asked while its venue refused this network, or was not connected): a
     // state, its note on hover. The account sends that cancel again once the venue answers this network
     if (o.unfollowed && !o.canceling) return `<span class="tp-st dim"${o.note ? ` title="${esc(o.note)}"` : ""}>Not followed</span>`;
-    const note = o.note ? `<span class="why">${esc(o.note)}</span>` : "";
+    const note = o.note ? `<span class="why" title="${esc(o.note)}">${esc(o.note)}</span>` : "";
     if (o.canceling) return `<span class="tp-st dim">Canceling</span>${note}`;
     if (o.walletTxs && !o.ref) return `<span class="tp-st warn-t">Waiting for your wallet</span>${note}`;
     return `${o.status === "partial" ? '<span class="tp-st">Part filled</span>' : o.status === "pending" ? '<span class="tp-st dim">On the way</span>' : '<span class="tp-st">Open</span>'}${note}`;
@@ -2213,7 +2977,7 @@ function tkOpenActs(r) {
     const o = r.o;
     const waiting = o.walletTxs && !o.ref;
     // an order not followed is not changed (Cancel stays: it sends the owner's cancel again)
-    const amendable = !waiting && !o.canceling && !o.unfollowed && ((A.venues.find((x) => x.id === o.venue) || {}).trade || {}).amend;
+    const amendable = tkAmendable(o);
     return `<div class="acts">${waiting ? `<button type="button" class="btn btn-sm" data-order-send="${esc(o.id)}" data-fk="send:${esc(o.id)}"${INFLIGHT.has(o.clientId) ? " disabled" : ""}>${o.reported ? "Report again" : "Send from wallet…"}</button>` : ""}${amendable ? `<button type="button" class="btn btn-sm" data-amend="${esc(o.id)}" data-fk="amend:${esc(o.id)}">Change</button>` : ""}${o.canceling ? "" : `<button type="button" class="btn btn-sm" data-cancel="${esc(o.id)}" data-venue="${esc(o.venue)}" data-fk="cancel:${esc(o.id)}">Cancel</button>`}</div>`;
   }
   if (r.p && r.p.status === "authorized") return `<div class="acts"><button type="button" class="btn btn-sm" data-wallet-send="${esc(r.p.id)}" data-fk="send:${esc(r.p.id)}"${INFLIGHT.has(`${r.p.id}@${r.p.at}`) ? " disabled" : ""}>${r.p.live && r.p.live.reported ? "Report again" : "Send from wallet…"}</button></div>`;
@@ -2331,13 +3095,37 @@ function tkSwapPlan({ venue, from, to, amount, markets, chain = "" }) {
 const tkSwapHow = (plan) => (plan.mode === "two" ? `Two orders: sells ${plan.from} for ${plan.via} (${plan.market.symbol}), then buys ${plan.to} with what that brings (${plan.then.symbol}) — two signatures.` : plan.mode === "buy" ? `Buys ${plan.to} with ${plan.from} at market (${plan.market.symbol}).` : plan.mode === "sell" ? `Sells ${plan.from} for ${plan.to} at market (${plan.market.symbol}).` : plan.why || "");
 /* what a filled sale brought, in its quote currency, less its fee, down to the cent: what the second leg spends */
 const tkProceeds = (o) => Math.floor(Math.max(0, Number(o.filledQty || 0) * Number(o.avgPrice || o.price || 0) - Number(o.feeUsd || 0)) * 100) / 100;
-/** a sale's fill, asked of the account every two seconds for up to a minute and a half */
+/** a sale's fill, for up to a minute and a half: the account's push of the order's new state wakes the wait at once (ui/stream.js, laid over
+ * A.orders by the shell), and it is asked of the account every two seconds besides — every eight while the stream is connected */
 async function tkFilled(o, live) {
   const until = Date.now() + 90_000;
   let now = o;
+  const done = (x) => !!x && ["filled", "canceled", "rejected", "expired"].includes(x.status);
   while (live() && Date.now() < until) {
-    if (now && ["filled", "canceled", "rejected", "expired"].includes(now.status)) return now;
-    await new Promise((res) => setTimeout(res, 2000));
+    if (done(now)) return now;
+    // the shell may hold it ended already: a push that came while the wallet was still sending the sale (before this listened), laid into
+    // A.orders (shell.js shOrder) — taken at once rather than waited for
+    const seen = A && Array.isArray(A.orders) ? A.orders.find((x) => x.id === o.id) : null;
+    if (done(seen)) return seen;
+    let pushed = null;
+    await new Promise((res) => {
+      let timer = 0;
+      const off = typeof stOn === "function" ? stOn("order", (x) => {
+        if (!x || x.id !== o.id || !done(x)) return;
+        pushed = x;
+        clearTimeout(timer);
+        off();
+        res();
+      }) : () => {};
+      timer = setTimeout(() => {
+        off();
+        res();
+      }, typeof stHealth === "function" && stHealth() === "connected" ? 8000 : 2000);
+    });
+    if (pushed) {
+      now = pushed;
+      continue;
+    }
     const page = await fetch("/api/account").then((x) => x.json()).catch(() => null);
     now = page ? (page.orders || []).find((x) => x.id === o.id) || now : now;
   }

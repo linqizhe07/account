@@ -74,6 +74,8 @@ export interface Account {
   paper?: true | undefined;
   /** a paper account the account keeps itself (live/paper.ts): the paper money it started with, for what it has made or lost since */
   paperStartUsd?: number | undefined;
+  /** and the paper money its owner added since it started (topUpPaper): put in, not made */
+  paperAddedUsd?: number | undefined;
 }
 
 /** `event`: shares of a prediction-market outcome, worth $1 or $0 at settlement · `earn`: money in a venue's earn product (a vault, OKX's

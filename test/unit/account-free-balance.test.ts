@@ -245,3 +245,46 @@ describe("the adapter keeps a free part within its line", () => {
     expect(freePart(-2, 1, "usd")).toEqual({ freeUsd: 0 });
   });
 });
+
+describe("a paper account's adapter after a wake: a read begun before the write never becomes the kept book", () => {
+  it("an older read that finishes after a newer one hands its callers what it read, keeps the newer book and its time, and the next read asks again — a failed one serves the newer book", async () => {
+    const OLD: LiveBalance[] = [{ asset: "USD", amount: 10_000, usd: 10_000, class: "cash" }];
+    const NEW: LiveBalance[] = [{ asset: "USD", amount: 9_400, usd: 9_400, class: "cash" }, { asset: "BTC", amount: 0.01, usd: 600 }];
+    const answers: Array<{ go: (rows: LiveBalance[]) => void; fail: (err: Error) => void }> = [];
+    let t = 1_000_000;
+    const source: LiveSource = {
+      name: "Paper",
+      kind: "cex",
+      reference: "paper",
+      via: "the account's own book",
+      probe: { can: ["read", "trade"], note: "" },
+      paper: true,
+      read: () => new Promise<LiveBalance[]>((go, fail) => answers.push({ go, fail })),
+    };
+    const a = await liveAccount("pap", source, { connector: "live:paper", first: OLD, clock: () => t });
+    // an order is placed: the book is woken, and a read starts (it will answer with the book from before the fill)
+    a.wake!();
+    t += 10;
+    const before = a.read();
+    // the fill lands while that read is on its way: woken again, and a read begun after it answers first, with the book after the fill
+    a.wake!();
+    t += 10;
+    const after = a.read();
+    expect(answers).toHaveLength(2);
+    answers[1]!.go(NEW);
+    expect((await after).map((h) => h.asset)).toEqual(["USD", "BTC"]);
+    const asOf = a.account.asOf;
+    expect(asOf).toBe(new Date(t).toISOString());
+    // the older read answers last: its caller gets what it read, but the kept book stays the newer one, and so does its time
+    t += 10;
+    answers[0]!.go(OLD);
+    expect((await before).map((h) => [h.asset, h.amount])).toEqual([["USD", 10_000]]);
+    expect(a.account.asOf).toBe(asOf);
+    // the next read asks the book again (the stale answer forced it), and when that read fails what is served is the newer book
+    t += 10;
+    const next = a.read();
+    expect(answers).toHaveLength(3);
+    answers[2]!.fail(new Error("the book did not answer"));
+    expect((await next).map((h) => [h.asset, h.amount])).toEqual([["USD", 9_400], ["BTC", 0.01]]);
+  });
+});

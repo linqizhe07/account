@@ -81,6 +81,8 @@ export async function liveAccount(id: string, source: LiveSource, opts: LiveAcco
   let cached: Holding[] = [];
   let readAt = 0;
   let pending: Promise<Holding[]> | undefined;
+  /** how many times a paper account's book was woken (wake): a read that began before a wake is not the book as it stands after it */
+  let woken = 0;
   const took = (rows: Holding[]) => {
     cached = rows;
     readAt = clock();
@@ -94,6 +96,7 @@ export async function liveAccount(id: string, source: LiveSource, opts: LiveAcco
     readAt = clock() - ttl + Math.max(Math.min(ttl, 15_000), ms);
   };
   const refresh = async (): Promise<Holding[]> => {
+    const asked = woken;
     // the venue's market reads are held back (a ban, its place rule, an edge page met there): its balance is not asked meanwhile either
     const held = opts.held?.();
     if (held) {
@@ -102,7 +105,15 @@ export async function liveAccount(id: string, source: LiveSource, opts: LiveAcco
       return cached;
     }
     try {
-      took(await shape(await source.read()));
+      const rows = await shape(await source.read());
+      // a paper account woken while this read was on its way: what it read may be from before the write. Its callers still get what it
+      // read, but it never becomes the kept book: a read begun after the wake may have finished first and kept the book as it stands now,
+      // which this one would otherwise write over with the holdings from before the fill (and its time moved back). The next read reads again
+      if (asked !== woken) {
+        readAt = 0;
+        return rows;
+      }
+      took(rows);
       // read in part (an address source whose chain or the venue's API did not answer for some of it): what was read stands, the page says
       // what was not, and the rest is asked again soon
       const unread = source.unread?.();
@@ -128,15 +139,26 @@ export async function liveAccount(id: string, source: LiveSource, opts: LiveAcco
     account,
     read(): Promise<Holding[]> {
       if (readAt !== 0 && clock() - readAt < ttl) return Promise.resolve(cached);
-      pending ??= refresh().finally(() => {
-        pending = undefined;
+      if (pending) return pending;
+      const p: Promise<Holding[]> = refresh().finally(() => {
+        if (pending === p) pending = undefined;
       });
-      return pending;
+      pending = p;
+      return p;
     },
     // a check of this network found the venue answering again, or a write it took answered: the next read asks it at once rather than
-    // serving what was kept while it was held
+    // serving what was kept while it was held. A PAPER account's book is the account's own and costs nothing to read: after any write to
+    // it (an order, a cancel, a reset, paper money added) or any look that changed it (a resting order filled, a stop triggered, funding
+    // paid), the next read is the book's as it stands now — never the cash and holdings from before the fill, kept for the cache's thirty
+    // seconds (service.ts exchange and lookAtPaper wake it)
     wake(): void {
       if (account.stale !== undefined) readAt = 0;
+      if (source.paper === true) {
+        readAt = 0;
+        woken++;
+        // a read on its way began before the write: the next one starts afresh rather than waiting for it
+        pending = undefined;
+      }
     },
     async execute(i: Intent) {
       // the simulated door: what a live venue does is done through its live doors, so the answer is where that is — or, where the venue

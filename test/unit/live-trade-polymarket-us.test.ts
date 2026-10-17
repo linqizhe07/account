@@ -11,7 +11,7 @@ import type { RunMm } from "../../src/portfolio/live/metamask.ts";
 import { pmusDayEnd, polymarketUsKey, polymarketUsSign, polymarketUsSource, type PolymarketUsTrader } from "../../src/portfolio/live/polymarket-us.ts";
 import { holdBackMs, polymarketUsPublic, PUBLIC_HOSTS, type Listing } from "../../src/portfolio/live/public-markets.ts";
 import { reachOf } from "../../src/portfolio/live/reach.ts";
-import type { LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
+import type { Candle, CandlePage, LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply, LiveBalance, LiveSource } from "../../src/portfolio/live/types.ts";
 import { venueCatalog } from "../../src/portfolio/service.ts";
 
@@ -198,6 +198,10 @@ async function connect(k: Fake, keyId = KEY_ID): Promise<{ source: LiveSource; t
   if (isRefusal(opened)) throw new Error(`${opened.code}: ${opened.message}`);
   return { source: opened.source, t: opened.source.trader as PolymarketUsTrader, first: opened.first };
 }
+const ok = (r: Candle[] | CandlePage | Refusal): Candle[] | CandlePage => {
+  if (isRefusal(r)) throw new Error(`refused: ${r.code} ${r.message}`);
+  return r;
+};
 const refusal = (r: unknown): Refusal => {
   if (!isRefusal(r)) throw new Error(`expected a refusal, got ${JSON.stringify(r)}`);
   return r;
@@ -695,27 +699,39 @@ describe("markets(), events() and candles(): what there is to trade at Polymarke
     const k = fakePmus({ history: [at(120, 0.55, 0.46), at(119, 0.56, 0.45), at(60, 0.58, 0.43), at(59, 0.57, 0.44), at(200, 0.5, 0.5)] });
     const { t } = await connect(k);
     const n = k.sent.length;
-    const yes = await t.candles!(`${LAD.slug}:YES`, "1h", START - 2 * 3_600_000);
+    const yes = await t.candles!(`${LAD.slug}:YES`, "1h", { since: START - 2 * 3_600_000 });
     expect(k.since(n)).toEqual([`GET gw /v1/price-history?symbol=${LAD.slug}&fixedInterval=INTERVAL_6H&fidelity=1`]);
     expect(yes).toEqual([
       { t: START - 2 * 3_600_000, o: 0.55, h: 0.56, l: 0.55, c: 0.56 },
       { t: START - 3_600_000, o: 0.58, h: 0.58, l: 0.57, c: 0.57 },
     ]);
-    const no = await t.candles!(`${LAD.slug}:NO`, "1h", START - 2 * 3_600_000);
+    const no = await t.candles!(`${LAD.slug}:NO`, "1h", { since: START - 2 * 3_600_000 });
     expect(no).toEqual([
       { t: START - 2 * 3_600_000, o: 0.46, h: 0.46, l: 0.45, c: 0.45 },
       { t: START - 3_600_000, o: 0.43, h: 0.44, l: 0.43, c: 0.44 },
     ]);
-    await t.candles!(`${LAD.slug}:YES`, "5m", START - 3_600_000);
-    await t.candles!(`${LAD.slug}:YES`, "1d", START - 10 * DAY);
-    await t.candles!(`${LAD.slug}:YES`, "1d", START - 60 * DAY);
+    await t.candles!(`${LAD.slug}:YES`, "5m", { since: START - 3_600_000 });
+    await t.candles!(`${LAD.slug}:YES`, "1d", { since: START - 10 * DAY });
+    await t.candles!(`${LAD.slug}:YES`, "1d", { since: START - 60 * DAY });
     // the NO bars came from the same history, kept a minute: one request
     expect(k.since(n + 1).map((x) => x.slice(x.indexOf("fixedInterval")))).toEqual(["fixedInterval=INTERVAL_1D&fidelity=5", "fixedInterval=INTERVAL_1M&fidelity=180", "fixedInterval=INTERVAL_ALL&fidelity=180"]);
     const m = k.sent.length;
-    expect(refusal(await t.candles!(`${LAD.slug}:YES`, "15m" as never, START - DAY)).code).toBe("E_ACCOUNT_BAD_ACTION");
-    expect(refusal(await t.candles!(`${LAD.slug}:YES`, "1h", START + DAY)).code).toBe("E_ACCOUNT_BAD_ACTION");
-    expect(refusal(await t.candles!("LAD", "1h", START - DAY)).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(`${LAD.slug}:YES`, "2h" as never, { since: START - DAY })).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!(`${LAD.slug}:YES`, "1h", { since: START + DAY })).code).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(refusal(await t.candles!("LAD", "1h", { since: START - DAY })).code).toBe("E_ACCOUNT_BAD_ACTION");
     expect(k.sent.length).toBe(m);
+  });
+
+  it("candles(): a window that starts before its profile reaches says where its points end — a day of minutes is its six hours of minute points, five days of quarter hours its one day of five-minute points — never a shorter range drawn as the whole", async () => {
+    const at = (min: number) => ({ timestamp: (START - min * 60_000) / 1000, longPrice: 0.5, shortPrice: 0.5 });
+    const k = fakePmus({ history: [at(5), at(65), at(125)] });
+    const { t } = await connect(k);
+    const day = ok(await t.candles!(`${LAD.slug}:YES`, "1m", { since: START - DAY, limit: 5_000, range: "1D" })) as CandlePage;
+    expect([day.bars.length, day.more, day.ends]).toEqual([3, false, "Polymarket US keeps minute points for six hours: no older 1-minute bars"]);
+    const five = ok(await t.candles!(`${LAD.slug}:YES`, "15m", { since: START - 5 * DAY, limit: 5_000, range: "5D" })) as CandlePage;
+    expect(five.ends).toBe("Polymarket US keeps five-minute points for a day: no older 15-minute bars");
+    // a window inside what the profile reaches is the plain list it always was
+    expect(Array.isArray(ok(await t.candles!(`${LAD.slug}:YES`, "1m", { since: START - 3 * 3_600_000 })))).toBe(true);
   });
 
   it("the trader has no amend (Polymarket US's modify is a cancel-replace that answers no new id), no close of its own (its close-position has no price bound by default: a close here is a sell at the account's worst price) and no leverage", async () => {
@@ -746,7 +762,7 @@ describe("Polymarket US's public market data (Markets, before it is connected)",
     const found = (await src.listings({ q: "bitcoin", limit: 1 })) as Listing[];
     expect(found.map((l) => l.symbol)).toEqual([`${BTC.slug}:YES`, `${BTC.slug}:NO`]);
     expect(src.notes!({ q: "bitcoin" })).toEqual(["Polymarket US: its own search, which reaches every market it lists."]);
-    const bars = await src.candles!(`${LAD.slug}:YES`, "1d", START - 10 * DAY);
+    const bars = await src.candles!(`${LAD.slug}:YES`, "1d", { since: START - 10 * DAY });
     expect(Array.isArray(bars)).toBe(true);
   });
 

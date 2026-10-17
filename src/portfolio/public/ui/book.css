@@ -23,7 +23,9 @@
 .bk-tabs.slide-under .bk-tab[aria-selected="true"] { box-shadow: none; }
 .bk-tab { min-height: 0; padding: 0 8px; border: 0; border-bottom: 1px solid var(--hl-tabline); border-radius: 0; margin: 0; background: transparent; color: var(--hl-dim); font: 400 12px/40px var(--font-sans); letter-spacing: normal; box-shadow: none; cursor: pointer; white-space: nowrap; transition: color var(--hl-ease); }
 .bk-tab[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
-.bk-tab:focus-visible, .bk-group:focus-visible, .bk-row:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -1px; }
+.bk-tab:focus-visible, .bk-group:focus-visible, .bk-row:focus-visible, .bk-ladder:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -1px; }
+/* the ladder is the book's one tab stop (its levels are reached with the arrow keys: book.js bkWire) */
+.bk-ladder { outline: none; }
 
 /* ---- the controls row: the grouping at the left, the sizes' unit at the right (31) ------------------------------------------------ */
 .bk-ctl { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none; height: 31px; padding: 0 10px; min-width: 0; }
@@ -71,6 +73,12 @@
 .bk-fb::after { animation: bk-flash-b 800ms ease; }
 @keyframes bk-flash-a { 0% { opacity: 0; } 20% { opacity: .7; } 100% { opacity: 0; } }
 @keyframes bk-flash-b { 0% { opacity: 0; } 20% { opacity: .7; } 100% { opacity: 0; } }
+/* a book the account's stream drives (book.js bk-live): its levels move several times a second, so a change flashes softer — to .35 — and
+   a level at most once in its 800 ms (book.js BK_FLASH_MS), so the ladder shimmers where the book moves and never blinks as a whole */
+.bk.bk-live .bk-fa::after { animation-name: bk-flash-live-a; }
+.bk.bk-live .bk-fb::after { animation-name: bk-flash-live-b; }
+@keyframes bk-flash-live-a { 0% { opacity: 0; } 20% { opacity: .35; } 100% { opacity: 0; } }
+@keyframes bk-flash-live-b { 0% { opacity: 0; } 20% { opacity: .35; } 100% { opacity: 0; } }
 
 /* the card beside the book on hover (REF §5.6): the inset's colour, radius 5, 9 × 11 inside, 228 wide, its lines 25 apart — labels in the
    softer text colour, figures in the text colour at the right. Laid at a fixed place on the screen beside the panel (book.js bkCardShow);
@@ -137,5 +145,6 @@ p.bk-oldline { flex: none; margin: 0; padding: 6px 10px; font-size: 12px; line-h
 @media (prefers-reduced-motion: reduce) {
   .bk-bar, .bk-tab, .bk.bk-old :is(.bk-asks, .bk-bids, .bk-mid), .bk-tape:has(> .bk-oldline) > .bk-trow { transition: none; }
   .bk-fa::after, .bk-fb::after, .bk-card { animation: none; }
+  .bk.bk-live .bk-fa::after, .bk.bk-live .bk-fb::after { animation: none; }
   .bk-tabs.slide-under::after { transition: none; }
 }

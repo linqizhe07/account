@@ -14,9 +14,11 @@
  *                priced in dollars: one that is not — a book written by hand — is left out, and that is said) (`book.markets[symbol]`), and an event's settlement as its venue said it
  *                (`settled`: what a contract paid, and when the venue settled it); the funding each perpetual paid or received
  *                (`book.funding`, hour by hour, where the book keeps it) and each open position's own running total of it
- *                (`book.positions[symbol].fundingUsd`)
- *   the bars     `PriceSeries`: one symbol's bars at one interval (5m, 1h, 1d), oldest first, as the paper account's own `candles` passes
- *                them through from the market's source (public-markets.ts). A bar's close is known when the bar has closed — its start plus
+ *                (`book.positions[symbol].fundingUsd`); the paper money the owner added since it started (`book.deposits`, each at its
+ *                moment: cash put in from then on)
+ *   the bars     `PriceSeries`: one symbol's bars at one interval (1m to 1w; the rebuild asks 5m, 1h and 1d), oldest first, as the paper
+ *                account's own `candles` passes them through from the market's source (public-markets.ts). A bar's close is known when the
+ *                bar has closed — its start plus
  *                its interval, unless the series says otherwise (`closeAt`: a source whose daily bar is stamped at the session's open closes
  *                it at the session's end, not a day later)
  *
@@ -54,15 +56,15 @@
  * book's own — a difference is said, with its size.
  */
 import type { PaperBook, PaperMarketRef, PaperOrder } from "./paper.ts";
-import { inDollars, plain, type Candle, type CandleInterval } from "./trade.ts";
+import { inDollars, INTERVAL_MS, plain, type Candle, type CandleInterval } from "./trade.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** how long a bar of each interval lasts: its close is known this long after its start, unless its series says otherwise */
-const BAR_MS: Readonly<Record<CandleInterval, number>> = { "5m": 5 * MINUTE, "1h": HOUR, "1d": DAY };
+const BAR_MS: Readonly<Record<CandleInterval, number>> = INTERVAL_MS;
 /** finer first: where two bars closed at the same moment, the finer one's close stands */
-const FINENESS: Readonly<Record<CandleInterval, number>> = { "5m": 0, "1h": 1, "1d": 2 };
+const FINENESS: Readonly<Record<CandleInterval, number>> = { "1m": 0, "5m": 1, "15m": 2, "1h": 3, "4h": 4, "1d": 5, "1w": 6 };
 /** the most points one rebuild draws: a range and a step that ask for more are a mistake of the caller's, not a curve */
 export const REBUILD_MAX_POINTS = 50_000;
 /** a difference between the replay's cash and the book's smaller than this is the two roundings, not something the replay missed */
@@ -140,10 +142,12 @@ const leaveOut = (t: Told, ref: string, sentence: string): void => {
 
 type Step =
   | { kind: "fill"; at: number; rank: number; seq: number; o: PaperOrder; qty: number; price: number; fee: number }
-  | { kind: "funding"; at: number; rank: number; seq: number; symbol: string; usd: number };
+  | { kind: "funding"; at: number; rank: number; seq: number; symbol: string; usd: number }
+  | { kind: "deposit"; at: number; rank: number; seq: number; usd: number };
 
-/** where each thing that moved the book falls among the things at the same millisecond: the order of the book's own pass (see stepsOf) */
-const RANK = { funding: 0, liquidation: 1, fill: 2, settlement: 3 } as const;
+/** where each thing that moved the book falls among the things at the same millisecond: the order of the book's own pass (see stepsOf) —
+ * and paper money the owner added (a signed topUpPaper, taken by the door between the book's looks) before all of it */
+const RANK = { deposit: -1, funding: 0, liquidation: 1, fill: 2, settlement: 3 } as const;
 
 /** everything that moved the book, in the order it happened. At one millisecond the book's own pass runs in this order (paper.ts settle):
  * the perpetuals marked first — each one's funding, then its liquidation where the margin left has fallen that far (one perpetual's funding
@@ -179,6 +183,12 @@ function stepsOf(book: PaperBook, t: Told): Step[] {
     if (!Number.isFinite(at) || !finite(f.usd)) return;
     out.push({ kind: "funding", at, rank: RANK.funding, seq: i, symbol: f.symbol, usd: f.usd });
   });
+  // paper money the owner added (topUpPaper): cash from its moment on, put in — never a gain
+  (book.deposits ?? []).forEach((d, i) => {
+    const at = Date.parse(d?.at ?? "");
+    if (!Number.isFinite(at) || !finite(d.usd)) return;
+    out.push({ kind: "deposit", at, rank: RANK.deposit, seq: i, usd: d.usd });
+  });
   return out.sort((a, b) => a.at - b.at || a.rank - b.rank || a.seq - b.seq);
 }
 
@@ -205,6 +215,10 @@ class Replay {
   private apply(s: Step): void {
     if (s.kind === "funding") {
       this.cash = round(this.cash - s.usd, 6);
+      return;
+    }
+    if (s.kind === "deposit") {
+      this.cash = round(this.cash + s.usd, 6);
       return;
     }
     const { o, qty, price, fee } = s;
@@ -284,15 +298,16 @@ export function paperBookStart(book: PaperBook): number | undefined {
 
 /** five-minute bars are asked over the last day, and a range a little longer than a day (a clock that moved on) is still told with them */
 const FIVE_MINUTE_REACH_MS = DAY + HOUR;
-/** hourly bars reach back about twelve days (a source gives 300 at most) */
-const HOURLY_REACH_MS = 12 * DAY;
+/** hourly bars reach back a month and a day (744 bars; a source gives HISTORY_MOST in one ask now, live/trade.ts — it gave 300 before
+ * phase H, twelve days), so a month's curve is hourly from end to end */
+const HOURLY_REACH_MS = 31 * DAY;
 /** a US stock's daily bars are asked from a week before the range: the session that closed last before it started is in them, over a
  * weekend and the holidays beside one */
 const STOCK_DAYS_BACK_MS = 7 * DAY;
 
 /** The bars a book's past from `fromMs` to `now` is told with, to be asked of the paper account's own trader (its market's source): every
  * market it held at `fromMs` or traded since, in the finest bars that reach back that far — five-minute bars over the last day, hourly over
- * the last twelve days, daily before — each from the bar before the one where it is needed starts: a bar is stamped at its start and a
+ * the last month (HOURLY_REACH_MS), daily before — each from the bar before the one where it is needed starts: a bar is stamped at its start and a
  * source gives the bars that start at or after what was asked, so the bar that had closed when the range started is the one before the bar
  * the range started in (a coin's daily bar, the one that started at midnight UTC the day before), and without it the range's first point
  * would have no price. And a US stock's daily bars whatever the range: its source keeps minutes for the last market day alone

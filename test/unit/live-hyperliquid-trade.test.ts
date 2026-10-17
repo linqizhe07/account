@@ -9,7 +9,7 @@ import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { cloidOf, hlPriceInside, hlPriceOk, hlPriceStep, hyperliquidTradeSource, openHyperliquid, type HyperliquidClient, type OpenHyperliquid } from "../../src/portfolio/live/hyperliquid-trade.ts";
 import { KEY_SHAPES, keyFileStatus, liveOptions, openLive, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import { heldTo, HL_CLOSED, HL_TERMS, HYPERLIQUID_RULE, locator, PLACE_MS } from "../../src/portfolio/live/location.ts";
-import type { LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
+import type { CandlePage, LiveTrader, Market, OrderRequest, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import type { Http, HttpReply, LiveBalance, LiveSource } from "../../src/portfolio/live/types.ts";
 
 /** TRADING at Hyperliquid through an API wallet — the trade-only key: it signs orders for the account and can never withdraw.
@@ -706,10 +706,11 @@ describe("positions and leverage", () => {
     net.seen.splice(0);
     const list = ok(await t.positions!());
     expect(types(net.seen)).toEqual(["info clearinghouseState", "info clearinghouseState xyz", "info clearinghouseState io"]);
+    // each with the margin Hyperliquid holds against it (marginUsed: the page's Margin column, feat/paper-live phase 4)
     expect(list).toEqual<Position[]>([
-      { symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", kind: "perp", side: "long", qty: 0.03973, entryPrice: 82980.4, markPrice: 80929, usd: 3215.30917, unrealizedUsd: -81.5029, leverage: 3, marginMode: "cross", liquidationPrice: undefined, native: expect.objectContaining({ coin: "BTC", szi: "0.03973", liquidationPx: null }) as unknown },
-      { symbol: "SOL/USDC:USDC", name: "SOL/USDC perpetual", kind: "perp", side: "long", qty: 13.05, entryPrice: 114.8627, markPrice: 106.76, usd: 1393.218, unrealizedUsd: -105.7408, leverage: 3, marginMode: "isolated", liquidationPrice: 78.6416169761, native: expect.objectContaining({ coin: "SOL" }) as unknown },
-      { symbol: "XYZ-NVDA/USDC:USDC", name: "NVDA perpetual on XYZ (HIP-3, xyz:NVDA)", kind: "perp", side: "short", qty: 1, entryPrice: 235, markPrice: 231.11, usd: 231.11, unrealizedUsd: 3.89, leverage: 5, marginMode: "isolated", liquidationPrice: 270.5, native: expect.objectContaining({ coin: "xyz:NVDA", szi: "-1.0" }) as unknown },
+      { symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", kind: "perp", side: "long", qty: 0.03973, entryPrice: 82980.4, markPrice: 80929, usd: 3215.30917, unrealizedUsd: -81.5029, leverage: 3, marginMode: "cross", liquidationPrice: undefined, marginUsd: 1071.769723, native: expect.objectContaining({ coin: "BTC", szi: "0.03973", liquidationPx: null }) as unknown },
+      { symbol: "SOL/USDC:USDC", name: "SOL/USDC perpetual", kind: "perp", side: "long", qty: 13.05, entryPrice: 114.8627, markPrice: 106.76, usd: 1393.218, unrealizedUsd: -105.7408, leverage: 3, marginMode: "isolated", liquidationPrice: 78.6416169761, marginUsd: 392.601726, native: expect.objectContaining({ coin: "SOL" }) as unknown },
+      { symbol: "XYZ-NVDA/USDC:USDC", name: "NVDA perpetual on XYZ (HIP-3, xyz:NVDA)", kind: "perp", side: "short", qty: 1, entryPrice: 235, markPrice: 231.11, usd: 231.11, unrealizedUsd: 3.89, leverage: 5, marginMode: "isolated", liquidationPrice: 270.5, marginUsd: 50, native: expect.objectContaining({ coin: "xyz:NVDA", szi: "-1.0" }) as unknown },
     ]);
   });
 
@@ -745,9 +746,12 @@ describe("reading the market", () => {
     expect(s.get("HYPE/USDC")).toMatchObject({ price: 83.8475 });
     expect(types(net.seen)).toEqual(["info metaAndAssetCtxs", "info metaAndAssetCtxs xyz", "info spotMetaAndAssetCtxs"]);
     net.seen.splice(0);
-    const bars = ok(await t.candles!("BTC/USDC:USDC", "1h", NOW - 4 * 3_600_000));
-    expect(bars.map((b) => [b.t, b.o, b.c, b.v])).toEqual([[1791471600000, 82677, 81009, 8364.5566], [1791475200000, 81007, 80929, 4888.26485], [1791478800000, 80922, 80720, 4023.54386], [1791482400000, 80720, 81522, 1706.04515]]);
-    expect(net.seen[0]!.body).toEqual({ type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: NOW - 4 * 3_600_000, endTime: NOW } });
+    const page = ok(await t.candles!("BTC/USDC:USDC", "1h", { since: NOW - 4 * 3_600_000 })) as CandlePage;
+    expect(page.bars.map((b) => [b.t, b.o, b.c, b.v])).toEqual([[1791471600000, 82677, 81009, 8364.5566], [1791475200000, 81007, 80929, 4888.26485], [1791478800000, 80922, 80720, 4023.54386], [1791482400000, 80720, 81522, 1706.04515]]);
+    // the window from its first whole hour to the end of the hour forming now (live/history-crypto.ts hyperliquidHistory)
+    const H = 3_600_000;
+    expect(net.seen[0]!.body).toEqual({ type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: Math.ceil((NOW - 4 * H) / H) * H, endTime: Math.floor(NOW / H) * H + H - 1 } });
+    expect(page.source).toBe("Hyperliquid · BTC perpetual");
   });
 });
 

@@ -130,9 +130,13 @@ async function lvPoll() {
         const key = `${q.venue}|${q.symbol}`;
         const price = Number.isFinite(Number(q.market.price)) ? Number(q.market.price) : Number.isFinite(Number(q.market.bid)) && Number.isFinite(Number(q.market.ask)) ? (Number(q.market.bid) + Number(q.market.ask)) / 2 : undefined;
         if (price === undefined) continue;
-        LV.quotes.set(key, { at: now, price, bid: q.market.bid, ask: q.market.ask, market: q.market });
+        // the price's own moment where its market says it (a paper account's: when its source's venue answered), never the moment this
+        // page read it: a kept listing is not passed off as now
+        const own = Date.parse(String(q.market.quoteAt || ""));
+        const at = Number.isFinite(own) ? own : now;
+        LV.quotes.set(key, { at, price, bid: q.market.bid, ask: q.market.ask, market: q.market });
         const h = LV.history.get(key) || [];
-        if (!h.length || h[h.length - 1][1] !== price) h.push([now, price]);
+        if (!h.length || h[h.length - 1][1] !== price) h.push([at, price]);
         if (h.length > LV_HISTORY) h.splice(0, h.length - LV_HISTORY);
         LV.history.set(key, h);
       }
@@ -182,8 +186,10 @@ function lvWrite() {
         if (now.style.getPropertyValue("--x") !== x) now.style.setProperty("--x", x);
       }
     }
+    // when the price is from, and how old it is once it is not the last few seconds' (core ageWords)
     const asof = card.querySelector("[data-lv-asof]");
-    if (asof) setText(asof, ` · ${nyTime(q.at)}`);
+    const age = ageWords(q.at);
+    if (asof) setText(asof, ` · ${nyTime(q.at)}${age ? ` (${age})` : ""}`);
     lvSpark(card, LV.history.get(card.dataset.lvQ) || []);
   }
   for (const fn of LV.listeners) {

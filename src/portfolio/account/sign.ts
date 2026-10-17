@@ -92,8 +92,10 @@ export type OwnerAction =
   | { type: "approveBuilderFee"; builder: Hex; maxFeeRate: string; nonce: number }
   /** a spending approval: which venues or payees, how much per payment, how much in all, how often, until when. A budget of "0" revokes.
    * `intent`, when given, is the id of the open intent this limit answers (`intent-0003`): it is signed with the rest, and an approval
-   * without it signs exactly as it always has */
-  | { type: "approveSpend"; agent: Hex; scope: string; allow: string; perPayment: string; budget: string; windowHours: number; validUntil: number; intent?: string | undefined; nonce: number }
+   * without it signs exactly as it always has. `renewHours`, when given (a trading limit only), makes its budget an ENTRY budget that
+   * RENEWS: every that many hours what the entries spent is counted afresh, and a close — a sell of what is held, a reduce-only order —
+   * counts against none of it (its per-order cap still holds). Signed with the rest; a limit without it signs, and spends, as it always has */
+  | { type: "approveSpend"; agent: Hex; scope: string; allow: string; perPayment: string; budget: string; windowHours: number; validUntil: number; intent?: string | undefined; renewHours?: number | undefined; nonce: number }
   | { type: "createSubAccount"; name: string; agent: Hex; float: string; nonce: number }
   | { type: "userSetAbstraction"; abstraction: string; nonce: number }
   | { type: "convertToMultiSigUser"; signers: string; nonce: number }
@@ -155,7 +157,14 @@ export type OwnerAction =
    * beside this signature, to POST /api/account/brain-key, and is written to the provider's key file and nowhere else: this action, the
    * ledger's rows of it and the page hold only what is signed here. `keyHash` "" (and `salt` "") takes the key file away. Owner-only, like
    * every type in this union: an agent key can never sign it */
-  | { type: "setBrainKey"; provider: string; baseUrl: string; model: string; keyHash: string; salt: string; nonce: number };
+  | { type: "setBrainKey"; provider: string; baseUrl: string; model: string; keyHash: string; salt: string; nonce: number }
+  /** A PAPER ACCOUNT the account keeps itself (live/paper.ts), started again: `venue` its id, `usd` the paper money it starts again with, in
+   * dollars ("" for the default). Its book as it stands is archived beside it (book-<time>.json, never deleted) and a new book takes its
+   * place under the same id and name. Paper money only: nothing real moves. Refused while an order of the account's is open there */
+  | { type: "resetPaper"; venue: string; usd: string; nonce: number }
+  /** paper money added to a paper account the account keeps itself: `usd` dollars more in its cash, written in its book as paper money put
+   * in (its curve and what it made or lost since it started count it as put in, never as a gain) */
+  | { type: "topUpPaper"; venue: string; usd: string; nonce: number };
 
 export type AgentAction =
   | { type: "agentSendAsset"; destination: string; sourceDex: string; destinationDex: string; token: string; amount: string; fromSubAccount: string; maxFee: string; nonce: number }
@@ -205,7 +214,7 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper"] as const;
 export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
@@ -219,6 +228,10 @@ export const MONEY_TTL_MS = 10 * 60_000;
 /** A brain's key (setBrainKey) is good for as long as a money instruction, around the moment it is dated: the page signs it and sends the key
  * beside it at once, so an envelope kept for later is not one the owner is still waiting on */
 export const BRAIN_KEY_TTL_MS = MONEY_TTL_MS;
+/** a paper account started again or topped up (resetPaper, topUpPaper) is no money, but a reset takes the book the owner sees away: an
+ * envelope is good for as long as a money instruction, around the moment it is dated — never one kept to start the book again days later */
+export const PAPER_TYPES: ReadonlySet<string> = new Set(["resetPaper", "topUpPaper"]);
+export const PAPER_TTL_MS = MONEY_TTL_MS;
 
 export function isOwnerAction(a: { type: string }): a is OwnerAction {
   return (OWNER_TYPES as readonly string[]).includes(a.type);
@@ -306,15 +319,21 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   // the key's fingerprint and its salt are text (keyHash "" takes the key away, which no bytes32 could say): what the device signs and the
   // dialog shows, field for field — never the key
   setBrainKey: { primary: "AccountBrain:SetKey", fields: [{ name: "provider", type: "string" }, { name: "baseUrl", type: "string" }, { name: "model", type: "string" }, { name: "keyHash", type: "string" }, { name: "salt", type: "string" }, NONCE] },
+  resetPaper: { primary: "AccountPaper:Reset", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
+  topUpPaper: { primary: "AccountPaper:TopUp", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };
+/** a trading limit whose budget renews says every how many hours: one more signed field, after the intent's and before the nonce */
+const RENEW_FIELD: Field = { name: "renewHours", type: "uint64" };
 
 /** the fields an owner action signs: its type's — and, on a spending approval that names the intent it answers, the intent's id before the
- * nonce. An approval that names none signs as it always has, so every limit signed before there was an `intent` field still verifies */
+ * nonce; on one whose budget renews, how often, after it. An approval that names neither signs as it always has, so every limit signed
+ * before there was an `intent` or a `renewHours` field still verifies */
 function fieldsOf(action: OwnerAction): Field[] {
   const fields = OWNER_FIELDS[action.type].fields;
-  return action.type === "approveSpend" && action.intent !== undefined ? [...fields.slice(0, -1), INTENT_FIELD, NONCE] : fields;
+  if (action.type !== "approveSpend" || (action.intent === undefined && action.renewHours === undefined)) return fields;
+  return [...fields.slice(0, -1), ...(action.intent !== undefined ? [INTENT_FIELD] : []), ...(action.renewHours !== undefined ? [RENEW_FIELD] : []), NONCE];
 }
 
 /** what reaches a real venue: its signed text says "real money" */

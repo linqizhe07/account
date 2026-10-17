@@ -2,8 +2,8 @@
    signs what the owner asks for; it decides nothing the account did not. */
 /* THE CONTRACT. The page is plain scripts sharing one global scope, run in this order after owner.js (the device key: Owner.prepare ·
    Owner.submit · Owner.act · Owner.why · Owner.role):
-     core (this file) · connect · money · asset · intent · live · portfolio · memory · earn · markets · trade · chart · book · terminal ·
-     brains · desk · floor · superagent · statement · agents-mount · shell (draws and starts it).
+     core (this file) · stream · connect · money · asset · intent · live · portfolio · memory · earn · markets · trade · chart · book ·
+     terminal · brains · desk · floor · superagent · statement · agents-mount · shell (draws and starts it).
    Each top-level name is declared once across them all (test/unit/page-scripts.test.ts). Declare what the shell calls as top-level
    `function` declarations.
 
@@ -24,20 +24,33 @@
                                   the rail's Trade opens it. Read in a guarded read; nothing writes it at load
      setTradeMode(mode, params)   the switch's click, and only it: the mode kept, then go() there
    Doing
-     load()                       read the account and the statement again, then render() (shell.js): the chrome, the visible pane, and
-                                  the redraw of whatever sheet or drawer is open; the latest read wins over a slower earlier one
+     load({ draw })               read the account and the statement again, then render() (shell.js): the chrome, the visible pane, and
+                                  the redraw of whatever sheet or drawer is open; the latest read wins over a slower earlier one. `draw`
+                                  in place of render(): the shell's read after a pushed change draws only what moved where the owner is
+                                  typing (shell.js shPushedDraw)
      forget(prefix)               the reads kept by api() whose path starts so, dropped: after an action changed what they said
      own(draft, then)             one owner action: prepare, sign with this browser's key, send at POST /api/exchange; then(r) after it
                                   went through; a refusal lands in flash in the venue's or the account's own words, what it did in said
                                   (saidOf(body): the summary, or the order or payment as it stands). Then load(). An account that does
                                   not answer is a refusal too (NO_ANSWER), never an exception out of a sheet
      cancelOrder(o, then)         a signed liveCancel of one order: an agent's after a yes, the owner's own with one click
-     api(path, { ttl })           a JSON GET: one request at a time per path, kept ttl ms when asked. Resolves to the body, refusals
+     api(path, { ttl, timeout })  a JSON GET: one request at a time per path, kept ttl ms when asked. Resolves to the body, refusals
                                   included ({ ok:false, refusal }); refusalOf(body) is its sentence. Nothing that never came from the
-                                  account (no answer, a gateway's page) is kept
+                                  account (no answer, a gateway's page) is kept; a read not answered in `timeout` ms (15 s) is let go and
+                                  answers as not reached ({ ok:false, error }), never a promise that hangs
      postJson(path, body)         a JSON POST → { status, body }; no answer → NO_ANSWER ({ status: 0, body: { ok: false, error } })
+     FILLS_SAID                   the fills already said as a toast, by `${clientId}|${filledQty}` (when): the answer to the owner's own order
+                                  and the account's pushed fill (shell.js shFillToast) say one fill once, whichever comes first
+     orderWordsOnce(body, placed) what an answer says as a toast (saidOf), or "" where it is an order that placed and filled whose fill was
+                                  said already (pushed first); otherwise its fill is marked said, so a push after it says nothing. Every
+                                  path that places an order and toasts its answer takes its words from here: own(), quoteDialog's
+                                  submit (the Close… sheet), the Trade ticket
+   The account's push channel (ui/stream.js): stOn(type, fn) → off · stHealth() "connected" | "stale" | "down" · stStart() · stDot(). What
+     the account pushes is applied in place by the shell (shell.js: an order's state, a position, the paper cash, a toast for each fill) and
+     read again once for a burst; a pane that draws something the account changes listens for its own (superagent.js: desk)
      debounce(fn, ms)             later(ms): fn once, a little later, however often it is asked      thenLoad(fn)  a button's work, then load()
    Drawing (strings of HTML; escape what came from outside with esc)
+     ageWords(at) (how old a price shown as now is: "" while fresh, "12 s old", "3 min old", "from 14:02 New York")
      esc · money (-$1,234.50) · fine (a cent or less as it was) · px (a price) · usd (a price in dollars, four figures under $1) · cents
      (an event contract's price, 62.5¢, held to 0–100) · short (an address) · qtyOf (an amount) · plural · nyDay · nyTime (a dash for a
      time that is not one) · typeText (an order's type) · isLive (an order on a book) · byOf (who did it) · readOnlyWords (a venue's words)
@@ -187,6 +200,31 @@ const yourTime = (iso, zone = YOUR_ZONE) => {
   const [wd, hm] = f.format(new Date(ms)).replace(",", "").split(" ");
   return ` (${wd === ny(ms, { weekday: "short" }) ? hm : `${wd} ${hm}`} your time)`;
 };
+/* THE TRADING SCREEN'S ONE CLOCK: a moment on the viewer's own clock (YOUR_ZONE, the clock the chart's axis and the book's trades always
+   kept) — the tables under the panels say it too, so one screen never shows two clocks. `date`: with its day, month and year, as HL's
+   tables write a moment ("17 Oct 2026 06:24:11": no weekday, so a history's Time column stays narrow), else the time of day alone
+   ("06:24:11"); `seconds` off: to the minute; `year` off: the day and month alone ("17 Oct 06:24", the tables' own few characters, the
+   whole moment on hover). A dash for what is not a moment */
+const yourClock = (iso, { date = true, seconds = true, year = true } = {}) => {
+  const ms = typeof iso === "number" ? iso : Date.parse(String(iso ?? ""));
+  if (!Number.isFinite(ms)) return "—";
+  const k = `clock:${YOUR_ZONE}`;
+  let f = NY_FORMATS.get(k);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-GB", { ...(YOUR_ZONE ? { timeZone: YOUR_ZONE } : {}), day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    } catch {
+      f = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    }
+    NY_FORMATS.set(k, f);
+  }
+  const p = {};
+  for (const x of f.formatToParts(new Date(ms))) p[x.type] = x.value;
+  const time = `${p.hour}:${p.minute}${seconds ? `:${p.second}` : ""}`;
+  return date ? `${p.day} ${p.month}${year ? ` ${p.year}` : ""} ${time}` : time;
+};
+/* that clock in words, as the trading screen names it once: "Hong Kong time", "New York time", "UTC" */
+const yourZoneWords = (zone = YOUR_ZONE) => (!zone || zone === "UTC" || zone === "Etc/UTC" ? "UTC" : `${String(zone).split("/").pop().replace(/_/g, " ")} time`);
 const ZERO = "0x0000000000000000000000000000000000000000";
 const DAY = 86_400_000;
 /* what the money is in, by class: its name, and its colour on the allocation bar (tokens.css) */
@@ -234,10 +272,11 @@ const bridgeChainsOf = () => (A && Array.isArray(A.bridgeChains) && A.bridgeChai
 
 /* each read of the account is numbered: a slower one that lands after a later one changes nothing (the latest wins) */
 let loadSeq = 0;
-async function load() {
+async function load({ draw } = {}) {
   const my = ++loadSeq;
   const [r, st] = await Promise.all([fetch("/api/account"), fetch("/api/account/statement").catch(() => null)]);
-  const lines = st && st.ok ? (await st.json().catch(() => ({}))).lines : null;
+  const stBody = st && st.ok ? await st.json().catch(() => null) : null;
+  const lines = stBody ? stBody.lines : null;
   if (r.status === 404) return void ($("main").innerHTML = '<p class="dim">This server runs the simulated statement (<span class="mono">--classic</span>). <a href="/">Open it</a>.</p>');
   let page = await r.json();
   // the service was restarted under this page: it no longer knows this browser's key, so offer it again
@@ -248,10 +287,15 @@ async function load() {
   // this browser was waiting, and another device of the owner's let it sign: it signs from now on, without a reload
   if (Owner.role === "pending" && page.signers.owners.some((o) => o.id === `device:${Owner.kid}`)) await Owner.ready();
   if (my !== loadSeq) return;
-  if (Array.isArray(lines)) S = lines;
+  if (Array.isArray(lines)) {
+    S = lines;
+    // the statement just read is the one every part reads (the terminal's history tabs ask api() for it): never an older one it kept
+    if (st && st.ok) API.set("/api/account/statement", { at: Date.now(), body: stBody });
+  }
   A = page;
   loadedAt = Date.now();
-  render();
+  if (typeof draw === "function") draw();
+  else render();
 }
 
 /** one owner action: prepare, sign with this browser's device key, send, show what came back. A refusal — the account's or the venue's,
@@ -265,7 +309,11 @@ async function own(draft, then) {
     r = await Owner.act(draft);
     const refused = refusedAt(r);
     flash = refused ? Owner.why(r) || "Refused" : "";
-    said = refused ? "" : saidOf(r.body);
+    // an order that filled is said once: the account's pushed fill may have said it already (shell.js shFillToast), or says it after this.
+    // Only an action that places one (ORDER_PLACING): a cancel's or an amend's answer carries the order's fill too, but says the cancel
+    said = refused ? "" : orderWordsOnce(r.body, ORDER_PLACING.has(draft && draft.type));
+    // what the action changed is read afresh: the statement's lines and the positions kept from before it (load() reads the statement)
+    if (!refused) afterAction();
     if (then && !refused) {
       busy = false;
       await then(r);
@@ -284,6 +332,38 @@ async function own(draft, then) {
     render();
   }
   return r;
+}
+
+/* the fills said as a toast, by `${clientId}|${filledQty}`, with when: one fill is said once, by whichever of the order's answer and the
+   account's push comes first. Kept a minute, at most a hundred */
+const FILLS_SAID = new Map();
+function fillSaid(key) {
+  const now = Date.now();
+  FILLS_SAID.set(key, now);
+  if (FILLS_SAID.size > 100) for (const [k, at] of FILLS_SAID) if (now - at > 60_000 || FILLS_SAID.size > 100) FILLS_SAID.delete(k);
+}
+/* the owner's actions whose answer is an order they placed: a liveOrder, a liveClose, and a card approved (when it placed one, its answer
+   is that order). A cancel or an amend answers with an order too, but what it says is the cancel or the change */
+const ORDER_PLACING = new Set(["liveOrder", "liveClose", "approveCard"]);
+/** AN ANSWER'S WORDS, SAID ONCE: what saidOf says of it — or "" where it is an order an action placed (`placed`) that filled, and that fill
+ * was said already (the account pushed it before the answer came: shell.js shFillToast, by `${clientId}|${filledQty}`). Otherwise the fill
+ * is marked said here, so the push that comes after says nothing. Every path that places an order and says its answer as a toast takes its
+ * words from here — own(), quoteDialog's submit, the Trade ticket — so a fill is one toast whichever comes first */
+function orderWordsOnce(body, placed = true) {
+  const words = saidOf(body);
+  const o = placed && body && body.kind === "order" ? body.order : null;
+  if (!o || !o.clientId || !(num(o.filledQty) > 0)) return words;
+  const key = `${o.clientId}|${num(o.filledQty)}`;
+  if (FILLS_SAID.has(key)) return "";
+  fillSaid(key);
+  return words;
+}
+
+/* after an action went through: the reads it changed are dropped from what the page keeps — the statement (every history tab), the
+   positions (the terminal's table, the ticket's position line) and the holdings — so the next look asks the account again and never shows
+   what stood before the action. load() reads the statement again too */
+function afterAction() {
+  for (const path of ["/api/account/statement", "/api/account/positions", "/api/account/holdings"]) forget(path);
 }
 
 /* what an action did, in a few words: the account's own summary, or the order or payment as it now stands */
@@ -317,31 +397,77 @@ function orderSaid(o) {
 
 /* a JSON read as the page asks it: one request at a time per path (a second ask while the first is out gets the same answer), and the
    answer kept `ttl` milliseconds when asked. What comes back is the body, a refusal included; a request that never reached the account is
-   { ok: false, error } and is not kept */
+   { ok: false, error } and is not kept. A read is given `timeout` milliseconds (API_TIMEOUT_MS unless said): one the account has not
+   answered by then is let go — the request itself stopped where the browser can stop one — and answers as not reached, in the page's own
+   words, so a hung read never freezes what waits on it (the bar, the book, a tab) and the next ask asks again */
 const API = new Map();
-function api(path, { ttl = 0 } = {}) {
+const API_TIMEOUT_MS = 15_000;
+/* A PRICE HISTORY'S FIRST VIEW is waited for longer: the account gives its sources twenty seconds for one (service.ts HISTORY_WAIT_MS — a
+   share's whole history from Nasdaq is about ten seconds, and a source's own pace may hold a read a while before it), so a page waits
+   past that and never says the account did not answer while it is still reading the view (a page scrolled left keeps API_TIMEOUT_MS: the
+   account gives one twelve, PAGE_WAIT_MS). test/unit/ui-chart.test.ts holds the two apart */
+const HISTORY_TIMEOUT_MS = 25_000;
+/* each path's generation: forget() moves it on, for a read still on its way too. A read answers its own askers whatever happens, and is
+   kept only if its path's generation is the one it was asked in — so a read sent before an action and answered after it (the positions
+   as they stood before the order) never stands, kept, for the reads after it */
+const API_GEN = new Map();
+function api(path, { ttl = 0, timeout = API_TIMEOUT_MS } = {}) {
   const hit = API.get(path);
   if (hit && hit.pending) return hit.pending;
   if (hit && ttl > 0 && Date.now() - hit.at < ttl) return Promise.resolve(hit.body);
   if (API.size > 200) for (const [k, v] of API) if (!v.pending && Date.now() - v.at > 600_000) API.delete(k);
+  const gen = API_GEN.get(path) || 0;
   let reached = true;
+  const stop = typeof AbortController === "function" ? new AbortController() : null;
+  let timer = 0;
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      reached = false;
+      if (stop) stop.abort();
+      resolve({ ok: false, error: `The account did not answer in ${Math.round(timeout / 1000)} seconds.` });
+    }, timeout);
+  });
   // an answer that is not JSON never came from the account (a gateway in between): it is not kept either
-  const pending = fetch(path)
+  const asked = fetch(path, stop ? { signal: stop.signal } : undefined)
     .then((r) => r.json().catch(() => ((reached = false), { ok: false, error: `${r.status} ${r.statusText}`.trim() })))
-    .catch((err) => ((reached = false), { ok: false, error: String((err && err.message) || err) }))
-    .then((body) => {
-      if (reached) API.set(path, { at: Date.now(), body });
-      else API.delete(path);
-      return body;
-    });
+    .catch((err) => ((reached = false), { ok: false, error: String((err && err.message) || err) }));
+  const pending = Promise.race([asked, late]).then((body) => {
+    clearTimeout(timer);
+    // a later ask may have taken the path's place meanwhile (forget, then asked again): only this ask's own entry is written or dropped —
+    // and one forgotten while it was on its way is not kept (its generation passed): what it says is from before what changed it
+    const mine = API.get(path);
+    if (mine && mine.pending !== pending) return body;
+    if (reached && (API_GEN.get(path) || 0) === gen) API.set(path, { at: Date.now(), body });
+    else API.delete(path);
+    return body;
+  });
   API.set(path, { ...(hit || {}), pending });
   return pending;
 }
 /* a refusal as one sentence, from a read's body */
 const refusalOf = (body) => (body && body.refusal && body.refusal.message) || (body && body.error) || "";
-/* the reads kept whose path starts so, dropped (one still on its way finishes and is kept): after an action changed what they said */
+/* HOW OLD A PRICE IS, said wherever it is shown as now: nothing while it is a few seconds old (QUOTE_FRESH_MS); then "12 s old", "3 min
+   old", and past an hour the moment it is from, New York time. `at` is the price's own moment (a market's quoteAt: its source's stamp, or
+   when its venue answered); a price that does not say when gives "" — the place showing it says where it is from instead */
+const QUOTE_FRESH_MS = 5_000;
+function ageWords(at, now = Date.now()) {
+  const t = typeof at === "number" ? at : Date.parse(String(at || ""));
+  if (!Number.isFinite(t)) return "";
+  const ms = now - t;
+  if (ms < QUOTE_FRESH_MS) return "";
+  if (ms < 60_000) return `${Math.floor(ms / 1000)} s old`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min old`;
+  return `from ${nyTime(t)} New York${ms >= DAY ? `, ${nyDay(t)}` : ""}`;
+}
+
+/* the reads kept whose path starts so, dropped, after an action changed what they said — one still on its way too: it answers whoever
+   asked it, but is not kept (its path's generation moves on, API_GEN), and the next ask asks the account again rather than wait for it */
 function forget(prefix) {
-  for (const [k, v] of [...API]) if (k.startsWith(prefix) && !v.pending) API.delete(k);
+  for (const k of [...API.keys()]) {
+    if (!k.startsWith(prefix)) continue;
+    API_GEN.set(k, (API_GEN.get(k) || 0) + 1);
+    API.delete(k);
+  }
 }
 
 // ---- drawing ------------------------------------------------------------------------------
@@ -967,6 +1093,10 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
   let prepared = null;
   let seq = 0;
   let stopLeft = () => {};
+  /* the draft the shown preparation was asked for, as text: a field changed since makes it another draft — the sign button goes off at once
+     and the sheet signs nothing until the account has prepared that one (a quick Enter after a change never signs what was shown before) */
+  let asked = "";
+  const draftNow = () => JSON.stringify(draft(form) ?? null);
   const say = (text, state = "") => { msg.className = `msg${text && state ? ` ${state}` : ""}`; msg.textContent = text || ""; };
   // the signature's minutes, on the page's one clock: false stops it; a change is written in the clock's frame
   const left = () => {
@@ -986,6 +1116,7 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
     refuse("");
     stopLeft();
     const d = draft(form);
+    asked = JSON.stringify(d ?? null);
     if (!d || typeof d === "string") return void (box.innerHTML = `<span class="dim">${esc(d || "Fill it in to see what it would be.")}</span>`);
     box.innerHTML = '<span class="dim">Asking…</span>';
     const r = await Owner.prepare(d);
@@ -996,7 +1127,7 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
     sign.innerHTML = whatYouSign(prepared, { notes: signNotes ? signNotes(prepared, form) : null });
     const no = block ? block(prepared, form) : "";
     refuse(no);
-    btn.disabled = !owns() || !!no;
+    btn.disabled = !owns() || !!no || draftNow() !== asked;
     if (prepared.action.deadline) {
       const now = left();
       if (typeof now === "function") now();
@@ -1004,11 +1135,26 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
     }
   };
   const later = debounce(requote);
-  form.addEventListener("input", () => later());
-  form.addEventListener("change", () => later(0));
+  // a change makes another draft: off at once, until the account has prepared that one
+  const changed = () => {
+    if (draftNow() !== asked) btn.disabled = true;
+  };
+  form.addEventListener("input", () => {
+    changed();
+    later();
+  });
+  form.addEventListener("change", () => {
+    changed();
+    later(0);
+  });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!prepared || busy || !stop.hidden) return;
+    // what is typed now is not what was prepared (a field changed and the quick key came first): prepared again, and nothing signed
+    if (draftNow() !== asked) {
+      say("It changed: here it is again as the account would take it. Check it, then sign.", "wait");
+      return void requote();
+    }
     const p = prepared;
     btn.disabled = true;
     say("Sending it…", "wait");
@@ -1017,8 +1163,10 @@ function quoteDialog({ title, sub = "", fields = "", draft, show, block, done, s
       say(Owner.why(r) || "Refused", "no");
       return void requote();
     }
+    afterAction();
     try {
-      said = (done ? await done(r, p) : "") || saidOf(r.body);
+      // an order this placed and filled is said once (orderWordsOnce): the account may have pushed its fill already
+      said = (done ? await done(r, p) : "") || orderWordsOnce(r.body, ORDER_PLACING.has(p.action && p.action.type));
     } catch (err) {
       flash = String((err && err.message) || err).slice(0, 240);
     }

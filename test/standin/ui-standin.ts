@@ -14,6 +14,9 @@
  *                      its clock running every ten seconds and a cycle every minute, the first a few seconds after the start
  *     --cards          with --superagent: hired with the autonomy OFF, so in Guard every lead it clears waits for you on a card — the
  *                      Superagent pane's "Waits for you" strip, with real cards to approve or reject
+ *     --no-paper       no paper account connected (neither the stand-in's own nor the account's live:paper one): Trade's paper onboarding
+ *                      card shows, and opening one from it is signed there as any connection is (feat/paper-live phase 4). Not with
+ *                      --superagent, which trades a paper account
  *     --brain-refuses  the scripted brain answers as the API does to a key it refuses (E_BRAIN_KEY_REJECTED, brain-key.ts): the desk's
  *                      standing turns "not ready" with the rejected-key fix, and the room says so once. The stand-in writes a stand-in key
  *                      to <home>/credentials/anthropic/api-key.json at the start; change what that file holds (the fix's command opens
@@ -63,8 +66,9 @@
  * The agent wallet's key is made in the home the way a real one is (account/keystore.ts), so its address is a real address on every EVM
  * chain: its balance here is the stand-in chain's, and nothing real should ever be sent to it.
  *
- * While it runs: prices move every few seconds, a resting order fills when the price crosses it (at the broker, only while the US market
- * is open), a stop fires, the fifteen-minute bitcoin market rolls over and settles; Claude Code reports when its order fills, and when its
+ * While it runs: prices move every few seconds — the paper accounts' quotes and the page's pushed quote, book and trades with them, through a
+ * stand-in for the venues' live streams (venues.ts standinHub; only while prices move, never in tests that step them) — a resting order fills
+ * when the price crosses it (at the broker, only while the US market is open), a stop fires, the fifteen-minute bitcoin market rolls over and settles; Claude Code reports when its order fills, and when its
  * card expires unanswered the seed key closes it and Claude Code asks again (in Guard only).
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -88,7 +92,7 @@ import { isStable, type LiveBalance } from "../../src/portfolio/live/types.ts";
 import { pairingCode, startPortfolioServer, type PortfolioServerHandle } from "../../src/portfolio/server.ts";
 import { loadOpenness, PortfolioService } from "../../src/portfolio/service.ts";
 import { DAY, toStep } from "./model.ts";
-import { makeWorld, publicSources, registerStandins, standinChain, standinPrice, standinSender, stockSession, tick, type World } from "./venues.ts";
+import { makeWorld, publicSources, registerStandins, standinChain, standinHub, standinPrice, standinSender, stockSession, tick, type World } from "./venues.ts";
 
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const HOUR = 3_600_000;
@@ -123,6 +127,8 @@ export interface StandinOptions {
   cards?: boolean | undefined;
   /** the scripted brain refuses its key as the API would (`--brain-refuses`), until the stand-in's key file is changed (refusingBrain) */
   brainRefuses?: boolean | undefined;
+  /** the paper accounts connected (true unless said): false connects none (`--no-paper`), so Trade offers to open one */
+  paper?: boolean | undefined;
 }
 
 /** what was seeded, by id */
@@ -176,6 +182,11 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   const code = o.code ?? pairingCode();
   const capUsd = o.capUsd ?? 250;
   const month = new Date(clock() + 30 * DAY).toISOString();
+  // the venues' live streams, stood in for by the world's own prices (standinHub): while prices move (not in tests, which step them), the
+  // paper accounts' quotes and the push channel's market events move with each tick — the public markets the account's own paper account
+  // trades, and the stand-in's own exchange and its paper perpetuals under their venue ids (as a venue connected with a key is streamed), so
+  // the trading area's bar, chart, book, tape and positions move with the world wherever it opens
+  const hub = (o.tickMs ?? 3_000) > 0 ? standinHub(world, { ex: () => world.ex, paper: () => world.pubperps }) : undefined;
   const svc = await PortfolioService.create({
     home,
     venues: "frontline",
@@ -184,6 +195,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     liveWrites: { capUsd, pairingCode: code },
     openness: { ...(loadOpenness() as object), sessionExpiresAt: month },
     publicMarkets: publicSources(),
+    ...(hub ? { streams: hub } : {}),
     // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds —
     // held under Claude's preset id beside every other preset's real brain (standinBrains). No desk seeded: the real brains alone stand
     // behind the hire form, each saying honestly that this home holds no key for it
@@ -240,9 +252,11 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   if (!stocksOpen) for (const [symbol, qty] of [["AAPL", 0.5], ["NVDA", 1]] as const) world.broker.add("stocks", symbol, qty);
   ok("Stand-in Broker", await own({ type: "connectVenue", venue: "broker", connector: "live:standin-broker", label: "Stand-in Broker", credentialRef: "" }));
   // a paper account beside the real ones: its chip says Paper, its balance is not in the net worth, its orders are rehearsals
-  ok("Stand-in Paper", await own({ type: "connectVenue", venue: "paper", connector: "live:standin-paper", label: "Stand-in Paper", credentialRef: "" }));
-  // the account's own paper account (live:paper): paper money in the stand-in's public markets, its book in this home
-  ok("Paper · Momentum", await own({ type: "connectVenue", venue: "paper-momentum", connector: "live:paper", label: "Momentum", credentialRef: "25000" }));
+  if (o.paper !== false) {
+    ok("Stand-in Paper", await own({ type: "connectVenue", venue: "paper", connector: "live:standin-paper", label: "Stand-in Paper", credentialRef: "" }));
+    // the account's own paper account (live:paper): paper money in the stand-in's public markets, its book in this home
+    ok("Paper · Momentum", await own({ type: "connectVenue", venue: "paper-momentum", connector: "live:paper", label: "Momentum", credentialRef: "25000" }));
+  }
   ok("the agents' leverage cap", await own({ type: "setPolicy", change: "maxLeverage", value: "5" }));
 
   // ---- the owner's own trading: the statement's first lines ----
@@ -388,6 +402,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   };
   const step = async () => {
     tick(world);
+    hub?.pulse();
     await agentLooks();
     await svc.desk?.tick();
   };
@@ -406,7 +421,10 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     t.unref();
     timers.push(t);
   };
-  every(o.tickMs ?? 3_000, () => tick(world));
+  every(o.tickMs ?? 3_000, () => {
+    tick(world);
+    hub?.pulse();
+  });
   every(o.agentMs ?? 15_000, async () => {
     await agentLooks();
     await svc.desk?.tick();
@@ -415,7 +433,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   // after the start rather than at the agent's next look. Not where prices only move when asked (tests: tickMs 0)
   const stopDesk = o.superagent && o.desk !== false && (o.tickMs ?? 3_000) > 0 ? svc.watchDesk() : undefined;
 
-  const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", "paper", "paper-momentum", walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
+  const seeded: Seeded = { venues: ["ex", "predict", "wallet", "broker", ...(o.paper !== false ? ["paper", "paper-momentum"] : []), walletVenue], agent: { name: AGENT_NAME, address: agent.address, wallet: walletVenue }, orders, card, intents, asks: 2, watch: 3, curvePoints };
   return {
     url: server.url,
     code,
@@ -429,6 +447,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     close: async () => {
       stopDesk?.();
       for (const t of timers) clearInterval(t);
+      hub?.close();
       await server.close();
       // a home made for a test goes with it; the one the command line made is kept (its ledger, and the agent wallet's key)
       if (madeHome && !isMain && process.env.UI_STANDIN_KEEP !== "1") rmSync(home, { recursive: true, force: true });
@@ -603,7 +622,8 @@ if (isMain) {
   const tickMs = Number(at("--tick") ?? 3_000);
   if (!(capUsd > 0) || !(tickMs > 0)) throw new Error("--cap is dollars and --tick milliseconds, both more than zero");
   if (args.includes("--cards") && !args.includes("--superagent")) throw new Error("--cards goes with --superagent: it hires the superagent with its autonomy off");
-  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses") }).catch((e: NodeJS.ErrnoException) => {
+  if (args.includes("--no-paper") && args.includes("--superagent")) throw new Error("--no-paper does not go with --superagent: the superagent trades a paper account");
+  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses"), paper: !args.includes("--no-paper") }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EADDRINUSE") {
       console.error(`port ${port} is already in use: is a stand-in running already? Open http://127.0.0.1:${port}, or pick another with --port`);
       process.exit(1);

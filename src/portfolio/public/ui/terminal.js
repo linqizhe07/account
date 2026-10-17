@@ -2,8 +2,10 @@
    scratchpad's hl-reference.md): dark panels three pixels apart on a lighter ground — the market bar over the chart on the left (the
    market, its price, its 24 hours, its funding or its session), the order book and the latest trades beside them (ui/book.js), the order
    panel on the right (the ticket, ui/trade.js), and under them what is held, what is open, what filled and every order placed; at the very
-   foot a thin status strip (which accounts trade from here, and a read of the bar's market that failed). The market is picked from the bar:
-   it opens the kinds and their lists (the picker, ui/trade.js) in a popover laid over the panels, never pushing them down.
+   foot a thin status strip (whether the account's stream is live — HL's own "Online" in the same corner, ui/stream.js stDot — which
+   accounts trade from here, and a read of the bar's market that failed). The market is picked from the bar: it opens the kinds and their
+   lists (the picker, ui/trade.js) in a popover laid over the panels, never pushing them down. What the account pushes — an order's state, a
+   fill, a position — is drawn into the tabs under the panels as it comes (ttPushed), whatever is being typed in the ticket.
 
    Whether the owner trades here or watches the account's desk trade a paper account by itself is the topbar's switch (account.html
    #trade-mode, Regular · Superagent, shell.js): one switch for both panes, so this frame draws none of its own.
@@ -20,19 +22,40 @@
    (GET /api/account/market, read again every five seconds while the pane is showing — its beat goes on while another pane shows, asking
    nothing, so the figures are fresh again within a beat of coming back) and its row's — until an account is chosen for it, the row read
    again on the same beat; a figure no source gave is not shown, and a read that failed says so, with when the figures showing were read.
-   Every button does what it says through the ticket, the book or the account's own door. */
+   Every button does what it says through the ticket, the book or the account's own door.
+
+   PUSHED (feat/paper-live p2b). The tab follows on the account's stream exactly the markets it shows (ttFollow, ui/stream.js stFollow):
+   the market the bar, the chart and the book show — whole: its quote, book and trades — and the markets of the positions listed under the
+   panels while that tab shows — their price alone, each row's mark — and nothing while another pane shows (a hidden tab's stream is
+   closed, so the account lets go of them all; ui/stream.js). Where the stream carries the market showing, its price, its bid and ask, its
+   funding and its change (from the venue's own reference: the price read less its change) follow each pushed quote in the next frame, the
+   price tinted by the way its last tick went, and the read of the market slows to a fallback once every TT_PUSHED_MS (its 24 hours' volume,
+   its session and its steps are the read's); a position's mark, its value, its PNL and its ROE follow the pushed price of its market the
+   same way, from the positions last read (nothing is asked for it). At the bar's right end the feed (ttFeed) says how the price showing
+   comes — Live (pushed as its venue's stream moves), Quiet (the stream carries it and its venue is silent), Polling (read every few seconds:
+   the stream is down, or does not carry this market) — and how old it is, every second; on hover, how long a pushed price takes to reach
+   the screen (ui/stream.js stLag). A pushed price is never shown over a newer read, never as the price of a market picked after it (the
+   bar is drawn the moment another market or venue is picked: ttLiveQuote), and one the stream no longer carries is never live. A word that
+   the market is not live there brings the read forward to its own beat, and the next such word never puts it back (ttPollSooner). */
 
 /* the terminal's state: the market showing (its Markets row and that row as last read again, where it is traded, the market as the venue
    lists it, when that was last read, why the last read failed and how many reads in a row have — the beat waits longer after each: ttWaitMs),
    how many positions the last read listed (said on their tab), the tab under the panels, the market the chart and the book were mounted
    on, whether a market has shown on this frame or a ticket was opened on purpose (from then on nothing picks one by itself: ui/trade.js
-   tkTicket says so as a ticket opens, tkReopenDraft while a kept ticket's market is read), and the bar's read timer */
-const TT = { item: null, row: null, kind: "", at: null, mk: null, readAt: 0, said: "", fails: 0, posN: 0, tab: "positions", m: "chart", mounted: "", started: false, timer: 0, seq: 0 };
+   tkTicket says so as a ticket opens, tkReopenDraft while a kept ticket's market is read), and the bar's read timer with when it is due
+   (pollAt; 0 while none is set, or while its read is on its way) — and what the stream pushes: the market showing as it is followed
+   (followKey, `<venue>:<symbol>`), the positions' markets followed for their price (posKeys), the way the bar's pushed price last moved
+   (tick), and what waits to be drawn in the next frame (due) */
+const TT = { item: null, row: null, kind: "", at: null, mk: null, readAt: 0, said: "", fails: 0, posN: 0, tab: "positions", m: "chart", mounted: "", started: false, timer: 0, pollAt: 0, seq: 0, followKey: "", posKeys: [], tick: null, due: { bar: false, pos: false, lag: null, frame: false } };
 /* the tabs under the panels, as HL names its own: what is held, what rests on a book, what filled, and every order with what became of it */
 const TT_TABS = [["positions", "Positions"], ["open", "Open orders"], ["history", "Trade history"], ["orders", "Order history"]];
 /* the three tabs a narrow terminal shows the chart and the book behind (one panel), so the order panel follows the chart directly */
 const TT_MTABS = [["chart", "Chart"], ["book", "Order book"], ["trades", "Trades"]];
 const TT_READ_MS = 5_000;
+/* while the stream pushes the bar's market (a live quote within TT_PUSH_FRESH_MS), the market is read only every TT_PUSHED_MS: its volume,
+   its session and its steps, which no quote carries */
+const TT_PUSH_FRESH_MS = 10_000;
+const TT_PUSHED_MS = 30_000;
 /* a read of the bar's market that did not come back is asked again later each time it fails — ten seconds, then twenty, forty, at most a
    minute apart — and on the five-second beat again once one is answered: a stopped account is not asked every five seconds for as long as
    the page is open */
@@ -42,11 +65,13 @@ const TT_READ_MAX_MS = 60_000;
  * reach it — the narrow terminal's three tabs, the chart, the book, the order panel), the tabs under it, the status strip at its foot */
 function ttFrame() {
   return `<div class="tt" data-tp data-tt-m="${esc(TT.m)}">
+    <section class="tt-onboard" data-tt-onboard aria-label="Open a paper account" hidden></section>
     <div class="tt-grid">
       <div class="tt-bar">
         <button type="button" class="tt-mkt" data-tt-pick aria-expanded="false" aria-controls="tt-pop"><span class="tt-av" data-tt-av></span><span class="tt-name" data-tt-name>Pick a market</span>${icon("chevron", "sm")}</button>
         <span class="tt-tags" data-tt-tags></span>
         <div class="tt-stats tab-nums" data-tt-stats></div>
+        <span class="tt-feed" data-tt-feed role="status" aria-live="off"></span>
       </div>
       <div class="tt-pop" id="tt-pop" data-tt-pop role="dialog" aria-label="Pick a market" hidden>
         <div data-tp-note></div>
@@ -65,7 +90,7 @@ function ttFrame() {
       <div class="tt-tab" data-tt-tab="history" hidden></div>
       <div class="tt-tab" data-tt-tab="orders" hidden></div>
     </section>
-    <div class="tt-foot"><span class="tp-state" data-tp-state></span><p class="tt-said" data-tt-said role="status"></p></div>
+    <div class="tt-foot"><span class="tt-live" data-st-dot></span><span class="tt-clock" data-tt-clock title="Every time on this screen — the chart's axis, the trades beside the book, the tables under the panels — is on this one clock, yours"></span><span class="tp-state" data-tp-state></span><p class="tt-said" data-tt-said role="status"></p></div>
   </div>`;
 }
 
@@ -113,6 +138,8 @@ function ttWire(el) {
     if (!b || TT.tab === b.dataset.ttTo) return;
     TT.tab = b.dataset.ttTo;
     ttLow(el, owns());
+    // the positions' markets are followed only while their tab shows
+    ttFollow();
   });
   // a narrow terminal's Chart · Order book · Trades (shown only under 560 pixels: terminal.css)
   const mtabs = tp.querySelector("[data-tt-mtabs]");
@@ -180,7 +207,11 @@ function ttFit(el) {
   const tt = el && typeof el.querySelector === "function" ? el.querySelector(".tt") : null;
   if (!tt || typeof tt.getBoundingClientRect !== "function" || !tt.style || typeof tt.style.setProperty !== "function") return;
   if (typeof tt.getClientRects === "function" && !tt.getClientRects().length) return;
-  const top = Math.max(0, Math.round(tt.getBoundingClientRect().top + (Number(window.scrollY) || 0)));
+  // measured where the grid starts: under the paper onboarding card while one shows (tkOnboard), so the card takes its room from the grid's
+  // and the tables', never the page's — the window still ends at the status strip
+  const grid = typeof tt.querySelector === "function" ? tt.querySelector(".tt-grid") : null;
+  const from = grid && typeof grid.getBoundingClientRect === "function" ? grid : tt;
+  const top = Math.max(0, Math.round(from.getBoundingClientRect().top + (Number(window.scrollY) || 0)));
   const main = typeof tt.closest === "function" ? tt.closest(".main") : null;
   let below = 0;
   try {
@@ -200,9 +231,21 @@ function ttFit(el) {
  * funding, the session, where the price is from, the change. The price is never set aside. Each figure's place in that order is its
  * data-tt-drop (the higher, the sooner it goes; none: it stays). Run after every paint of the figures and whenever the strip's room changes
  * (ttWire), so a wider window brings them back. A strip with no box (a pane put aside, a page that cannot measure) is left as drawn */
-function ttFitStats(box) {
-  if (!box || !box.children || typeof box.scrollWidth !== "number") return;
+function ttFitStats(box, shape) {
+  // asked whether it can measure without measuring (reading scrollWidth lays the page out)
+  if (!box || !box.children || !("scrollWidth" in box)) return;
   const all = [...box.children].filter((x) => x && x.dataset && x.dataset.ttDrop !== undefined);
+  // the same shape as the last fit (`shape`, ttShape: a pushed price moved): the figures set aside then are set aside again, and nothing is
+  // measured — no layout forced on every tick
+  if (shape !== undefined && shape === box.ttShape && Array.isArray(box.ttAside)) {
+    for (const x of all) {
+      const aside = box.ttAside.includes(x.dataset.k);
+      if (x.hidden !== aside) x.hidden = aside;
+    }
+    return;
+  }
+  box.ttShape = shape;
+  box.ttAside = null;
   for (const x of all) if (x.hidden) x.hidden = false;
   if (!(box.clientWidth > 0)) return;
   all.sort((a, b) => Number(b.dataset.ttDrop) - Number(a.dataset.ttDrop));
@@ -210,7 +253,10 @@ function ttFitStats(box) {
     if (box.scrollWidth <= box.clientWidth + 1) break;
     x.hidden = true;
   }
+  box.ttAside = all.filter((x) => x.hidden).map((x) => x.dataset.k);
 }
+/* what the bar's figures look like, for ttFitStats: each figure's name and how many characters its words take */
+const ttShape = (parts) => parts.map((h) => `${(/data-k="([^"]*)"/.exec(h) || [])[1] || ""}:${h.replace(/<[^>]*>/g, "").length}`).join("|");
 
 /** a narrow terminal's panel shows the chart, the book or the trades: the frame says which (data-tt-m, read by terminal.css), and the book's
  * own tab follows — pressed through the book's own button (ui/book.js hears it), so its reads go on the tab showing and no other. The
@@ -255,6 +301,9 @@ function ttSetItem(item, kind) {
   TT.item = item || null;
   TT.kind = kind || TT.kind;
   if (item) TT.started = true;
+  // no market now (a market the address named that could not be opened, the "t" key, Change): the address says so too — never the market
+  // that is gone, which a reload would try again (ttMount writes it only when what is mounted changed)
+  else ttUrl();
   if (!el) return;
   const name = el.querySelector("[data-tt-name]");
   if (name) setText(name, ttLabel(item));
@@ -302,28 +351,51 @@ function ttSetMarket(at, mk) {
   ttPoll();
 }
 
+/* THE MARKET SHOWING NOW, as the chart and the book are mounted on it: where the order goes, once chosen (its market as the ticket read it
+   there); before that, the market's public listing — its source's figures, no account's. { at, mk }, either null where there is none */
+function ttShowing() {
+  const pub = !TT.at && TT.item ? ttPublicAt(TT.item) : null;
+  const at = TT.at || pub;
+  const mk = TT.at ? TT.mk : pub ? { kind: TT.item.kind, quote: pub.quote, base: TT.item.base } : null;
+  return { at, mk };
+}
+/* the key the market showing now is followed by on the push channel (`<venue>:<symbol>`; "" where none is shown whole) */
+function ttShownKey() {
+  const { at, mk } = ttShowing();
+  return at && mk ? `${at.venue}:${at.symbol}` : "";
+}
+
 /* the chart and the book on the market showing: mounted once per market, released when there is none */
 function ttMount(el) {
   const chart = el.querySelector("[data-tt-chart]");
   const book = el.querySelector("[data-tt-book]");
-  // where the order goes, once chosen; before that, the market's public listing — its source's figures, no account's
-  const pub = !TT.at && TT.item ? ttPublicAt(TT.item) : null;
-  const at = TT.at || pub;
-  const mk = TT.at ? TT.mk : pub ? { kind: TT.item.kind, quote: pub.quote, base: TT.item.base } : null;
+  const { at, mk } = ttShowing();
   const key = at && mk ? `${at.venue}|${at.symbol}` : TT.item ? `none|${TT.item.key}` : "";
   if (key === TT.mounted) return;
   TT.mounted = key;
+  // the market showing, followed on the push channel in place of the one before: its quote, book and trades come as its venue's own stream
+  // moves (ui/stream.js); the last market's pushed price is no longer this bar's
+  TT.followKey = at && mk ? `${at.venue}:${at.symbol}` : "";
+  TT.tick = null;
+  ttFollow();
   if (!at || !mk) {
+    // no market's price comes to the feed now: it says how a market is read, or — no market at all — nothing
+    ttFeed(el);
     if (typeof chRelease === "function") chRelease(chart);
     if (typeof bkRelease === "function") bkRelease(book);
     paint(chart, `<p class="empty tt-wait">${TT.item ? "No chart is read for it here: choose where to trade it." : "Pick a market: its chart shows here."}</p>`);
     paint(book, `<p class="empty tt-wait">${TT.item ? "No order book is read for it here." : "Its order book and latest trades show here."}</p>`);
+    ttUrl();
     return;
   }
   const base = { venue: at.venue, symbol: at.symbol, kind: mk.kind, quote: mk.quote };
-  // the bar size the owner picked stays when the market changes
-  if (typeof chMount === "function") chMount(chart, { ...base, priceStep: mk.priceStep, interval: TT.interval || "1h", onInterval: (iv) => (TT.interval = iv) });
+  // the range, the bar size and the price scale the owner picked stay when the market changes (a range pressed takes its own bar size:
+  // ui/chart.js says both back)
+  if (typeof chMount === "function") chMount(chart, { ...base, priceStep: mk.priceStep, range: TT.range || "1M", interval: TT.interval || undefined, log: TT.log === true, onRange: (r) => ((TT.range = r), ttUrl()), onInterval: (iv) => ((TT.interval = iv), ttUrl()), onLog: (on) => (TT.log = on) });
   else paint(chart, '<p class="empty tt-wait">The chart is not on this page.</p>');
+  // the account's own lines over it (orders, the position's entry, its exits, its liquidation), and the address saying what shows
+  ttLinesDraw();
+  ttUrl();
   // a price pressed in the book is the limit price in the ticket. The book's and the tape's sizes are named in what the venue counts them
   // in (ui/trade.js tkSizeUnit): a contract market's contracts where one is not one coin (OKX's BTC swap, 0.01 BTC each), an event's contracts
   if (typeof bkMount === "function") bkMount(book, { ...base, base: tkSizeUnit(mk), priceStep: mk.priceStep, onPrice: (p) => typeof TK.setLimit === "function" && TK.setLimit(p) });
@@ -345,12 +417,16 @@ function ttMount(el) {
    one is answered */
 function ttPoll() {
   clearTimeout(TT.timer);
+  TT.pollAt = 0;
   const at = TT.at;
   const item = at ? null : TT.item;
   if ((!at && !item) || !A) return;
   // still the market this beat was set for: the same place chosen, or still none chosen for the same row
   const same = () => (at ? TT.at === at : !TT.at && TT.item === item);
+  const wait = ttWaitMs();
+  TT.pollAt = Date.now() + wait;
   TT.timer = setTimeout(async () => {
+    TT.pollAt = 0;
     const el = $("pane-trade");
     if (!el || ROUTE.tab !== "trade" || document.hidden || !same()) return void (same() && ttPoll());
     const my = ++TT.seq;
@@ -362,6 +438,8 @@ function ttPoll() {
         TT.readAt = Date.now();
         TT.said = "";
         TT.fails = 0;
+        // the ticket on the same market follows the read: its bid and ask, its placeholder, its estimate (ui/trade.js TK.marketRead, P8)
+        if (typeof TK.marketRead === "function") TK.marketRead(at, b.market);
       } else {
         TT.fails++;
         TT.said = ttWhyNot(b, "the market could not be read");
@@ -386,7 +464,13 @@ function ttPoll() {
     }
     ttStats(el);
     ttPoll();
-  }, ttWaitMs());
+  }, wait);
+}
+/* THE BEAT BROUGHT FORWARD, never put back: the bar's market read on its own wait from now (ttWaitMs: five seconds once the stream no
+   longer pushes it live) where the beat is set for later than that — slowed while the pushes came — and otherwise left as it is set. So the
+   words that keep coming (each quote that says the market is not live there now, a stream whose health flaps) never hold the read off */
+function ttPollSooner() {
+  if (TT.pollAt > Date.now() + ttWaitMs()) ttPoll();
 }
 /* a read that failed under a table, as one sentence: ttWhyNot's words, capital first, a full stop at the end */
 const ttSentence = (b, fallback) => {
@@ -395,7 +479,7 @@ const ttSentence = (b, fallback) => {
 };
 /* the beat's next wait: five seconds while the bar's reads are answered; after reads refused or not answered in a row, ten, twenty, forty,
    then a minute */
-const ttWaitMs = () => (TT.fails > 0 ? Math.min(TT_READ_MAX_MS, TT_READ_MS * 2 ** TT.fails) : TT_READ_MS);
+const ttWaitMs = () => (TT.fails > 0 ? Math.min(TT_READ_MAX_MS, TT_READ_MS * 2 ** TT.fails) : ttPushedNow() ? TT_PUSHED_MS : TT_READ_MS);
 /* why a read came back with no figures, as one phrase: the account not answering it at all (book.js bkUnanswered: no body, or the
    browser's own error for a request that never reached the account) in the page's words, else the refusal's own (a body, or the words a
    read already took from one), else `fallback` */
@@ -446,32 +530,56 @@ function ttStats(el) {
   if (!x) {
     paint(tags, "");
     paint(el.querySelector("[data-tt-said]"), "");
-    return void paint(box, "");
+    paint(box, "");
+    // no market: the feed says nothing either (never the last market's "Live" beside "Pick a market")
+    return void ttFeed(el);
   }
   const ev = x.kind === "event";
   const stock = x.kind === "stock" || (!!m && m.kind === "stock");
-  const price = m ? (m.price ?? (m.bid !== undefined && m.ask !== undefined ? (m.bid + m.ask) / 2 : undefined)) : x.price;
-  const pct = m && m.changePct24h !== undefined ? m.changePct24h : x.changePct24h;
-  const abs = m && m.change24h !== undefined ? m.change24h : x.change24h;
+  const perp = x.kind === "perp" || (!!m && m.kind === "perp");
+  // the figures the change pairs with: the venue's market where it says the change, else the row's
+  const base = m && m.changePct24h !== undefined ? m : x;
+  const read = m ? (m.price ?? (m.bid !== undefined && m.ask !== undefined ? (m.bid + m.ask) / 2 : undefined)) : x.price;
+  // the price the account's stream pushed for this market, where it is live and no older than the read (ttLiveFor): the price, the bid and
+  // ask, a perpetual's funding, where it is from and its moment are the stream's, and the change is worked out at that price from the
+  // venue's own reference (the read's price less its change: ttChangeAt)
+  const live = ttLiveFor(m, perp);
+  const price = live ? live.price : read;
+  const moved = live ? ttChangeAt(live.price, base === m ? read : base.price, base.change24h, base.changePct24h) : null;
+  const pct = moved ? moved.pct : m && m.changePct24h !== undefined ? m.changePct24h : x.changePct24h;
+  const abs = moved ? moved.abs : m && m.change24h !== undefined ? m.change24h : x.change24h;
   const vol = m && m.volumeUsd24h !== undefined ? m.volumeUsd24h : x.volumeUsd24h;
+  const bid = live && live.bid !== undefined ? live.bid : m ? m.bid : undefined;
+  const ask = live && live.ask !== undefined ? live.ask : m ? m.ask : undefined;
+  const funding = live && live.funding !== undefined ? live.funding : m ? m.fundingRate : undefined;
+  const quoteAt = live ? live.seenAt : m ? m.quoteAt : undefined;
+  const quoteFrom = live ? live.from : m ? m.quoteFrom : undefined;
   const fmt = (n) => (ev ? tkCents(n) : px(n));
   const dir = pct === undefined ? "" : pct > 0 ? "up" : pct < 0 ? "down" : "";
   const change = pct !== undefined ? `${abs !== undefined ? `${abs > 0 ? "+" : abs < 0 ? "−" : ""}${esc(ev ? tkCents(Math.abs(abs)) : px(Math.abs(abs)))} / ` : ""}${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%` : "";
+  // how old the price is, beside it, once it is not the last few seconds' (a paper quote is the public source's as its venue last
+  // answered: core ageWords) — and on hover where it is from and when
+  const age = quoteAt ? ageWords(quoteAt) : "";
+  // a pushed price tinted by the way its last tick went (up, down; none until it has moved, and none for a price read)
+  const tick = live ? ttTick(price) : "";
   const parts = [
-    ttStat("Price", price !== undefined ? esc(fmt(price)) : "", "tt-px"),
+    ttStat("Price", price !== undefined ? `${esc(fmt(price))}${age ? ` <span class="tt-age"${quoteFrom ? ` title="${esc(`${quoteFrom}'s price, ${age}`)}"` : ""}>${esc(age)}</span>` : ""}` : "", `tt-px${tick ? ` ${tick}` : ""}`),
     ttStat(stock ? "Day change" : "24h change", change, dir, "", TT_DROP.change),
     ttStat("24h volume", vol !== undefined ? esc(ttVol(vol)) : x.contracts24h !== undefined ? `${esc(String(x.contracts24h))} contracts` : "", "", "", TT_DROP.volume),
   ];
-  if (m && m.bid !== undefined && m.ask !== undefined && !ev) parts.push(ttStat("Bid · Ask", `${esc(px(m.bid))} · ${esc(px(m.ask))}`, "", "", TT_DROP.bidask));
+  if (bid !== undefined && ask !== undefined && !ev) parts.push(ttStat("Bid · Ask", `${esc(px(bid))} · ${esc(px(ask))}`, "", "", TT_DROP.bidask));
   // funding as HL colours it: a positive rate in the accent, a negative one in the down colour, the next payment's time in the text colour
-  if ((x.kind === "perp" || (m && m.kind === "perp")) && m && m.fundingRate !== undefined) parts.push(ttStat("Funding", `<span class="${m.fundingRate > 0 ? "acc" : m.fundingRate < 0 ? "down" : ""}">${(m.fundingRate * 100).toFixed(4)}%</span>${m.nextFundingAt ? ` <span class="tt-next">· next ${esc(nyTime(m.nextFundingAt))}</span>` : ""}`, "", TT_FUNDING_SAYS, TT_DROP.funding));
+  if (perp && (m || live) && funding !== undefined) parts.push(ttStat("Funding", `<span class="${funding > 0 ? "acc" : funding < 0 ? "down" : ""}">${(funding * 100).toFixed(4)}%</span>${m && m.nextFundingAt ? ` <span class="tt-next">· next ${esc(nyTime(m.nextFundingAt))}</span>` : ""}`, "", TT_FUNDING_SAYS, TT_DROP.funding));
   if (m && m.session) parts.push(ttStat("Session", esc(ttSessionWord(m.session)), "", "", TT_DROP.session));
   if (ev && x.closeTime) parts.push(ttStat("Closes", esc(`${nyDay(x.closeTime)} ${nyTime(x.closeTime)} New York`), "", "", TT_DROP.closes));
   // where the price is from, and — once it is not the last minute or two's — when it is from, as Markets says it (ui/markets.js
   // mkQuoteWords): "real time" is the source, not the price's age, and a real-time source's last trade in pre-market can be yesterday's
-  if (m && m.quoteFrom) parts.push(ttStat("Price from", esc(typeof mkQuoteWords === "function" ? mkQuoteWords(m.quoteFrom, m.quoteAt) : m.quoteFrom), "", "", TT_DROP.from));
+  if (quoteFrom) parts.push(ttStat("Price from", esc(typeof mkQuoteWords === "function" ? mkQuoteWords(quoteFrom, quoteAt) : quoteFrom), "", "", TT_DROP.from));
   paint(box, parts.join(""));
-  ttFitStats(box);
+  // set aside as many figures as do not fit — measured again only when what is shown changed shape (a figure more or less, a word longer
+  // or shorter): a pushed price that moved by a tick is the same shape, and its figures are set aside as they were, with nothing measured
+  ttFitStats(box, ttShape(parts));
+  ttFeed(el);
   // the venue's market (or, no account chosen, the row) not read on the last beat: the figures above are the last read's, and the status
   // strip at the terminal's foot says since when — or since the market was picked, before any beat read it — with the source's words. A row
   // its kind's own fresh read lists is shown from that read: nothing to say of it
@@ -481,7 +589,14 @@ function ttStats(el) {
   // where the order goes, and how far a perpetual may be levered there. Who trades — the owner here, or the account's desk on a paper
   // account — is the topbar's Regular · Superagent switch (account.html #trade-mode), never a control of this bar
   const v = TT.at ? A.venues.find((y) => y.id === TT.at.venue) : null;
-  paint(tags, `${m && m.maxLeverage && m.maxLeverage > 1 ? `<span class="tag tt-lev">${esc(String(m.maxLeverage))}x</span>` : ""}${v ? `<span class="tt-where">${esc(v.paper ? tkPaperless(v.name) : v.name)}${v.paper ? ' <span class="tag paper">Paper</span>' : ""}</span>` : ""}`);
+  paint(tags, `${m && m.maxLeverage && m.maxLeverage > 1 ? `<span class="tag tt-lev" title="The most leverage ${esc(v ? (v.paper ? tkPaperless(v.name) : v.name) : "the venue")} takes in this market">max ${esc(String(m.maxLeverage))}x</span>` : ""}${v ? `<span class="tt-where">${esc(v.paper ? tkPaperless(v.name) : v.name)}${v.paper ? ' <span class="tag paper">Paper</span>' : ""}</span>` : ""}`);
+}
+/* how old a position's mark is, beside it, once it is not the last few seconds' (core ageWords): a paper account's mark is its market's
+   public quote as its venue last answered (Position.native.markAt) — never an old mark passed off as now. "" where none says */
+function ttMarkAge(p) {
+  const at = p && p.native && typeof p.native === "object" ? p.native.markAt : undefined;
+  const age = typeof at === "number" ? ageWords(at) : "";
+  return age ? ` <span class="tt-age">${esc(age)}</span>` : "";
 }
 /* a stock's session in a word or two: what is on now and until when, New York time */
 function ttSessionWord(s) {
@@ -490,6 +605,297 @@ function ttSessionWord(s) {
   if (ph) return `${{ pre: "Pre-market", after: "After-hours", overnight: "Overnight" }[ph] || ph}${until}`;
   if (s.open) return `Open${s.closesAt ? ` until ${nyTime(s.closesAt)}` : ""}`;
   return `Closed${s.opensAt ? ` · opens ${nyDay(s.opensAt)} ${nyTime(s.opensAt)}` : ""}`;
+}
+
+/* ---- the markets this tab shows, and what the stream pushes of them (feat/paper-live p2b) ------------------------------------------ */
+
+/** THE MARKETS THIS TAB SHOWS, said on the account's stream (ui/stream.js stFollow) in place of what it said before: while the Trade pane is
+ * the one showing, the market the bar, the chart and the book show (TT.followKey, set as they are mounted: whole — its quote, book and
+ * trades) and, while Positions is the tab under the panels, the markets of the positions listed there (TT.posKeys: their price alone, each
+ * row's mark); on any other pane, none. A tab that is hidden closes its stream, and the account lets go of them all until it shows again
+ * (ui/stream.js). Called as the market showing changes, as the positions read lists others, as the tab under the panels changes and as the
+ * page moves between panes */
+function ttFollow() {
+  if (typeof stFollow !== "function") return;
+  // the Superagent's floor follows its own markets (ui/superagent.js sgFollow)
+  if (ROUTE.tab === "superagent") return;
+  const on = ROUTE.tab === "trade";
+  const main = on && TT.followKey ? TT.followKey : "";
+  const marks = on && TT.tab === "positions" ? (TT.posKeys || []).filter((k) => k !== main) : [];
+  stFollow(main ? [main] : [], marks);
+}
+if (typeof onRoute === "function") onRoute((tab, params) => {
+  // the chart's range and bar size the address names (#/trade?…&range=3M&iv=4h: a link shared, a reload) are the ones it mounts with
+  if (tab === "trade" && params) {
+    if (typeof CH_RANGE_BAR === "object" && CH_RANGE_BAR[params.range]) TT.range = params.range;
+    if (typeof CH_MS === "object" && CH_MS[params.iv]) TT.interval = params.iv;
+  }
+  ttFollow();
+});
+
+/** THE ADDRESS SAYS WHAT SHOWS: the kind, the market where an account is chosen for it (its venue and symbol — the link opens the ticket on
+ * it, as a Markets row's does: ui/trade.js), the chart's range and bar size (range, iv) — written in place (replaceState: no new entry in the
+ * browser's history, no route moved, nothing drawn again), so a reload, or the link shared, comes back to the same market and chart. A
+ * market with no account chosen for it is named by its kind alone. Only while Trade is the pane showing */
+function ttUrl() {
+  if (!A || ROUTE.tab !== "trade" || typeof history === "undefined" || typeof history.replaceState !== "function" || typeof hashOf !== "function") return;
+  // a venue no longer on the account (disconnected while its market showed) is not written: a reload or a link would name an account that
+  // is not there (ui/trade.js tkRouteVenue reads such an address anyway)
+  const at = TT.at && (A.venues || []).some((v) => v.id === TT.at.venue) ? TT.at : null;
+  // the address already names this very market at an account of yours, and the ticket has not read it there (yet, or at all: a share's
+  // market read while its market is shut): the address keeps naming it, so a reload comes back to the share it showed and not to the
+  // kind's first market. Only where the market showing lists that venue and symbol, and the venue is on the account
+  const rp = ROUTE.params || {};
+  const named = !at && TT.item && rp.venue && rp.symbol && (A.venues || []).some((v) => v.id === rp.venue) && Array.isArray(TT.item.at) && TT.item.at.some((a) => a && a.venue === rp.venue && a.symbol === rp.symbol) ? { venue: rp.venue, symbol: rp.symbol } : null;
+  // a market the address named at an account the restart has not brought back yet (ui/trade.js tkWaitsForRestore): still named, so the
+  // reload or link that asked for it keeps asking for it
+  const waiting = !at && !named && typeof tkWaitsForRestore === "function" && TK.pending && TK.pending.symbol && tkWaitsForRestore(TK.pending) ? { venue: TK.pending.venue, symbol: TK.pending.symbol } : null;
+  const where = at || named || waiting;
+  const params = { ...(TK.kind ? { kind: TK.kind } : {}), ...(where ? { venue: where.venue, symbol: where.symbol } : {}), ...(TT.range ? { range: TT.range } : {}), ...(TT.interval ? { iv: TT.interval } : {}) };
+  const h = hashOf("trade", params);
+  if (location.hash === h) return;
+  // the ticket is on this market already: the route naming it opens nothing again (ui/trade.js onRoute, TK.routed)
+  if (at) TK.routed = JSON.stringify([params.kind || "", params.venue || "", params.symbol || "", "", ""]);
+  history.replaceState(null, "", h);
+  ROUTE.params = { ...params };
+}
+
+/** THE ACCOUNT'S OWN LINES ON THE CHART (chart.js chLines) for the market showing, once an account is chosen for it: each of the account's
+ * orders resting there — a limit at its limit, a stop at its trigger (a stop-limit's limit too), a trailing stop where its stop stands now, a
+ * bracket's exits as TP and SL — and the position held there: its entry and its liquidation price (ttLinesFor). An order that changes in
+ * place from here (ui/trade.js tkAmendable, in the owner's browser on a server that places orders) may be pulled on the chart; let go, its
+ * change opens at that price to be SIGNED (ttLineDragged → openAmend): nothing moves until it is. Drawn again as the orders and positions
+ * change (ttPushed, ttDraw) and as the market showing does (ttMount) */
+function ttLinesDraw() {
+  const el = $("pane-trade");
+  const chart = el && typeof el.querySelector === "function" ? el.querySelector("[data-tt-chart]") : null;
+  if (!chart || typeof chLines !== "function") return;
+  if (!TT.at || !A) return void chLines(chart, []);
+  chLines(chart, ttLinesFor(TT.at, A.orders || [], ttPosNow(), owns() && writesOn()), { onDrag: ttLineDragged });
+}
+/** the lines for one market (`at`: venue and symbol) from the account's orders and the positions read — pure, so the tests read it */
+function ttLinesFor(at, orders, positions, canAmend = false) {
+  const out = [];
+  if (!at) return out;
+  const left = (o) => qtyOf(Math.max(0, Number(o.qty) - Number(o.filledQty || 0)));
+  for (const o of orders || []) {
+    if (!o || o.venue !== at.venue || o.symbol !== at.symbol || !isLive(o) || o.canceling) continue;
+    const exit = o.exitOf ? o.exitOf.kind : "";
+    const side = o.side === "sell" ? "Sell" : "Buy";
+    const way = o.side === "sell" ? "sell" : "buy";
+    const amend = canAmend && typeof tkAmendable === "function" && tkAmendable(o);
+    if (o.type === "limit" && Number(o.limitPrice) > 0) out.push({ id: `${o.id}:limit`, ref: o.id, price: Number(o.limitPrice), kind: exit === "take-profit" ? "tp" : way, label: exit === "take-profit" ? `TP ${left(o)}` : `Limit ${side} ${left(o)}`, short: exit === "take-profit" ? `TP ${left(o)}` : `${side} ${left(o)}`, ...(amend ? { drag: "limitPrice" } : {}) });
+    else if ((o.type === "stop" || o.type === "stop_limit") && Number(o.stopPrice) > 0) {
+      out.push({ id: `${o.id}:stop`, ref: o.id, price: Number(o.stopPrice), kind: exit === "stop-loss" ? "sl" : way, label: exit === "stop-loss" ? `SL ${left(o)}` : `Stop ${side} ${left(o)}`, short: exit === "stop-loss" ? `SL ${left(o)}` : `Stop ${left(o)}`, ...(amend ? { drag: "stopPrice" } : {}) });
+      if (o.type === "stop_limit" && Number(o.limitPrice) > 0) out.push({ id: `${o.id}:limit`, ref: o.id, price: Number(o.limitPrice), kind: way, label: `Stop-limit ${side} ${left(o)}`, short: `Stop ${left(o)}`, ...(amend ? { drag: "limitPrice" } : {}) });
+    } else if (o.type === "trailing_stop" && Number(o.stopPrice) > 0) out.push({ id: `${o.id}:trail`, ref: o.id, price: Number(o.stopPrice), kind: "trail", label: `Trailing ${side} ${left(o)}`, short: `Trail ${left(o)}` });
+  }
+  const p = (positions || []).find((x) => x && x.venue === at.venue && x.symbol === at.symbol && x.qty > 0);
+  if (p && Number(p.entryPrice) > 0) out.push({ id: "pos:entry", price: Number(p.entryPrice), kind: "entry", label: `${p.side === "short" ? "Short" : "Long"} ${qtyOf(p.qty)} · entry`, short: "Entry" });
+  if (p && Number(p.liquidationPrice) > 0) out.push({ id: "pos:liq", price: Number(p.liquidationPrice), kind: "liq", label: "Liq. price", short: "Liq." });
+  return out;
+}
+/* a line let go where it was pulled to: its order's change, opened at that price — prepared by the account and signed by the owner, as Change
+   opens it (ui/trade.js openAmend); an order that cannot be changed from here now is left as it is */
+function ttLineDragged(line, price) {
+  const o = A && line ? (A.orders || []).find((x) => x.id === line.ref) : null;
+  if (!o || !owns() || typeof openAmend !== "function" || (typeof tkAmendable === "function" && !tkAmendable(o)) || !(price > 0)) return;
+  openAmend(o, { [line.drag]: price });
+}
+/* the positions as last read (any tab's read of them: TT.posRead), asked for — kept ten seconds — where none is, or it is older: the chart's
+   lines are drawn again when it lands */
+function ttPosNow() {
+  const b = TT.posRead;
+  if ((!b || Date.now() - (TT.posReadAt || 0) > 10_000) && !TT.posAsking && A && typeof api === "function") {
+    TT.posAsking = true;
+    api("/api/account/positions", { ttl: 10_000 }).then((r) => {
+      TT.posAsking = false;
+      TT.posRead = r;
+      TT.posReadAt = Date.now();
+      ttLinesDraw();
+    }, () => (TT.posAsking = false));
+  }
+  return b && b.ok !== false ? b.positions || [] : [];
+}
+
+/* the latest quote the stream pushed for the bar's market (live or not; null where it pushed none, or the stream is not connected) — only
+   ever the market showing NOW: the bar is drawn as soon as another market or another venue is picked, before the chart and the book are
+   mounted on it (ttMount, which follows it in place of the last), so a quote kept under the key followed until then is another market's
+   price and never this one's */
+function ttLiveQuote() {
+  if (!TT.followKey || typeof stQuoteOf !== "function" || ttShownKey() !== TT.followKey) return null;
+  const i = TT.followKey.indexOf(":");
+  return stQuoteOf(TT.followKey.slice(0, i), TT.followKey.slice(i + 1));
+}
+/* the stream pushes the bar's market now: a live quote came within TT_PUSH_FRESH_MS */
+function ttPushedNow() {
+  const q = ttLiveQuote();
+  return !!q && q.live === true && Date.now() - Number(q.gotAt || 0) < TT_PUSH_FRESH_MS;
+}
+/** THE BAR'S PUSHED PRICE: the stream's latest quote for the market showing while it is live there — the price it stands for (ui/stream.js
+ * stPrice: a perpetual's middle, a coin's last trade), its bid and ask, its funding, the moment the stream last confirmed it and where it is
+ * from — or null: none pushed, not live, or older than the market as last read (`m`, by its own moment), which then stands */
+function ttLiveFor(m, perp) {
+  const q = ttLiveQuote();
+  if (!q || q.live !== true || typeof stPrice !== "function") return null;
+  const price = stPrice(q, perp);
+  if (!(price > 0)) return null;
+  const seen = Date.parse(String(q.seenAt || q.at || ""));
+  const own = m ? Date.parse(String(m.quoteAt || "")) : NaN;
+  if (Number.isFinite(own) && Number.isFinite(seen) && seen < own) return null;
+  const pos = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+  return { q, price, bid: pos(q.bid), ask: pos(q.ask), ...(typeof q.funding === "number" && Number.isFinite(q.funding) ? { funding: q.funding } : {}), seenAt: Number.isFinite(seen) ? new Date(seen).toISOString() : undefined, from: typeof q.from === "string" ? q.from : "" };
+}
+/** THE CHANGE AT A PRICE THE STREAM SAYS NOW, from the venue's own reference — its price 24 hours ago, a share's last regular close — as the
+ * figures read last give it: their price less their change (or, with no change in their currency, their price over one and their percent).
+ * Nothing is assumed but that the reference has not moved since that read. Null where they give no reference */
+function ttChangeAt(price, p0, abs0, pct0) {
+  const p = Number(price);
+  const b = Number(p0);
+  if (!(p > 0) || !(b > 0)) return null;
+  let ref = NaN;
+  if (abs0 !== undefined && abs0 !== null && Number.isFinite(Number(abs0))) ref = b - Number(abs0);
+  else if (pct0 !== undefined && pct0 !== null && Number.isFinite(Number(pct0))) ref = b / (1 + Number(pct0) / 100);
+  if (!(ref > 0)) return null;
+  const abs = Number((p - ref).toPrecision(12));
+  return { abs, pct: (abs / ref) * 100 };
+}
+/* the way the bar's pushed price last moved — "up" or "down", kept until it moves the other way; "" until it has moved on this market */
+function ttTick(price) {
+  const t = TT.tick && TT.tick.key === TT.followKey ? TT.tick : null;
+  if (!t) {
+    TT.tick = { key: TT.followKey, px: price, dir: "" };
+    return "";
+  }
+  if (price !== t.px) t.dir = price > t.px ? "up" : "down";
+  t.px = price;
+  return t.dir;
+}
+
+/* a short age, as the feed says it: 0.4 s under a second, 12 s, 3 min, 2 h */
+function ttAgeShort(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n < 1000) return `${(Math.floor(n / 100) / 10).toFixed(1)} s`;
+  if (n < 60_000) return `${Math.floor(n / 1000)} s`;
+  if (n < 3_600_000) return `${Math.floor(n / 60_000)} min`;
+  return `${Math.floor(n / 3_600_000)} h`;
+}
+/** THE FEED'S WORDS for the bar's market: how its price comes now, in a word — `state` "live" (pushed: its venue's stream moves it),
+ * "quiet" (the stream carries it and is not live there now), "polling" (read every few seconds) — how old the price showing is (`ageMs`, ""
+ * where nothing says), and on hover what that means, where the price is from (`from`), why it is read rather than pushed (`why`), how a
+ * US share's real-time quote comes where no venue streams it — `every`, how often its source writes it, where it is read as it is written
+ * (Robinhood's), or `asks`, how often the account asks a source that writes nothing on a cadence of its own and stamps its last trade to the
+ * minute (Nasdaq's) — and how long pushed prices take to reach this screen (`lag`: ui/stream.js stLag). Returns { st (the dot's state),
+ * word, age, title } */
+function ttFeedWords(state, ageMs, { from = "", why = "", lag = null, every = 0, asks = 0 } = {}) {
+  const src = String(from || "").replace(/\s*·\s*(live|real time)$/, "") || "its venue";
+  const age = Number.isFinite(ageMs) ? ttAgeShort(ageMs) : "";
+  const said = lag && lag.n ? ` Prices pushed reach this screen about ${ttMsWords(lag.p50)} after their venue's own moment (the middle of the last ${lag.n}; 95 in 100 within ${ttMsWords(lag.p95)}).` : "";
+  // a price no venue streams — a US share's real-time quote, which its source writes anew every `every` ms and the account reads as it is
+  // written (live/us-quotes.ts) — said as what it is: its age is its own stamp's, since it last moved
+  if (every > 0 && state === "live") return { st: "connected", word: "Live", age, title: `Live: ${src} writes its real-time quotes about every ${Math.round(every / 1000)} s; the account reads each as it is written and pushes it here as it moves${age ? `. This price has stood ${age}` : ""}.${said}` };
+  if (every > 0 && state === "quiet") return { st: "stale", word: "Quiet", age, title: `Quiet: no real-time quote from ${src} has moved for this market just now; the price is its last${age ? `, ${age} old` : ""}, and the account reads the market's line instead until one does.${said}` };
+  // one the account ASKS for every `asks` ms (Nasdaq's quote page): its source writes nothing on a cadence, and its stamp is its last
+  // trade's, to the minute — so its age is that trade's, never how often it is asked
+  if (asks > 0 && state === "live") return { st: "connected", word: "Live", age, title: `Live: the account asks ${src} for its real-time quote about every ${Math.round(asks / 1000)} s and pushes it here as it moves; ${src} stamps it with its last trade, to the minute${age ? ` — this one ${age} ago` : ""}.${said}` };
+  if (asks > 0 && state === "quiet") return { st: "stale", word: "Quiet", age, title: `Quiet: ${src} has no fresh real-time quote for this market just now; the price is its last trade${age ? `, ${age} ago` : ""}, and the account reads the market's line instead until it has one.${said}` };
+  if (state === "live") return { st: "connected", word: "Live", age, title: `Live: ${src}'s own stream pushes this price as it moves${age ? `; ${age} since it last confirmed it` : ""}.${said}` };
+  if (state === "quiet") return { st: "stale", word: "Quiet", age, title: `Quiet: ${src}'s stream has not spoken for this market just now; the price is its last word${age ? `, ${age} old` : ""}, and the account reads it instead until the stream is live again.${said}` };
+  return { st: "down", word: "Polling", age, title: `Polling: ${why || "this market's price is read every few seconds"}${age ? `; the price showing is ${age} old` : ""}.` };
+}
+const ttMsWords = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+/** the feed at the bar's right end drawn (ttFeedWords): from the bar's pushed quote where there is one, else from the market's read — its
+ * own moment where it says one, else when it was read. A pushed word with no moment in it (the account's `{ live: false }`: the stream
+ * carries the market and has no quote of it now — a US share at the weekend, or one only Cboe's delayed quote prices) is no quote: the
+ * market's read says the price's age then, as it does with no stream. Nothing for no market. Its words are set in place (a fixed box:
+ * nothing beside it moves) */
+function ttFeed(el) {
+  const box = el && typeof el.querySelector === "function" ? el.querySelector("[data-tt-feed]") : null;
+  if (!box) return;
+  if (!TT.item) return void paint(box, "");
+  const pushed = ttLiveQuote();
+  const q = pushed && Number.isFinite(Date.parse(String(pushed.seenAt || pushed.at || ""))) ? pushed : null;
+  const now = Date.now();
+  const health = typeof stHealth === "function" ? stHealth() : "down";
+  let w;
+  const every = q && Number(q.everyMs) > 0 ? Number(q.everyMs) : 0;
+  const asks = q && Number(q.askedEveryMs) > 0 ? Number(q.askedEveryMs) : 0;
+  if (q && q.live === true) w = ttFeedWords("live", now - Date.parse(String(q.seenAt || q.at || "")), { from: q.from, lag: typeof stLag === "function" ? stLag() : null, every, asks });
+  else if (q) w = ttFeedWords("quiet", now - Date.parse(String(q.seenAt || q.at || "")), { from: q.from, lag: typeof stLag === "function" ? stLag() : null, every, asks });
+  else {
+    const m = TT.mk;
+    const own = m ? Date.parse(String(m.quoteAt || "")) : NaN;
+    const at = Number.isFinite(own) ? own : TT.readAt || NaN;
+    const why = health !== "connected" ? "the account's stream is not connected, so this market's price is read every few seconds" : pushed ? "the account's stream has no quote of this market just now, so its price is read every few seconds" : TT.at ? "the account's stream does not carry this market, so its price is read every few seconds" : "until an account is chosen for it, its listing is read every few seconds";
+    w = ttFeedWords("polling", Number.isFinite(at) ? now - at : NaN, { why });
+  }
+  paint(box, `<span class="tt-feed-w">${esc(w.word)}</span><span class="tt-feed-a">${esc(w.age)}</span>`);
+  if (box.dataset) box.dataset.st = w.st;
+  if (box.setAttribute) box.setAttribute("title", w.title);
+}
+/* the feed's age follows the clock: once a second while Trade shows (core everySecond; its write in the second's frame) */
+let ttFeedClock = null;
+function ttFeedTicks() {
+  if (ttFeedClock || typeof everySecond !== "function" || (typeof requestAnimationFrame !== "function" && typeof setInterval !== "function")) return;
+  ttFeedClock = everySecond(() => (ROUTE.tab === "trade" && TT.item && !document.hidden ? () => ttFeed($("pane-trade")) : undefined));
+}
+
+/** A QUOTE THE STREAM PUSHED (ui/stream.js; kept there as the market's latest): the bar's market's moves the bar — its figures, the feed —
+ * and a position's moves its row, both in the next frame however many came meanwhile. The bar's market no longer live there: the read of it
+ * is back on its own beat — brought forward to five seconds from then where the pushes had slowed it, never put back by the next such
+ * word (ttPollSooner) */
+function ttHeard(q) {
+  if (!q || typeof q.venue !== "string" || ROUTE.tab !== "trade") return;
+  const k = `${q.venue}:${q.symbol}`;
+  if (k === TT.followKey) {
+    TT.due.bar = true;
+    if (q.live !== true) ttPollSooner();
+    else TT.due.lag = q;
+  }
+  if (TT.tab === "positions" && (TT.posKeys || []).includes(k)) TT.due.pos = true;
+  if (TT.due.bar || TT.due.pos) ttSoon();
+}
+/* what the stream pushed drawn once, in the next frame: the bar (and the pushed quote it shows counted as drawn: stDrawn), the positions */
+function ttSoon() {
+  if (TT.due.frame) return;
+  TT.due.frame = true;
+  nextFrame(() => {
+    TT.due.frame = false;
+    const el = $("pane-trade");
+    if (!el || ROUTE.tab !== "trade") return;
+    if (TT.due.bar) {
+      TT.due.bar = false;
+      ttStats(el);
+      if (TT.due.lag && typeof stDrawn === "function") stDrawn(TT.due.lag);
+      TT.due.lag = null;
+    }
+    if (TT.due.pos) {
+      TT.due.pos = false;
+      const box = el.querySelector('[data-tt-tab="positions"]');
+      if (box && box.ttRead && TT.tab === "positions") ttPosDraw(box);
+    }
+  });
+}
+if (typeof stOn === "function") {
+  stOn("quote", ttHeard);
+  // the stream no longer connected: the bar's read back on its beat (brought forward, never put back), and the feed says so at once
+  stOn("health", (h) => {
+    if (ROUTE.tab !== "trade" || !TT.item) return;
+    if (h !== "connected") ttPollSooner();
+    ttFeed($("pane-trade"));
+  });
+}
+
+/** WHAT THE ACCOUNT PUSHED, drawn in place (shell.js shPatch, a frame after an order's state, a fill, a position or the cash came): the
+ * tabs under the panels as the page now holds them — the positions read kept (the pushed row laid in it), the open orders (A.orders), the
+ * history tabs (the statement read again) — each row by its key, and the ticket's Available and Current position. Nothing else: the
+ * ticket's fields, the picker, the chart and the book are not drawn again, so a field being typed in keeps its words and its focus */
+function ttPushed() {
+  const el = $("pane-trade");
+  if (!A || ROUTE.tab !== "trade" || !el || !el.querySelector("[data-tp]")) return;
+  ttLow(el, owns());
+  ttLinesDraw();
+  if (typeof TK.refreshAvail === "function") TK.refreshAvail();
 }
 
 /** the tabs under the panels, drawn from what is known now: what is held (positions, at the venues in the lens), the orders open (the
@@ -562,48 +968,157 @@ function ttFig(n, { step, like = [] } = {}) {
 }
 /* Positions: everything held at the venues in the lens that the venues list as positions — a perpetual, a share, a coin a paper account
    holds, an event contract — with its entry, its mark, what it is worth and its result, in HL's columns (Market · Size · Position value ·
-   Entry price · Mark price · PNL · Liq. price); the venue it is held at beside its name, quieter. Close… is the close sheet (ui/trade.js
+   Entry price · Mark price · PNL (ROE %) · Liq. price); the venue it is held at beside its name, quieter. Close… is the close sheet (ui/trade.js
    openClose). Each cell carries its column's class, so a narrow terminal lays a position out on two lines (terminal.css): the market and its
    result, then its size and mark with the button. A venue whose positions could not be read is named under them with its own words (one
    that does not serve this network, in one quiet line); while one is missing, "nothing held" is said only of the venues that answered */
 function ttPositions(box, owner) {
   if (!box) return;
+  // the first read on its way: rows of grey in the table's place, never an empty table that says nothing is held
+  if (!box.ttRead) paint(box, ttLoadingHtml("positions"));
   api("/api/account/positions", { ttl: 10_000 }).then((b) => {
+    // the chart's lines read the same positions (ttPosNow)
+    TT.posRead = b;
+    TT.posReadAt = Date.now();
     if (!box.isConnected || TT.tab !== "positions") return;
-    if (!b || b.ok === false) return void paint(box, `<p class="msg no">${esc(ttSentence(b, "the positions could not be read"))}</p>`);
-    const lens = lensNow();
-    const list = (b.positions || []).filter((p) => p.qty > 0 && tkVenueIn(p.venue, lens));
-    // how many, on the tab (ttTabs): drawn again only when it changed
-    if ((TT.posN || 0) !== list.length) {
-      TT.posN = list.length;
-      ttTabs($("pane-trade"));
-    }
-    const miss = (b.missing || []).filter((m) => tkVenueIn(m.venue, lens));
-    const failed = miss.filter((m) => !awayMiss(m));
-    const missing = `${awayLine(miss.filter(awayMiss), { cls: "small dim tt-miss" })}${failed.length ? `<ul class="tt-miss">${failed.map((m) => `<li><b>${esc(m.venueName || nameOf(m.venue))}</b> could not be read: ${esc(m.why || "no answer")}</li>`).join("")}</ul>` : ""}`;
-    if (!list.length) return void paint(box, `<p class="empty">${miss.length ? "Nothing held in positions at the venues that answered." : `Nothing held in positions${lens.kind === "all" ? "" : " here"}.`}</p>${missing}`);
-    const closable = (p) => { const v = connected().find((x) => x.id === p.venue); return owner && writesOn() && !!v && canTrade(v) && !!v.trade && !!v.trade.positions; };
-    // each price as its market writes it (ttFig): to its step where this page read the market, else to the decimals its mark is quoted in
-    // (the venue's own price; a liquidation price is worked out, so it is no guide) — an average entry is never printed to five decimals no
-    // venue quotes. An event's in cents
-    const fig = (p, n, cls, pre = "") => {
-      if (n === undefined || n === null || n === "") return `<td class="${cls}">${pre}—</td>`;
-      if (p.kind === "event") return `<td class="${cls}">${pre}${esc(cents(n))}</td>`;
-      const f = ttFig(n, { step: ttStepOf(p.venue, p.symbol), like: [p.markPrice] });
-      return `<td class="${cls}"${f.exact ? ` title="${esc(f.exact)}"` : ""}>${pre}${esc(f.text)}</td>`;
-    };
-    const rows = list.map((p, i) => `<tr><td class="tt-c-mkt"><b>${esc(p.name)}</b>${p.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(p.paper ? tkPaperless(p.venueName || nameOf(p.venue)) : p.venueName || nameOf(p.venue))}</span></td><td class="r tt-c-size ${p.side === "short" ? "down" : "up"}">${esc(p.side === "short" ? "Short" : "Long")} ${esc(qtyOf(p.qty))}${p.leverage && p.leverage > 1 ? ` · ${esc(String(p.leverage))}x` : ""}</td><td class="r tt-c-val">${p.usd !== undefined ? money(p.usd) : "—"}</td>${fig(p, p.entryPrice, "r tt-c-entry")}${fig(p, p.markPrice, "r tt-c-mark", '<span class="tt-k">Mark </span>')}<td class="r tt-c-pnl">${chg(p.unrealizedUsd, "$")}</td>${p.liquidationPrice ? fig(p, p.liquidationPrice, "r tt-c-liq") : '<td class="r tt-c-liq"><span class="flat">—</span></td>'}<td class="r tt-c-act">${closable(p) ? `<button type="button" class="btn btn-sm" data-tt-close="${i}">${p.kind === "perp" || p.kind === "future" ? "Close…" : "Sell…"}</button>` : ""}</td></tr>`).join("");
-    paint(box, `<div class="t-wrap"><table class="t tt-t tt-pos"><thead><tr><th>Market</th><th class="r">Size</th><th class="r">Position value</th><th class="r">Entry price</th><th class="r">Mark price</th><th class="r">PNL</th><th class="r">Liq. price</th><th class="r"><span class="sr">Close</span></th></tr></thead><tbody>${rows}</tbody></table></div>${missing}`);
-    box.ttList = list;
-    if (box.ttHeard) return;
-    box.ttHeard = true;
-    box.addEventListener("click", (e) => {
-      const btn = e.target.closest && e.target.closest("button[data-tt-close]");
-      const p = btn && box.ttList ? box.ttList[Number(btn.dataset.ttClose)] : null;
-      if (p && typeof openClose === "function") openClose(p);
-    });
+    // the read kept with the table: a pushed price draws the rows again from it (ttPosDraw), asking nothing
+    box.ttRead = b;
+    box.ttOwner = owner;
+    ttPosDraw(box);
   });
 }
+/* A TABLE BEING READ for the first time (Positions, the two histories): a few grey rows where its rows will be, said to a screen reader as
+   being read — never a table that says nothing is there before it was asked */
+const ttLoadingHtml = (what) => `<div class="tt-load" role="status" aria-busy="true"><span class="sr">Reading the ${esc(what)}…</span><span class="skel"></span><span class="skel" style="width:82%"></span><span class="skel" style="width:64%"></span></div>`;
+/* A POSITION'S EXITS — its take-profit and its stop-loss — as the account's open orders say them: those resting at its venue in its market on
+   the closing side that only close (a bracket's exit, a reduce-only order): a limit is the take-profit, a stop (or a trailing stop's stop
+   now) the stop-loss; the first of each. { tp, sl }, each a price or undefined */
+function ttExitsOf(p, orders = (A && A.orders) || []) {
+  const closing = p && p.side === "short" ? "buy" : "sell";
+  const mine = (orders || []).filter((o) => o && o.venue === p.venue && o.symbol === p.symbol && o.side === closing && isLive(o) && !o.canceling && (o.exitOf || o.reduceOnly));
+  const tp = mine.find((o) => o.type === "limit" && Number(o.limitPrice) > 0);
+  const sl = mine.find((o) => (o.type === "stop" || o.type === "stop_limit" || o.type === "trailing_stop") && Number(o.stopPrice) > 0);
+  return { tp: tp ? Number(tp.limitPrice) : undefined, sl: sl ? Number(sl.stopPrice) : undefined };
+}
+/* a perpetual's margin and its funding since it opened, where the venue says them (live/trade.ts Position.marginUsd, fundingUsd; a book
+   from before they were named carries them in native) */
+const ttMarginOf = (p) => { const n = p.native && typeof p.native === "object" ? p.native : {}; const v = p.marginUsd !== undefined ? p.marginUsd : n.marginUsd; return Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : undefined; };
+const ttFundingOf = (p) => { const n = p.native && typeof p.native === "object" ? p.native : {}; const v = p.fundingUsd !== undefined ? p.fundingUsd : p.native && n.paper ? n.fundingUsd : undefined; return Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : undefined; };
+/** THE TICKET'S ACCOUNT FIRST in the tables under the panels (Positions, Open orders): its rows, then — while the ticket is on a paper
+ * account — the other paper rows, then the rest, each kind in the order it was read. A position just opened from the ticket is the first
+ * row, never a fourth one under the three a short window shows */
+function ttTicketFirst(rows) {
+  const at = TT.at ? TT.at.venue : "";
+  if (!at || !Array.isArray(rows)) return rows;
+  const v = (typeof connected === "function" ? connected() : []).find((x) => x.id === at);
+  const paper = !!(v && v.paper);
+  const rank = (r) => (r.venue === at ? 0 : paper && r.paper ? 1 : 2);
+  return rows.map((r, i) => [r, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
+}
+/** Positions drawn from the read last kept (box.ttRead) — each row's mark, value, PNL and ROE at its market's pushed price where the stream
+ * carries it live (ttLiveRow), else as read — and the markets of the rows listed, followed for their price alone (ttFollow) */
+function ttPosDraw(box) {
+  const b = box.ttRead;
+  const owner = box.ttOwner;
+  if (!b || b.ok === false) {
+    TT.posKeys = [];
+    ttFollow();
+    return void paint(box, `<p class="msg no">${esc(ttSentence(b, "the positions could not be read"))}</p>`);
+  }
+  const lens = lensNow();
+  const list = ttTicketFirst((b.positions || []).filter((p) => p.qty > 0 && tkVenueIn(p.venue, lens)).map(ttLiveRow));
+  // how many, on the tab (ttTabs): drawn again only when it changed
+  if ((TT.posN || 0) !== list.length) {
+    TT.posN = list.length;
+    ttTabs($("pane-trade"));
+  }
+  // their markets followed for their price alone, while this tab shows (as many as the stream takes beside the market showing)
+  const keys = [...new Set(list.map((p) => `${p.venue}:${p.symbol}`))].slice(0, (typeof ST_FOLLOW_MAX === "number" ? ST_FOLLOW_MAX : 16) - 1);
+  if (keys.join("\n") !== (TT.posKeys || []).join("\n")) {
+    TT.posKeys = keys;
+    ttFollow();
+  }
+  const miss = (b.missing || []).filter((m) => tkVenueIn(m.venue, lens));
+  const failed = miss.filter((m) => !awayMiss(m));
+  const missing = `${awayLine(miss.filter(awayMiss), { cls: "small dim tt-miss" })}${failed.length ? `<ul class="tt-miss">${failed.map((m) => `<li><b>${esc(m.venueName || nameOf(m.venue))}</b> could not be read: ${esc(m.why || "no answer")}</li>`).join("")}</ul>` : ""}`;
+  if (!list.length) return void paint(box, `<p class="empty">${miss.length ? "Nothing held in positions at the venues that answered." : `Nothing held in positions${lens.kind === "all" ? "" : " here"}.`}</p>${missing}`);
+  const closable = (p) => { const v = connected().find((x) => x.id === p.venue); return owner && writesOn() && !!v && canTrade(v) && !!v.trade && !!v.trade.positions; };
+  // each price as its market writes it (ttFig): to its step where this page read the market, else to the decimals its mark is quoted in
+  // (the venue's own price; a liquidation price is worked out, so it is no guide) — an average entry is never printed to five decimals no
+  // venue quotes. An event's in cents
+  const fig = (p, n, cls, pre = "", post = "") => {
+    if (n === undefined || n === null || n === "") return `<td class="${cls}">${pre}—</td>`;
+    if (p.kind === "event") return `<td class="${cls}">${pre}${esc(cents(n))}${post}</td>`;
+    const f = ttFig(n, { step: ttStepOf(p.venue, p.symbol), like: [p.markPrice] });
+    return `<td class="${cls}"${f.exact ? ` title="${esc(f.exact)}"` : ""}>${pre}${esc(f.text)}${post}</td>`;
+  };
+  // each row keyed by where it is held and what (data-k): a pushed position is drawn over its own row, the others left as they are. Its
+  // PNL with its ROE beside it where the margin it was opened with is known (ttRoe), as HL writes them
+  // a perpetual's margin (and its mode), its funding since it opened — paid said as a cost, received as a gain — and its exits, as HL lists
+  // them: TP / SL, each a dash where none rests
+  const marginCell = (p) => { const m = ttMarginOf(p); return `<td class="r tt-c-margin">${m !== undefined ? `${money(m)}${p.marginMode ? `<span class="why">${esc(p.marginMode.charAt(0).toUpperCase() + p.marginMode.slice(1))}</span>` : ""}` : "—"}</td>`; };
+  const fundingCell = (p) => { const f = ttFundingOf(p); return `<td class="r tt-c-fund"${f !== undefined ? ` title="${esc(f > 0 ? `${fine(f)} paid in funding since it opened` : f < 0 ? `${fine(-f)} received in funding since it opened` : "no funding paid or received yet")}"` : ""}>${f !== undefined ? (f === 0 ? fine(0) : chg(-f, "$")) : "—"}</td>`; };
+  const exitsCell = (p) => { const x = ttExitsOf(p); const one = (n) => (n === undefined ? "—" : p.kind === "event" ? esc(cents(n)) : esc(ttFig(n, { step: ttStepOf(p.venue, p.symbol), like: [p.markPrice] }).text)); return `<td class="r tt-c-tpsl"><span class="tt-k">TP/SL </span>${one(x.tp)} / ${one(x.sl)}</td>`; };
+  const rows = list.map((p, i) => `<tr data-k="${esc(`${p.venue}|${p.symbol}`)}"><td class="tt-c-mkt" title="${esc(`${p.name} · ${p.venueName || nameOf(p.venue)}`)}"><b>${esc(p.name)}</b>${p.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(p.paper ? tkPaperless(p.venueName || nameOf(p.venue)) : p.venueName || nameOf(p.venue))}</span></td><td class="r tt-c-size ${p.side === "short" ? "down" : "up"}">${esc(p.side === "short" ? "Short" : "Long")} ${esc(qtyOf(p.qty))}${p.leverage && p.leverage > 1 ? ` · ${esc(String(p.leverage))}x` : ""}</td><td class="r tt-c-val">${p.usd !== undefined ? money(p.usd) : "—"}</td>${fig(p, p.entryPrice, "r tt-c-entry")}${fig(p, p.markPrice, "r tt-c-mark", '<span class="tt-k">Mark </span>', ttMarkAge(p))}<td class="r tt-c-pnl">${chg(p.unrealizedUsd, "$")}${ttRoeWords(ttRoe(p))}</td>${p.liquidationPrice ? fig(p, p.liquidationPrice, "r tt-c-liq") : '<td class="r tt-c-liq"><span class="flat">—</span></td>'}${marginCell(p)}${fundingCell(p)}${exitsCell(p)}<td class="r tt-c-act">${closable(p) ? `<button type="button" class="btn btn-sm" data-tt-close="${i}">${p.kind === "perp" || p.kind === "future" ? "Close…" : "Sell…"}</button>` : ""}</td></tr>`).join("");
+  paint(box, `<div class="t-wrap"><table class="t tt-t tt-pos"><thead><tr><th>Market</th><th class="r">Size</th><th class="r">Position value</th><th class="r">Entry price</th><th class="r">Mark price</th><th class="r">PNL (ROE %)</th><th class="r">Liq. price</th><th class="r">Margin</th><th class="r" title="${esc(TT_FUNDING_PAID_SAYS)}">Funding</th><th class="r">TP/SL</th><th class="r"><span class="sr">Close</span></th></tr></thead><tbody>${rows}</tbody></table></div>${missing}`);
+  box.ttList = list;
+  if (box.ttHeard) return;
+  box.ttHeard = true;
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest && e.target.closest("button[data-tt-close]");
+    const p = btn && box.ttList ? box.ttList[Number(btn.dataset.ttClose)] : null;
+    if (p && typeof openClose === "function") openClose(p);
+  });
+}
+/** A POSITION AT ITS MARKET'S PUSHED PRICE: where the stream carries the market live and its price is no older than the position's own mark,
+ * the mark is the stream's (a perpetual's venue mark, else its middle; a coin's last trade, as the account marks them: live/paper.ts) and
+ * what follows from it is worked out at it — what the position is worth (its size at the mark) and its result (a perpetual's move from its
+ * entry times its size, signed by its side; a holding's worth less what it cost, where the venue keeps that) — its mark's moment the
+ * stream's. Only for a market the stream carries (a coin pair, a Hyperliquid perpetual: sized in the coin itself). Otherwise the row as read */
+function ttLiveRow(p) {
+  if (!p || typeof stQuoteOf !== "function" || typeof stPrice !== "function") return p;
+  const q = stQuoteOf(p.venue, p.symbol);
+  if (!q || q.live !== true) return p;
+  const perp = p.kind === "perp" || p.kind === "future";
+  const mark = perp ? (typeof q.mark === "number" && q.mark > 0 ? q.mark : stPrice(q, true)) : stPrice(q, false);
+  const at = Date.parse(String(q.seenAt || q.at || ""));
+  const native = p.native && typeof p.native === "object" ? p.native : {};
+  if (!(mark > 0) || !Number.isFinite(at) || (typeof native.markAt === "number" && at < native.markAt) || !(p.qty > 0)) return p;
+  const usd = Number((p.qty * mark).toFixed(2));
+  const pnl = perp ? (p.entryPrice > 0 ? (p.side === "short" ? p.entryPrice - mark : mark - p.entryPrice) * p.qty : undefined) : Number(p.costUsd) > 0 ? usd - Number(p.costUsd) : p.entryPrice > 0 ? (mark - p.entryPrice) * p.qty : undefined;
+  return { ...p, markPrice: mark, usd, ...(pnl !== undefined ? { unrealizedUsd: Number(pnl.toFixed(perp ? 6 : 2)) } : {}), native: { ...native, markAt: at } };
+}
+/** A POSITION'S ROE, as the venue reckons it: a perpetual's result over the margin it was OPENED with — the venue's own figure where it
+ * gives one for the result shown (Hyperliquid's returnOnEquity, while the row's PNL is still the one it came with: once a pushed price moved
+ * it, ttLiveRow, the figure is that read's, not this one's), else the initial margin, its notional at the entry over the leverage it stands
+ * at (Hyperliquid's own rule, and a paper account's margin as it was put up). Never the margin the venue holds NOW (Position.marginUsd):
+ * Hyperliquid's marginUsed on an isolated position is that margin plus its unrealised PNL, and a paper account's is less the funding paid —
+ * either would swell the ROE the more the position lost. The entry notional is read through what the position is worth at its mark (usd
+ * over the mark, times the entry), so a perpetual sized in contracts is reckoned at their size. A holding's ROE is over its cost (what the
+ * venue says it cost, else its entry times its size). In percent; undefined where none of it is known */
+function ttRoe(p) {
+  const pnl = Number(p && p.unrealizedUsd);
+  if (!p || !Number.isFinite(pnl)) return undefined;
+  const perp = p.kind === "perp" || p.kind === "future";
+  if (!perp) {
+    const cost = Number(p.costUsd) > 0 ? Number(p.costUsd) : p.entryPrice > 0 && p.qty > 0 ? p.entryPrice * p.qty : NaN;
+    return cost > 0 ? (pnl / cost) * 100 : undefined;
+  }
+  const n = p.native && typeof p.native === "object" ? p.native : {};
+  const own = n.returnOnEquity === null || n.returnOnEquity === undefined || n.returnOnEquity === "" ? NaN : Number(n.returnOnEquity);
+  const asRead = n.unrealizedPnl !== null && n.unrealizedPnl !== undefined && Math.abs(Number(n.unrealizedPnl) - pnl) < 1e-6;
+  if (Number.isFinite(own) && asRead) return own * 100;
+  const lev = Number(p.leverage);
+  const entry = Number(p.entryPrice);
+  if (!(lev > 0) || !(entry > 0) || !(p.qty > 0)) return undefined;
+  const notional = Number(p.usd) > 0 && Number(p.markPrice) > 0 ? (Number(p.usd) / Number(p.markPrice)) * entry : entry * p.qty;
+  const initial = notional / lev;
+  return initial > 0 ? (pnl / initial) * 100 : undefined;
+}
+/* what the Funding column's head says on hover: the sign is the position's, as a result is */
+const TT_FUNDING_PAID_SAYS = "Funding since the position opened, where the venue keeps it: a cost when the position paid it, a gain when it received it";
+/* an ROE beside its PNL, quieter, signed (never the colour alone): " (+5.60%)"; nothing where it is not known */
+const ttRoeWords = (roe) => (roe === undefined || !Number.isFinite(roe) ? "" : ` <span class="tt-roe ${roe > 0 ? "up" : roe < 0 ? "down" : "flat"}">(${roe > 0 ? "+" : roe < 0 ? "−" : ""}${Math.abs(roe).toFixed(2)}%)</span>`);
 
 /* an order of the statement as the two history tabs read it: from the account's own order where this page has it (A.orders, joined by
    the client id the line is keyed by — the market's name, its side, kind and type, its size, what filled and at what price, its limit and
@@ -635,10 +1150,32 @@ function ttLinesHere(b) {
   const here = (l) => (lens.kind === "real" ? !l.paper : lens.kind === "paper" ? !!l.paper : inLens(l.account, l.agent));
   return (b.lines || []).filter((l) => l.type === "trade" && here(l));
 }
-/* the cells the two history tabs share: when (New York), the market by its name — with Paper, the venue beside it quieter, and the
-   account's id for the order on hover — and the side, coloured as HL colours a direction, in its word */
-const ttWhen = (l) => `<td class="tab-nums nw">${esc(nyDay(l.updatedAt || l.at))} ${esc(nyTime(l.updatedAt || l.at))}</td>`;
-const ttMarketCell = (l, r) => `<td class="tt-c-mkt" title="${esc(`${l.id} · ${l.accountName}`)}"><b>${esc(r.name)}</b>${l.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(l.paper ? tkPaperless(l.accountName) : l.accountName)}</span></td>`;
+/* the cells the two history tabs share: when — its whole date and time to the second, on the screen's one clock (core yourClock: the
+   viewer's own, as the chart and the book say theirs) — the market by its name — with Paper, the venue beside it quieter, and the account's
+   id for the order on hover — and the side, coloured as HL colours a direction, in its word */
+const ttWhen = (l) => `<td class="tab-nums nw" title="${esc(yourClock(l.updatedAt || l.at))}">${esc(yourClock(l.updatedAt || l.at, { year: false, seconds: false }))}</td>`;
+/* the Time column's head, saying whose clock on hover */
+const ttTimeTh = () => `<th title="${esc(`On your clock: ${yourZoneWords()}`)}">Time</th>`;
+/* how many of a history's rows show at first, and how many more each "Load more" adds */
+const TT_PAGE = 50;
+/* "Load more" under a history's rows, where more were read than show: how many show, of how many */
+const ttMoreHtml = (shown, total) => (total > shown ? `<p class="tt-more-w"><button type="button" class="link tt-more" data-tt-more data-fk="tt-more">Load ${Math.min(TT_PAGE, total - shown)} more</button><span class="dim small">${esc(`${shown} of ${total}`)}</span></p>` : "");
+/* a history tab's "Load more", heard once on its box: TT_PAGE more of the rows read, the tab drawn again from the statement kept */
+function ttMoreHeard(box, draw) {
+  if (box.ttMoreHeard || typeof box.addEventListener !== "function") return;
+  box.ttMoreHeard = true;
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-tt-more]");
+    if (!b || !box.contains(b)) return;
+    box.ttShow = (box.ttShow || TT_PAGE) + TT_PAGE;
+    draw(box);
+  });
+}
+/* a history cell's words kept to one line, cut with an ellipsis where they run long (terminal.css .tt-cut), the whole of them on hover — and
+   who placed it, so cut: the history tables stay as wide as their panel at 1440, as HL's do */
+const ttCut = (words) => `<span class="tt-cut" title="${esc(words)}">${esc(words)}</span>`;
+const ttByCell = (l) => `<td class="tt-c-by">${l.by ? ttCut(l.by) : ""}</td>`;
+const ttMarketCell = (l, r) => `<td class="tt-c-mkt" title="${esc(`${r.name ? `${r.name} · ` : ""}${l.accountName} · ${l.id}`)}"><b>${esc(r.name)}</b>${l.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(l.paper ? tkPaperless(l.accountName) : l.accountName)}</span></td>`;
 const ttSideCell = (r) => `<td class="${r.side === "sell" ? "down" : "up"}">${r.side === "sell" ? "Sell" : "Buy"}</td>`;
 /* a price in the two history tabs, as its market writes it (ttFig: its step where this page read the market, else the decimals of the
    order's own limit, stop and the price it was valued at), an event's in cents; the figure as it came on hover where the words round it */
@@ -650,20 +1187,26 @@ const ttPx = (r, n) => {
 };
 
 /* Trade history: what FILLED, newest first — fills only, never an order that is open, waiting or was canceled with nothing filled — in HL's
-   columns: Time · Market · Direction · Price · Size · Trade value · Fee · By. A fill's value is neither up nor down (money changed hands
+   columns: Time · Market · Direction · Price · Size · Trade value · Fee · Closed PNL (a close's, where its venue says it) · By. A fill's value is neither up nor down (money changed hands
    for a thing); colour is kept for the side's word */
 function ttHistory(box) {
   if (!box) return;
+  if (!box.ttDrawn) paint(box, ttLoadingHtml("trades"));
+  ttMoreHeard(box, ttHistory);
   api("/api/account/statement", { ttl: 10_000 }).then((b) => {
     if (!box.isConnected || TT.tab !== "history") return;
+    box.ttDrawn = true;
     if (!b || b.ok === false) return void paint(box, `<p class="msg no">${esc(ttSentence(b, "the statement could not be read"))}</p>`);
-    const lines = ttLinesHere(b).filter((l) => Math.abs(Number(l.amountUsd) || 0) > 0 || /^(filled|partial)$/.test(String(l.status))).slice(0, 40);
+    const all = ttLinesHere(b).filter((l) => Math.abs(Number(l.amountUsd) || 0) > 0 || /^(filled|partial)$/.test(String(l.status)));
+    const lines = all.slice(0, box.ttShow || TT_PAGE);
     if (!lines.length) return void paint(box, '<p class="empty">No trades yet.</p>');
     const rows = lines.map((l) => {
       const r = ttOrderRec(l);
-      return `<tr>${ttWhen(l)}${ttMarketCell(l, r)}${ttSideCell(r)}<td class="r">${ttPx(r, r.avg)}</td><td class="r">${r.filled ? esc(qtyOf(r.filled)) : "—"}</td><td class="r">${money(Math.abs(Number(l.amountUsd) || 0))}</td><td class="r">${l.feeUsd !== undefined ? fine(l.feeUsd) : "—"}</td><td>${esc(l.by || "")}</td></tr>`;
+      // a close's closed P&L where its venue says it (a paper account's); an opening trade has none
+      const closed = l.realizedUsd !== undefined && l.realizedUsd !== null ? chg(l.realizedUsd, "$") : '<span class="flat">—</span>';
+      return `<tr>${ttWhen(l)}${ttMarketCell(l, r)}${ttSideCell(r)}<td class="r">${ttPx(r, r.avg)}</td><td class="r">${r.filled ? esc(qtyOf(r.filled)) : "—"}</td><td class="r">${money(Math.abs(Number(l.amountUsd) || 0))}</td><td class="r">${l.feeUsd !== undefined ? fine(l.feeUsd) : "—"}</td><td class="r tt-c-pnl">${closed}</td>${ttByCell(l)}</tr>`;
     }).join("");
-    paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr><th>Time</th><th>Market</th><th>Direction</th><th class="r">Price</th><th class="r">Size</th><th class="r">Trade value</th><th class="r">Fee</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr>${ttTimeTh()}<th>Market</th><th>Direction</th><th class="r">Price</th><th class="r">Size</th><th class="r">Trade value</th><th class="r">Fee</th><th class="r">Closed PNL</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>${ttMoreHtml(lines.length, all.length)}`);
   });
 }
 
@@ -680,35 +1223,49 @@ function ttStatusWords(l) {
    Filled · Order value · Price · Status · By. Price is the limit an order rests at (Market for one at market; a stop's trigger in Type) */
 function ttOrders(box) {
   if (!box) return;
+  if (!box.ttDrawn) paint(box, ttLoadingHtml("orders"));
+  ttMoreHeard(box, ttOrders);
   api("/api/account/statement", { ttl: 10_000 }).then((b) => {
     if (!box.isConnected || TT.tab !== "orders") return;
+    box.ttDrawn = true;
     if (!b || b.ok === false) return void paint(box, `<p class="msg no">${esc(ttSentence(b, "the statement could not be read"))}</p>`);
-    const lines = ttLinesHere(b).slice(0, 60);
+    const all = ttLinesHere(b);
+    const lines = all.slice(0, box.ttShow || TT_PAGE);
     if (!lines.length) return void paint(box, '<p class="empty">No orders yet.</p>');
     const rows = lines.map((l) => {
       const r = ttOrderRec(l);
       const type = `${TK_TYPE_NAMES[r.type] || "—"}${r.stop !== undefined && (r.type === "stop" || r.type === "stop_limit") ? ` at ${ttPx(r, r.stop)}` : ""}`;
       const price = r.limit !== undefined ? ttPx(r, r.limit) : r.type === "market" || r.type === "stop" || r.type === "trailing_stop" ? "Market" : "—";
       const st = String(l.status || "");
-      return `<tr>${ttWhen(l)}<td class="nw">${type}</td>${ttMarketCell(l, r)}${ttSideCell(r)}<td class="r">${r.qty !== undefined ? esc(qtyOf(r.qty)) : "—"}</td><td class="r">${r.filled ? esc(qtyOf(r.filled)) : "0"}</td><td class="r">${l.worthUsd !== undefined ? money(l.worthUsd) : "—"}</td><td class="r">${price}</td><td class="nw tt-st-${/^(filled|partial|open)$/.test(st) ? "on" : /^(pending|waiting for wallet)$/.test(st) ? "wait" : "off"}">${esc(ttStatusWords(l))}</td><td>${esc(l.by || "")}</td></tr>`;
+      return `<tr>${ttWhen(l)}<td class="nw">${type}</td>${ttMarketCell(l, r)}${ttSideCell(r)}<td class="r">${r.qty !== undefined ? esc(qtyOf(r.qty)) : "—"}</td><td class="r">${r.filled ? esc(qtyOf(r.filled)) : "0"}</td><td class="r">${l.worthUsd !== undefined ? money(l.worthUsd) : "—"}</td><td class="r">${price}</td><td class="nw tt-c-st tt-st-${/^(filled|partial|open)$/.test(st) ? "on" : /^(pending|waiting for wallet)$/.test(st) ? "wait" : "off"}">${ttCut(ttStatusWords(l))}</td>${ttByCell(l)}</tr>`;
     }).join("");
-    paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr><th>Time</th><th>Type</th><th>Market</th><th>Direction</th><th class="r">Size</th><th class="r">Filled</th><th class="r">Order value</th><th class="r">Price</th><th>Status</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr>${ttTimeTh()}<th>Type</th><th>Market</th><th>Direction</th><th class="r">Size</th><th class="r">Filled</th><th class="r">Order value</th><th class="r">Price</th><th>Status</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>${ttMoreHtml(lines.length, all.length)}`);
   });
 }
 
 /** the pane drawn: the bar's figures and the tabs under the panels; a market to start from while nothing has shown on this frame yet and
- * no ticket was opened on purpose — the busiest of the kind showing, at the first account that trades it (nothing takes the focus). After
+ * no ticket was opened on purpose — the busiest of the kind showing, at a paper account that trades it where there is one, else the first
+ * account that trades it (tkFirstLeg; nothing takes the focus). After
  * that nothing is picked by itself: a ticket the owner opened on no market (the "t" key, a venue's Trade, Change) is left as it is */
 function ttDraw(el, owner) {
   ttWire(el);
   ttFit(el);
   ttStats(el);
   ttLow(el, owner);
+  ttLinesDraw();
+  // the screen's one clock, named once in its foot (core yourClock: the chart, the book and the tables all say times on it)
+  const clock = el.querySelector("[data-tt-clock]");
+  if (clock && typeof yourZoneWords === "function") setText(clock, yourZoneWords());
+  // the stream's dot in the foot (a frame drawn again is a new one): how the account's stream stands; the feed at the bar's end, and its
+  // clock
+  if (typeof stDot === "function") stDot();
+  ttFeedTicks();
   if (!TT.item && !TT.started && TK.kind && TK.got[TK.kind] && (TK.got[TK.kind].items || []).length && !TK.pending) {
     const first = TK.got[TK.kind].items.find((x) => tkInLens(x, lensNow()));
     if (first) {
       TT.started = true;
-      const at = (first.at || []).find((a) => a.connected && a.canTrade !== false) || (first.at || []).find((a) => a.connected) || null;
+      // a paper account of yours that trades it first, whenever there is one (ui/trade.js tkFirstLeg): real money only by your own pick
+      const at = tkFirstLeg(first);
       tkOpen({ kind: TK.kind, item: first, venue: at ? at.venue : "", symbol: at ? at.symbol : "", side: "buy", rest: true });
     }
   }

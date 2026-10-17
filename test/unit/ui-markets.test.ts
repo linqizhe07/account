@@ -238,6 +238,28 @@ describe("the Markets pane", () => {
     expect(p.run("mkRoute(ITEMS.doge).act")).toBe("why");
   });
 
+  it("sends a Buy to a paper account before a real one — except under a venue's lens, where that venue is the owner's own pick and comes first, as the ticket opens there", () => {
+    const p = page(() => ({}));
+    const trades = { can: true, what: "spot", kinds: ["spot"] };
+    p.set("A", account({ venues: [venue("ex", "Exchange X", { trade: trades }), venue("kraken", "Kraken", { trade: trades }), venue("pap", "Paper account", { paper: true, trade: trades })] }));
+    const leg = (id: string, name: string) => ({ venue: id, venueName: name, symbol: "BTC/USD", connected: true, canTrade: true, public: false, price: 62140, open: true });
+    p.set("ITEMS", { btc: { ...btc, at: [leg("ex", "Exchange X"), leg("kraken", "Kraken"), leg("pap", "Paper account")] } });
+    // every account, and the Paper lens: the paper account
+    expect(p.run<Record<string, unknown>>("mkRoute(ITEMS.btc)")).toMatchObject({ act: "trade", venue: "pap", paper: true });
+    p.run('view.lens = "paper"');
+    expect(p.run<Record<string, unknown>>("mkRoute(ITEMS.btc)")).toMatchObject({ act: "trade", venue: "pap" });
+    // Real money: no paper account at all, the first real one
+    p.run('view.lens = "real"');
+    expect(p.run<Record<string, unknown>>("mkRoute(ITEMS.btc)")).toMatchObject({ act: "trade", venue: "ex" });
+    // a venue's lens: that venue, though a paper account trades it too — what the ticket's own rule opens (tkFirstLeg)
+    p.run('view.lens = "venue:kraken"');
+    expect(p.run<Record<string, unknown>>("mkRoute(ITEMS.btc)")).toEqual({ act: "trade", venue: "kraken", symbol: "BTC/USD", venueName: "Kraken" });
+    // a venue's lens whose venue does not trade it: a paper account before a real one, as under every account
+    p.run('view.lens = "venue:nowhere"');
+    expect(p.run<Record<string, unknown>>("mkRoute(ITEMS.btc)")).toMatchObject({ act: "trade", venue: "pap" });
+    p.run('view.lens = ""');
+  });
+
   it("opens the ticket on the row's kind — crypto · stocks · rwas · perps · preipo · predictions — which the Trade seg follows; no variant", () => {
     const p = page(() => ({}));
     p.set("A", kalshiTrades());
@@ -783,7 +805,8 @@ describe("the one drawer", () => {
     // where the history is asked: the connected venue first, else the public listing; an event's first outcome
     expect(p.run("JSON.stringify([mkCandleLeg(ITEMS.btc), mkCandleLeg(ITEMS.doge), mkCandleLeg(ITEMS.fed)])")).toBe(JSON.stringify([{ venue: "ex", symbol: "BTC/USDT", venueName: "Exchange X" }, { venue: "okx-public", symbol: "DOGE/USDT", venueName: "OKX" }, { venue: "kalshi", symbol: "KXFED-DEC:YES", venueName: "Kalshi" }]));
     p.run('var ASKED = []; api = (path) => { ASKED.push(path); return new Promise(() => {}); }; MKT.open = { item: ITEMS.doge, interval: "5m", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipo: [] }; mkDrawerLoad(MKT.open)');
-    expect(p.run<string[]>("ASKED")[0]).toBe("/api/account/candles?venue=okx-public&symbol=DOGE%2FUSDT&interval=5m");
+    // a drawer on a bar size alone asks the range that size is drawn over (5m: a day)
+    expect(p.run<string[]>("ASKED")[0]).toBe("/api/account/candles?venue=okx-public&symbol=DOGE%2FUSDT&interval=5m&range=1D");
     const bars = Array.from({ length: 12 }, (_, i) => ({ t: NOW - (12 - i) * 300_000, o: 0.12, h: 0.125, l: 0.118, c: 0.12 + i / 1000 }));
     const chart = (candles: unknown, asset?: unknown) => p.run<string>(`mkChartHtml({ interval: "5m", candles: ${JSON.stringify(candles)}, asset: ${asset === undefined ? "undefined" : JSON.stringify(asset)} }, ITEMS.doge, mkCandleLeg(ITEMS.doge), "crypto:DOGE")`);
     // asked and not back yet: a skeleton; back: the line, where it came from in its title (no caption under it)
@@ -804,6 +827,91 @@ describe("the one drawer", () => {
     const assetBars = { ok: true, candles: { venue: "ex", venueName: "Exchange X", symbol: "DOGE/USDT", interval: "5m", bars }, missing: [] };
     expect(chart({ ok: false, error: "404 Not Found" }, assetBars)).toContain("<title>At Exchange X · DOGE/USDT</title>");
     expect(chart({ ok: false, error: "404 Not Found" })).toContain("skel");
+  });
+
+  it("offers the price history by range (feat/paper-live phase H) — each asked in its own bar size, the asset read too — breaks the line where the venue has no bars, never bridging them (a share's closed days are no gap), and says under it whose bars they are and what they are", () => {
+    const p = page(() => new Promise(() => {}));
+    p.set("A", account());
+    p.set("ITEMS", { btc, doge, fed });
+    p.run('var ASKED = []; api = (path) => { ASKED.push(path); return new Promise(() => {}); }; MKT.open = { item: ITEMS.doge, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipo: [] }');
+    // the nine ranges over the price, 1M pressed
+    const html = p.run<string>("mkDrawerHtml(MKT.open)");
+    for (const r of ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"]) expect(html).toContain(`data-act="range" data-v="${r}"`);
+    expect(html).toContain('data-v="1M" data-fk="range:1M" aria-pressed="true"');
+    expect(html).toContain('class="seg mk-rseg"');
+    // 5Y pressed: its own bar size, a week — the candles read and the asset read asked in it
+    p.run("mkDrawerLoad = (o) => ASKED.push(`load:${o.range}:${o.interval}`); mkDrawerRedraw = () => {}");
+    p.run('mkDrawerClick({ target: { closest: () => ({ dataset: { act: "range", v: "5Y" } }) } })');
+    expect(p.run("MKT.open.range")).toBe("5Y");
+    expect(p.run("MKT.open.interval")).toBe("1w");
+    expect(p.run<string[]>("ASKED")).toContain("load:5Y:1w");
+    // a round-the-clock market's 5-minute line breaks where an hour has no bars, and nowhere else: two runs, each its own area
+    const T0 = Date.UTC(2026, 9, 14, 12);
+    const run = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ t: from + i * 300_000, o: 1, h: 1, l: 1, c: 1 + i / 100 }));
+    const two = [...run(T0, 6), ...run(T0 + 2 * 3_600_000, 6)];
+    const svg = p.run<string>(`mkChart(${JSON.stringify({ venueName: "OKX", symbol: "DOGE/USDT", interval: "5m", bars: two, source: "OKX · DOGE-USDT" })}, false, false)`);
+    const line = /<path class="line" d="([^"]+)"/.exec(svg)![1]!;
+    expect(line.match(/M/g)!.length).toBe(2);
+    expect(/<path class="area" d="([^"]+)"/.exec(svg)![1]!.match(/Z/g)!.length).toBe(2);
+    expect(svg).toContain('<p class="mk-src">OKX · DOGE-USDT</p>');
+    // a share's daily line runs on over a weekend (closed days are not missing bars); a coin's daily line breaks over two missing days
+    const days = [Date.UTC(2026, 9, 9, 13, 30), Date.UTC(2026, 9, 12, 13, 30), Date.UTC(2026, 9, 13, 13, 30)].map((t, i) => ({ t, o: 1, h: 1, l: 1, c: 1 + i }));
+    // the source's own words for a stretch with none break even a share's daily line
+    const said = p.run<string>(`mkChart(${JSON.stringify({ venueName: "Nasdaq", symbol: "AAPL", interval: "1d", bars: days, gaps: [{ from: Date.UTC(2026, 9, 10), to: Date.UTC(2026, 9, 12, 13, 30), why: "No data from source" }] })}, false, true)`);
+    expect(/<path class="line" d="([^"]+)"/.exec(said)![1]!.match(/M/g)!.length).toBe(2);
+    const daily = (sessions: boolean) => /<path class="line" d="([^"]+)"/.exec(p.run<string>(`mkChart(${JSON.stringify({ venueName: "X", symbol: "S", interval: "1d", bars: days, adjustment: "split-adjusted, not dividend-adjusted", session: "regular-session daily bars" })}, false, ${sessions})`))![1]!.match(/M/g)!.length;
+    expect(daily(true)).toBe(1);
+    expect(daily(false)).toBe(2);
+    // daily bars: the line's first and last dates with their year, no time of day
+    expect(p.run<string>(`mkChart(${JSON.stringify({ venueName: "X", symbol: "S", interval: "1d", bars: days })}, false, true)`)).toContain("<span>9 Oct 2026</span>");
+    expect(p.run<string>(`mkChart(${JSON.stringify({ venueName: "X", symbol: "S", interval: "1d", bars: days, source: "Cboe · AAPL", adjustment: "split-adjusted, not dividend-adjusted", session: "regular-session daily bars" })}, false, true)`)).toContain('<p class="mk-src">Cboe · AAPL · split-adjusted, not dividend-adjusted · regular-session daily bars</p>');
+  });
+
+  it("asks the asset read over the range pressed, as the candles read (its line is drawn where the venue gives no candles), waits for the price history as the chart does, and never draws a slower range's answer under the next range's button", async () => {
+    const p = page(() => new Promise(() => {}));
+    p.set("A", account());
+    p.set("ITEMS", { btc, doge, fed });
+    // every read the drawer asks, answered when the test says
+    p.run("var ASKED = []; var LATER = {}; api = (path, o) => { ASKED.push([path, o && o.timeout]); return new Promise((r) => (LATER[path] = r)); }; mkDrawerRedraw = () => {}");
+    p.run('MKT.open = { item: ITEMS.doge, range: "MAX", interval: "1w", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipo: [] }; mkDrawerLoad(MKT.open)');
+    const asked = () => p.run<Array<[string, number | undefined]>>("ASKED");
+    const maxCandles = "/api/account/candles?venue=okx-public&symbol=DOGE%2FUSDT&interval=1w&range=MAX";
+    const maxAsset = "/api/account/asset?key=crypto%3ADOGE&interval=1w&range=MAX";
+    expect(asked().map(([x]) => x)).toEqual(expect.arrayContaining([maxCandles, maxAsset]));
+    // the price history waited for as long as the chart waits for its first view
+    expect(asked().find(([x]) => x === maxCandles)![1]).toBe(p.run<number>("HISTORY_TIMEOUT_MS"));
+    // 5Y pressed (a week's bars too): both reads asked again, over 5Y
+    p.run('mkDrawerClick({ target: { closest: () => ({ dataset: { act: "range", v: "5Y" } }) } })');
+    const fiveCandles = "/api/account/candles?venue=okx-public&symbol=DOGE%2FUSDT&interval=1w&range=5Y";
+    const fiveAsset = "/api/account/asset?key=crypto%3ADOGE&interval=1w&range=5Y";
+    expect(asked().map(([x]) => x)).toEqual(expect.arrayContaining([fiveCandles, fiveAsset]));
+    // 5Y's answers land first, then MAX's (Nasdaq's whole history is slow): the drawer keeps 5Y's
+    const answer = (path: string, range: string) => p.run(`LATER[${JSON.stringify(path)}](${JSON.stringify({ ok: true, range, candles: [] })})`);
+    answer(fiveCandles, "5Y");
+    answer(fiveAsset, "5Y");
+    await settle();
+    answer(maxCandles, "MAX");
+    answer(maxAsset, "MAX");
+    await settle();
+    expect(p.run("MKT.open.candles.range")).toBe("5Y");
+    expect(p.run("MKT.open.asset.range")).toBe("5Y");
+  });
+
+  it("dates a day's bars and longer by the day each stands for: a coin's Universal day (its bars start at 00:00 UTC, the evening before in New York), a share's New York day", () => {
+    const p = page(() => ({}));
+    p.set("A", account());
+    const line = (bars: unknown, interval: string, sessions: boolean) => p.run<string>(`mkChart(${JSON.stringify({ venueName: "X", symbol: "S", interval, bars })}, false, ${sessions})`);
+    // a coin's daily bars of 16 and 17 Oct 2025, and its weeks from Monday 6 and Monday 13 Oct 2025
+    const days = [Date.UTC(2025, 9, 16), Date.UTC(2025, 9, 17)].map((t, i) => ({ t, o: 1, h: 1, l: 1, c: 1 + i }));
+    const weeks = [Date.UTC(2025, 9, 6), Date.UTC(2025, 9, 13)].map((t, i) => ({ t, o: 1, h: 1, l: 1, c: 1 + i }));
+    expect(line(days, "1d", false)).toContain("<span>16 Oct 2025</span>");
+    expect(line(days, "1d", false)).toContain("<span>17 Oct 2025</span>");
+    expect(line(weeks, "1w", false)).toContain("<span>13 Oct 2025</span>");
+    expect(line(weeks, "1w", false)).not.toContain("12 Oct 2025");
+    // a share's daily bars at New York's open (13:30 Universal) and at New York's midnight (04:00 Universal in summer): New York's day
+    const share = [Date.UTC(2025, 9, 16, 13, 30), Date.UTC(2025, 9, 17, 4)].map((t, i) => ({ t, o: 1, h: 1, l: 1, c: 1 + i }));
+    expect(line(share, "1d", true)).toContain("<span>16 Oct 2025</span>");
+    expect(line(share, "1d", true)).toContain("<span>17 Oct 2025</span>");
   });
 
   it("says a market's 24 hours once, its facts without it, and no second key offered (connections live under Portfolio)", () => {
@@ -907,7 +1015,7 @@ describe("the one drawer", () => {
     // what the drawer reads for it: its candles, its asset, the IPO markets — never the comparison (each venue's unit is its own)
     p.run('var ASKED = []; api = (path) => { ASKED.push(path); return new Promise(() => {}); }; MKT.open = { item: ITEMS.anth, interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [] }; mkDrawerLoad(MKT.open)');
     const asked = p.run<string[]>("ASKED");
-    expect(asked).toContain("/api/account/candles?venue=ex&symbol=ANTHROPIC%2FUSDT%3AUSDT&interval=1h");
+    expect(asked).toContain("/api/account/candles?venue=ex&symbol=ANTHROPIC%2FUSDT%3AUSDT&interval=1h&range=1M");
     expect(asked).toContain("/api/account/explore?tab=predictions&q=Anthropic&limit=12");
     expect(asked.some((x) => x.startsWith("/api/account/compare"))).toBe(false);
   });
@@ -936,8 +1044,8 @@ describe("the one drawer", () => {
     expect(p.run("MKT.open.item.key")).toBe("coin:BTC");
     expect(p.run("mkResolve({ key: 'crypto:BTC' }).key")).toBe("coin:BTC");
     expect(p.run("mkResolve({ key: 'perp:BTC' }).key")).toBe("perp:BTC");
-    // the drawer's own asset read is on the same key
-    expect(asked.some((x) => x === "/api/account/asset?key=crypto%3ABTC&interval=1h")).toBe(true);
+    // the drawer's own asset read is on the same key, over the range its chart shows (1M, in hourly bars)
+    expect(asked.some((x) => x === "/api/account/asset?key=crypto%3ABTC&interval=1h&range=1M")).toBe(true);
     // a stablecoin held: no listing carries it, so the asset read opens it, at the price the venue last read
     await p.run("openAsset('stable:USDC')");
     expect(p.run("DRAWN.length")).toBe(2);

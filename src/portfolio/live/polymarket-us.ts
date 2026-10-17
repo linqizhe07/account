@@ -69,7 +69,8 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
 import { categoryOf } from "./categories.ts";
 import type { KeyFile, KeyShape } from "./credentials.ts";
-import { badOrder, onStep, plain, type Candle, type CandleInterval, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { badWindow, barStart, INTERVAL_WORDS } from "./history.ts";
+import { badOrder, INTERVAL_MS, onStep, plain, type Candle, type CandleInterval, type CandlePage, type CandleWindow, type LiveTrader, type Market, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { asRefusal, edgeRefused, edgeWords, notTheApi, notTheApiWords, num, redact, REGION, unreachable, type Http, type HttpReply, type LiveBalance, type LiveSource } from "./types.ts";
 
 export const POLYMARKET_US_KEY: KeyShape = {
@@ -338,7 +339,6 @@ export async function pmusSearch(get: PmusGet, q: string, events = 10): Promise<
   return [...out.values()];
 }
 
-const BAR_MS: Record<CandleInterval, number> = { "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000 };
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
@@ -346,25 +346,32 @@ const DAY_MS = 86_400_000;
  * `longPrice` "normally derived from the best ask" and `shortPrice` "from one minus the best bid": the price each outcome could be bought at
  * then, not trades, so a bar has no volume. Its fixed profiles are five-minute points for a day (INTERVAL_1D, fidelity 5), minute points
  * for six hours (INTERVAL_6H, 1), three-hour points for a week or a month (INTERVAL_1W / INTERVAL_1M, 180) and all of it (INTERVAL_ALL, 180):
- * the one that covers the start asked is read, and its points folded into bars — first, highest, lowest, last */
-export async function pmusCandles(get: PmusGet, venue: string, symbol: string, interval: CandleInterval, sinceMs: number, now: number): Promise<Candle[] | Refusal> {
-  if (!Object.hasOwn(BAR_MS, interval)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: `price history comes in bars of 5m, 1h or 1d, not "${String(interval).slice(0, 12)}"` });
-  if (!(Number.isFinite(sinceMs) && sinceMs >= 0 && sinceMs < now)) return no("E_ACCOUNT_BAD_ACTION", { venue, message: "price history starts before now" });
+ * the one that covers the start asked is read, and its points folded into bars — first, highest, lowest, last. Bars of a minute come only
+ * from the six hours' minute points, and of five or fifteen minutes only from the day's five-minute ones: where the window asked starts
+ * before the profile reaches (a 1D view in minutes, a 5D one in quarter hours), the page says where its points end, never more */
+export async function pmusCandles(get: PmusGet, venue: string, symbol: string, interval: CandleInterval, w: CandleWindow, now: number): Promise<Candle[] | CandlePage | Refusal> {
+  const why = badWindow(interval, w, now);
+  if (why) return no("E_ACCOUNT_BAD_ACTION", { venue, message: why });
+  const sinceMs = w.since ?? Math.max(0, (w.until ?? now) - Math.min(w.limit ?? 300, 1_000) * INTERVAL_MS[interval]);
+  const until = w.until ?? Number.POSITIVE_INFINITY;
   const s = pmusParse(symbol);
   if (!s) return no("E_ACCOUNT_BAD_ACTION", { venue, message: `a Polymarket US market here is <market slug>:YES or <market slug>:NO, not "${String(symbol).slice(0, 60)}"` });
   const span = now - sinceMs;
-  const [profile, fidelity] = interval === "5m" ? ["INTERVAL_1D", 5] : interval === "1h" ? (span <= 6 * HOUR_MS ? ["INTERVAL_6H", 1] : span <= DAY_MS ? ["INTERVAL_1D", 5] : ["INTERVAL_1W", 180]) : span <= 30 * DAY_MS ? ["INTERVAL_1M", 180] : ["INTERVAL_ALL", 180];
+  // the profile whose points are fine enough for the bars and reach back far enough: minute points for six hours, five-minute ones for a
+  // day, three-hour ones for a week, a month or all of it
+  const fine = interval === "1m" || interval === "5m" || interval === "15m";
+  const [profile, fidelity] =
+    interval === "1m" ? ["INTERVAL_6H", 1] : fine ? ["INTERVAL_1D", 5] : interval === "1h" ? (span <= 6 * HOUR_MS ? ["INTERVAL_6H", 1] : span <= DAY_MS ? ["INTERVAL_1D", 5] : ["INTERVAL_1W", 180]) : interval === "4h" ? (span <= 7 * DAY_MS ? ["INTERVAL_1W", 180] : ["INTERVAL_1M", 180]) : span <= 30 * DAY_MS ? ["INTERVAL_1M", 180] : ["INTERVAL_ALL", 180];
   const body = await get(`/v1/price-history?symbol=${enc(s.slug)}&fixedInterval=${profile}&fidelity=${fidelity}`);
   if (isRefusal(body)) return body;
-  const step = BAR_MS[interval];
   const bars = new Map<number, Candle>();
   const points = list(rec(body).history)
     .filter(isRec)
     .map((p) => ({ t: fin(p.timestamp), p: px(fin(s.outcome === "YES" ? p.longPrice : p.shortPrice)) }))
-    .filter((p): p is { t: number; p: number } => p.t !== undefined && p.p !== undefined && p.t * 1000 >= sinceMs)
+    .filter((p): p is { t: number; p: number } => p.t !== undefined && p.p !== undefined && p.t * 1000 >= sinceMs && p.t * 1000 < until)
     .sort((a, b) => a.t - b.t);
   for (const { t, p } of points) {
-    const at = Math.floor((t * 1000) / step) * step;
+    const at = barStart(t * 1000, interval);
     const b = bars.get(at);
     if (!b) bars.set(at, { t: at, o: p, h: p, l: p, c: p });
     else {
@@ -373,8 +380,19 @@ export async function pmusCandles(get: PmusGet, venue: string, symbol: string, i
       b.c = p;
     }
   }
-  return [...bars.values()];
+  // how far back each profile reaches: where the window starts before that, the page says so
+  const reach = PMUS_REACH[profile as keyof typeof PMUS_REACH];
+  if (sinceMs >= now - reach.ms) return [...bars.values()];
+  return { bars: [...bars.values()], more: false, ends: `Polymarket US keeps ${reach.words}: no older ${INTERVAL_WORDS[interval]} bars` };
 }
+/** each price-history profile's reach, and its points in words */
+const PMUS_REACH = {
+  INTERVAL_6H: { ms: 6 * HOUR_MS, words: "minute points for six hours" },
+  INTERVAL_1D: { ms: DAY_MS, words: "five-minute points for a day" },
+  INTERVAL_1W: { ms: 7 * DAY_MS, words: "three-hour points for a week" },
+  INTERVAL_1M: { ms: 30 * DAY_MS, words: "three-hour points for a month" },
+  INTERVAL_ALL: { ms: Number.POSITIVE_INFINITY, words: "three-hour points for all of it" },
+} as const;
 
 // ---- how long an order stays -----------------------------------------------------------------------------
 
@@ -985,9 +1003,9 @@ function polymarketUsTrader(o: {
       }
     },
 
-    async candles(symbol, interval, sinceMs) {
+    async candles(symbol, interval, w) {
       try {
-        return await pmusCandles(lists, venue, symbol, interval, sinceMs, o.clock());
+        return await pmusCandles(lists, venue, symbol, interval, w, o.clock());
       } catch (err) {
         return asRefusal(venue, name, err, secrets);
       }

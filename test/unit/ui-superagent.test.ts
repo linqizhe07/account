@@ -531,9 +531,11 @@ describe("the setup: what Start the superagent signs, in order", () => {
     const steps = p.out<Array<{ say: string; draft: Record<string, unknown> }>>(`sgSetupSteps(${JSON.stringify(FIELDS)}, SG.catalog, sgPaperVenues().find((v) => v.id === "paper-1"), sgBrainOf(${JSON.stringify(FIELDS)}, SG.catalog), ${NOW})`);
     expect(steps.map((s) => s.say)).toEqual(["Let in Desk Head", "Let in Desk Search", "Let in Desk Risk", "Let in Desk Sniper", "Let in Desk Exit", "Let in Desk Watch", "Sniper's trading limit", "Exit's trading limit", "Watch's trading limit", "Hire the desk, autonomy on paper"]);
     expect(steps.slice(0, 6).map((s) => s.draft)).toEqual(["Head", "Search", "Risk", "Sniper", "Exit", "Watch"].map((n, i) => ({ type: "approveAgent", agentAddress: addr(i + 1), agentName: `Desk ${n}`, validUntil: UNTIL })));
-    // per order: 1% of the paper account's $10,000; twenty orders in all; the window 0 — on a trade limit a window allows one order per
-    // window at each venue (account/state.ts covers), so a day's window would let the Sniper enter once a day
-    expect(steps.slice(6, 9).map((s) => s.draft)).toEqual([4, 5, 6].map((n) => ({ type: "approveSpend", agent: addr(n), scope: "trade", allow: "paper-1", perPayment: "100", budget: "2000", windowHours: 0, validUntil: UNTIL })));
+    // an entry: 1% of the paper account's $10,000; per order, that with room for a close of a lead that gained (SG_CLOSE_ROOM: $150 — the
+    // per-order cap still holds a close on a renewing limit); twenty entries a day, the budget renewing every 24 hours (renewHours, signed:
+    // the session no longer stops after its twentieth order, and a close counts against none of it); the window 0 — on a trade limit a
+    // window allows one order per window at each venue (account/state.ts covers), so a day's window would let the Sniper enter once a day
+    expect(steps.slice(6, 9).map((s) => s.draft)).toEqual([4, 5, 6].map((n) => ({ type: "approveSpend", agent: addr(n), scope: "trade", allow: "paper-1", perPayment: "150", budget: "2000", windowHours: 0, validUntil: UNTIL, renewHours: 24 })));
     const hire = steps[9]!.draft;
     expect({ ...hire, value: JSON.parse(String(hire.value)) }).toEqual({ type: "setDesk", desk: "desk", change: "hire", value: { name: "Paper desk", objective: { text: FIELDS.text, venue: "paper-1", universe: "all", targetPct: 3, maxRiskPct: 1, maxDailyLossPct: 5, hours: 22, everyMin: 5, reportAt: "21:00", maxOpen: 3 }, brain: { provider: "claude", model: "claude-opus-5-5", effort: "medium" }, roles: ["head", "search", "risk", "sniper", "exit", "watch"].map((role) => ({ role, kind: "house" })), autonomy: { paper: true } } });
     // the autonomy rides in the hire: no eleventh signature, no moment when the desk is hired without it
@@ -543,12 +545,15 @@ describe("the setup: what Start the superagent signs, in order", () => {
   it("says beside the button exactly what will happen, with the numbers the form holds now", () => {
     const words = p.run<string>(`sgSetupWords(${JSON.stringify(FIELDS)}, SG.catalog, sgPaperVenues()[0], sgBrainOf(${JSON.stringify(FIELDS)}, SG.catalog))`);
     expect(words).toContain("Starting signs 10 things, one after another: 6 house seats let in (Head of desk, Search, Risk, Sniper, Exit, Watch)");
-    expect(words).toContain("a trading limit for Sniper, Exit, Watch at Paper account — up to $100.00 an order and $2,000.00 in all, about 20 orders, for 30 days");
+    // the words say what is signed: the per-order cap holds entries too (a later session of an account that grew sizes them up to it), so
+    // the entry is said as the desk sizes it — the risk per lead of a session's start, today's figure beside it — never as a cap of its own
+    expect(words).toContain("a trading limit for Sniper, Exit, Watch at Paper account — entries sized at 1% of what the paper account holds when a session starts ($100.00 now), any one order up to $150.00 so a lead that gained can still be closed, and $2,000.00 of entries a day (about 20 at today's size), counted afresh every 24 hours (a close counts against none of it), for 30 days");
+    expect(words).not.toContain("entries of up to");
     expect(words).toContain("placed at once, without a card for you — paper money — each inside its seat's limit");
     expect(words).toContain("The brain's calls (Claude · Opus 5.5) are billed to your key.");
     expect(words).toContain("You can pause or end it at any time, or turn it back to cards: its orders then wait for you on this page, in the Waits for you strip, and under Portfolio.");
-    // 2% of risk: $200 an order, $4,000 in all
-    expect(p.run(`sgSetupWords(${JSON.stringify({ ...FIELDS, maxRiskPct: "2" })}, SG.catalog, sgPaperVenues()[0], sgBrainOf(${JSON.stringify(FIELDS)}, SG.catalog))`)).toContain("up to $200.00 an order and $4,000.00 in all");
+    // 2% of risk: $200 an entry, $4,000 in all, $300 an order
+    expect(p.run(`sgSetupWords(${JSON.stringify({ ...FIELDS, maxRiskPct: "2" })}, SG.catalog, sgPaperVenues()[0], sgBrainOf(${JSON.stringify(FIELDS)}, SG.catalog))`)).toContain("entries sized at 2% of what the paper account holds when a session starts ($200.00 now), any one order up to $300.00 so a lead that gained can still be closed, and $4,000.00 of entries a day (about 20 at today's size), counted afresh every 24 hours");
   });
 
   it("refuses what it cannot sign, in a sentence: no paper account, a real one, no words, a number at zero", () => {
@@ -612,7 +617,7 @@ describe("the setup: what Start the superagent signs, in order", () => {
     const steps = p.out<Array<{ say: string; draft: Record<string, unknown> }>>(`sgMoveSteps(${JSON.stringify({ ...real, open: [] })}, SG.catalog, sgPaperVenues()[0], ${NOW})`);
     expect(steps.map((s) => s.say)).toEqual(["Let in Desk Watch", "Sniper's trading limit at Paper account", "Exit's trading limit at Paper account", "Watch's trading limit at Paper account", "Move the desk to Paper account", "Autonomy on paper"]);
     expect(steps[0]!.draft).toEqual({ type: "approveAgent", agentAddress: addr(6), agentName: "Desk Watch", validUntil: UNTIL });
-    expect(steps[1]!.draft).toEqual({ type: "approveSpend", agent: addr(4), scope: "trade", allow: "paper-1", perPayment: "100", budget: "2000", windowHours: 0, validUntil: UNTIL });
+    expect(steps[1]!.draft).toEqual({ type: "approveSpend", agent: addr(4), scope: "trade", allow: "paper-1", perPayment: "150", budget: "2000", windowHours: 0, validUntil: UNTIL, renewHours: 24 });
     expect(JSON.parse(String(steps[4]!.draft.value))).toEqual({ ...VIEW.objective, venue: "paper-1", hours: undefined });
     // an expired key is let in again too; every key ok: nothing to let in
     const lapsed = { ...real, open: [], seats: VIEW.seats.map((s) => (s.role === "sniper" ? { ...s, status: "expired" } : s.role === "watch" ? { ...s, status: "ok" } : s)) };
@@ -622,6 +627,55 @@ describe("the setup: what Start the superagent signs, in order", () => {
     // a revoked key is never let in again (account/state.ts tombstones): said, nothing signed
     const revoked = { ...real, open: [], seats: VIEW.seats.map((s) => (s.role === "exit" ? { ...s, status: "revoked" } : s)) };
     expect(p.run(`sgMoveSteps(${JSON.stringify(revoked)}, SG.catalog, sgPaperVenues()[0], ${NOW})`)).toBe("Exit's key was revoked, and a revoked key is never let in again: hire the seat again from the Agents pane first.");
+  });
+
+  it("a desk whose seats' limits do not renew (hired before they did) is said so, and one step list renews them — the setup's own limit, signed; a renewing limit says when it renews", async () => {
+    // VIEW is such a desk: the Sniper's limit signed without renewHours, the Exit with none, Watch's key not let in
+    expect(p.out<Array<{ role: string }>>(`sgUnrenewed(${JSON.stringify(VIEW)}, SG.catalog)`).map((s) => s.role)).toEqual(["sniper", "exit", "watch"]);
+    const steps = p.out<Array<{ say: string; draft: Record<string, unknown> }>>(`sgRenewSteps(${JSON.stringify(VIEW)}, SG.catalog, sgPaperVenues()[0], ${NOW})`);
+    expect(steps.map((s) => s.say)).toEqual(["Let in Desk Watch", "Sniper's trading limit, renewing", "Exit's trading limit, renewing", "Watch's trading limit, renewing"]);
+    expect(steps[0]!.draft).toEqual({ type: "approveAgent", agentAddress: addr(6), agentName: "Desk Watch", validUntil: UNTIL });
+    // exactly what the setup signs (sgSetupSteps): $150 an order, $2,000 of entries a day, renewing every 24 hours
+    expect(steps.slice(1).map((s) => s.draft)).toEqual([4, 5, 6].map((n) => ({ type: "approveSpend", agent: addr(n), scope: "trade", allow: "paper-1", perPayment: "150", budget: "2000", windowHours: 0, validUntil: UNTIL, renewHours: 24 })));
+    const words = p.run<string>(`sgRenewWords(${JSON.stringify(VIEW)}, SG.catalog, sgPaperVenues()[0])`);
+    expect(words).toContain("Renewing signs a trading limit for Sniper, Exit, Watch at Paper account that renews — entries sized at 1% of what the paper account holds when a session starts ($100.00 now), any one order up to $150.00");
+    expect(words).toContain("a seat whose key is not let in now is let in again first.");
+    // a desk whose trading seats all renew: nothing to renew, nothing said
+    const renewing = { perOrderUsd: 150, leftUsd: 1_850, budgetUsd: 2_000, venues: ["paper-1"], renewHours: 24, renewsAt: iso(NOW + 6 * 3_600_000) };
+    const fresh = { ...VIEW, seats: VIEW.seats.map((s) => (["sniper", "exit", "watch"].includes(s.role) ? { ...s, status: "ok", limit: renewing } : s)) };
+    expect(p.out(`sgUnrenewed(${JSON.stringify(fresh)}, SG.catalog)`)).toEqual([]);
+    expect(p.run(`sgRenewSteps(${JSON.stringify(fresh)}, SG.catalog, sgPaperVenues()[0], ${NOW})`)).toBe("Every trading seat's limit renews already.");
+    // a revoked key, or a venue not read as paper: the sentence, nothing signed
+    expect(p.run(`sgRenewSteps(${JSON.stringify({ ...VIEW, seats: VIEW.seats.map((s) => (s.role === "exit" ? { ...s, status: "revoked" } : s)) })}, SG.catalog, sgPaperVenues()[0], ${NOW})`)).toBe("Exit's key was revoked, and a revoked key is never let in again: hire the seat again from the Agents pane first.");
+    expect(p.run(`sgRenewSteps(${JSON.stringify(VIEW)}, SG.catalog, ${JSON.stringify(REAL)}, ${NOW})`)).toBe("The desk's venue is not read as a paper account now: its seats' limits renew at a paper account only.");
+    // the line under the header: said at a paper account, the button for the owner only; nothing said once every limit renews
+    p.run("SG.started = null; SG.params = {}");
+    const note = (v: unknown, owner: boolean) => p.run<string>(`sgNoteHtml(${JSON.stringify(feed())}, ${JSON.stringify(v)}, ${owner}, Date.now())`);
+    // the Sniper's limit does not renew; Exit and Watch have none at all (feat/paper-live phase 4: a seat whose limit ran out is said as
+    // having none, not as one that does not renew) — the one button renews every such seat
+    expect(note(VIEW, true)).toBe(`<span class="sg-warn-t">The seats' trading limits do not renew: once a budget is spent, that seat's orders stop until a new limit is signed (Sniper). These seats have no trading limit now — none was signed, or the one signed ran out — so they place nothing (Exit, Watch). <button type="button" class="sg-link" data-sg-act="renew" data-fk="sg:renew">Renew the seats' limits…</button></span>`);
+    const lapsed = { ...VIEW, seats: VIEW.seats.map((s) => (s.role === "sniper" ? { ...s, limit: undefined } : s.role === "exit" || s.role === "watch" ? { ...s, status: "ok", limit: { perOrderUsd: 150, leftUsd: 0, budgetUsd: 2_000, venues: ["paper-1"], renewHours: 24 } } : s)) };
+    expect(note(lapsed, true)).toBe(`<span class="sg-warn-t">This seat has no trading limit now — none was signed, or the one signed ran out — so it places nothing (Sniper). <button type="button" class="sg-link" data-sg-act="renew" data-fk="sg:renew">Renew the seats' limits…</button></span>`);
+    expect(p.out<Array<{ say: string }>>(`sgRenewSteps(${JSON.stringify(lapsed)}, SG.catalog, sgPaperVenues()[0], ${NOW})`).map((x) => x.say)).toEqual(["Sniper's trading limit, renewing"]);
+    expect(note(VIEW, false)).not.toContain("data-sg-act");
+    expect(note(fresh, true)).toBe("");
+    // the Sniper's card says when its budget is counted afresh
+    const sniper = p.out<{ word: string }>(`sgMetric("sniper", { feed: ${JSON.stringify(feed())}, view: null, seat: { kind: "house", limit: ${JSON.stringify(renewing)} }, now: ${NOW} })`);
+    expect(sniper.word).toBe("$1,850.00 left of $2,000.00 · renews 17:00 New York");
+    // the owner's button: a yes on the words, then each step signed through the owner's key, the account read again
+    p.run('var ACTS = []; Owner = { role: "owner", act: async (d) => (ACTS.push(d), { status: 200, body: { ok: true } }), why: () => "" }; var LOADS = 0; load = async () => { LOADS++; }; var ASKED = []; confirmSheet = async (t, o) => (ASKED.push([t, o.title]), true)');
+    p.run(`SG.view = ${JSON.stringify(VIEW)}`);
+    expect(await p.run<Promise<boolean>>("sgRenew()")).toBe(true);
+    expect(p.out("ACTS.map((d) => d.type)")).toEqual(["approveAgent", "approveSpend", "approveSpend", "approveSpend"]);
+    expect(p.out("ACTS.slice(1).map((d) => d.renewHours)")).toEqual([24, 24, 24]);
+    expect(p.out<Array<[string, string]>>("ASKED").map(([, t]) => t)).toEqual(["Renew the seats' limits"]);
+    expect(p.out("[LOADS, busy]")).toEqual([1, false]);
+    expect(p.out("SG.started")).toMatchObject({ text: "Renewed: 3 trading limits now counted afresh every 24 hours.", tone: "ok" });
+    // a no signs nothing
+    p.run("ACTS = []; confirmSheet = async () => false");
+    expect(await p.run<Promise<boolean>>("sgRenew()")).toBe(false);
+    expect(p.out("ACTS")).toEqual([]);
+    p.run("SG.view = null; SG.started = null");
   });
 });
 
@@ -797,6 +851,22 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
     // nothing to analyse: said in words
     expect(p.out(`sgFocus(${JSON.stringify(bare)})`)).toBeNull();
     expect(p.out(`sgFocus(${JSON.stringify({ ...bare, lastScan: feed().lastScan })})`)).toEqual({ symbol: "SOL/USDT", name: "SOL/USDT", kind: "", why: "the last scan's top pick", confidence: 0.71 });
+  });
+
+  it("follows the floor's markets on the push channel while it shows — its focus whole, the open leads' prices alone — and works the live balance out from their pushed quotes; the prices read over REST only while the stream does not carry them all", () => {
+    const q = page(["ui/core.js", "ui/stream.js", "ui/brains.js", "ui/desk.js", "ui/superagent.js"]);
+    q.run(`ROUTE.tab = "superagent"; SG.desk = ${JSON.stringify(feed())}; SG.view = ${JSON.stringify(VIEW)}; sgFollow()`);
+    const focus = q.out<{ symbol: string }>("sgFocus(SG.desk)").symbol;
+    const venue = q.out<{ id: string }>("SG.desk.venue").id;
+    const leads = [...new Set(VIEW.open.filter((l) => l.entry).map((l) => `${l.venue}:${l.symbol}`))].filter((k) => k !== `${venue}:${focus}`);
+    expect(q.out("STREAM.follows")).toEqual([`${venue}:${focus}`, ...leads.map((k) => `~${k}`)]);
+    // nothing pushed yet (the stream down): no live balance from it — the REST read of the leads' prices stands in
+    expect(q.run("sgPushedEquity()")).toBeNull();
+    q.run(`STREAM.health = "connected"; STREAM.quotes.set("paper-1:SOL/USDT", { venue: "paper-1", symbol: "SOL/USDT", bid: 150.9, ask: 151.1, last: 151, live: true })`);
+    expect(q.run("sgPushedEquity()")).toBe(q.run(`sgLiveEquity(${JSON.stringify(VIEW)}, new Map([["paper-1|SOL/USDT", 151]]))`));
+    // the floor not showing: it follows nothing of its own, and the trading area's own follows are its
+    q.run('ROUTE.tab = "trade"; STREAM.follows = []; sgFollow()');
+    expect(q.out("STREAM.follows")).toEqual([]);
   });
 
   it("draws the balance from the desk's own points and the open leads' fresh prices, said as the desk's equity, not the account's", () => {
@@ -1620,5 +1690,41 @@ describe("a server on this machine in the setup: ready once its model is named �
     const remote = { ...CAT, brains: [CATALOG.brains[0], { ...OLLAMA, ok: true, why: undefined, fix: undefined, keyFrom: "file", baseUrl: "https://ollama.example.com/v1", how: "the key file credentials/brains/ollama.json (no key: a local server) · ollama.example.com" }] };
     expect(p.run<string>(`sgSetupWords({ maxRiskPct: "1", provider: "ollama" }, ${JSON.stringify(remote)}, sgPaperVenues()[0], { provider: "ollama", model: "qwen3:8b" })`)).toContain("The brain (Ollama · qwen3:8b) needs no key. It is your server at ollama.example.com.");
     expect(p.run<string>(`sgCheckHtml(true, ${JSON.stringify(remote)}, sgPaperVenues(), { provider: "ollama", "model-ollama": "qwen3:8b" }, true)`)).toContain("Ollama is ready, through the key file credentials/brains/ollama.json (no key: a local server) · ollama.example.com. It is your server at ollama.example.com.");
+  });
+});
+
+describe("the floor read again as the desk moves (feat/paper-live p1: the account's push channel)", () => {
+  it("a desk event reads the floor now rather than at the beat — at most every 150 ms through a burst, and right after a read on its way — and the beat is the fallback, four seconds apart, while the stream is connected", () => {
+    const p = page();
+    p.run(`ROUTE.tab = "superagent"; A = {}; var BEATS = []; setTimeout = (fn, ms) => (BEATS.push(ms), 7); clearTimeout = () => {};`);
+    // a beat waiting a second: the desk moved, so it is read now
+    p.run("SG.timer = 3; SG.tickAt = Date.now() - 1000; sgNudge()");
+    expect(p.out("[BEATS, SG.timer]")).toEqual([[0], 7]);
+    // a read began 100 ms ago: the next waits out the rest of the 150
+    p.run("BEATS.length = 0; SG.timer = 3; SG.tickAt = Date.now() - 100; sgNudge()");
+    expect(p.out("BEATS")[0]).toBeGreaterThanOrEqual(45);
+    expect(p.out("BEATS")[0]).toBeLessThanOrEqual(50);
+    // a read on its way: marked, and the beat comes 150 ms after it ends instead of a second
+    p.run("BEATS.length = 0; SG.timer = -1; sgNudge()");
+    expect(p.out("[BEATS, SG.nudged]")).toEqual([[], true]);
+    // another pane showing: nothing is read for it
+    p.run('BEATS.length = 0; SG.timer = 0; SG.nudged = false; ROUTE.tab = "trade"; sgNudge()');
+    expect(p.out("BEATS")).toEqual([]);
+    // no stream (this stand-in has none): a second; the stream connected: four — but no later than the desk's view and the open leads'
+    // prices fall due (each every five seconds, sgSlow): a second and a half to the first of them here, a second at the least
+    expect(p.run("sgWaitMs()")).toBe(1_000);
+    p.run('var stHealth = () => "connected"');
+    p.run("SG.viewAt = Date.now(); SG.quotesAt = Date.now()");
+    expect(p.run("sgWaitMs()")).toBe(4_000);
+    p.run("SG.viewAt = Date.now() - 3_500");
+    expect(p.run("sgWaitMs()")).toBeGreaterThanOrEqual(1_400);
+    expect(p.run("sgWaitMs()")).toBeLessThanOrEqual(1_500);
+    p.run("SG.quotesAt = Date.now() - 10_000");
+    expect(p.run("sgWaitMs()")).toBe(1_000);
+    p.run("SG.viewAt = Date.now(); SG.quotesAt = Date.now()");
+    // a miss still backs off as before
+    p.run("SG.fails = 2");
+    expect(p.run("sgWaitMs()")).toBe(2_000);
+    expect(source("ui/superagent.js")).toContain('if (typeof stOn === "function") stOn("desk", sgNudge);');
   });
 });

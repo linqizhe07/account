@@ -108,6 +108,11 @@ export interface SpendApproval {
   revokedAt?: string | undefined;
   /** the open intent this limit was signed to answer (its id), when the owner named one: words tying the two together, not a limit on either */
   intent?: string | undefined;
+  /** a trading limit whose budget RENEWS (signed: approveSpend renewHours): every this many hours what its entries spent is counted
+   * afresh, from what its orders still open hold (renewSpend), and a close counts against none of it. Absent: the budget is spent once */
+  renewHours?: number | undefined;
+  /** when its budget last renewed (ms): its window runs from here, in whole windows from when it was signed */
+  renewedAt?: number | undefined;
 }
 
 export interface SubAccount {
@@ -398,8 +403,12 @@ export function applyOwner(state: AccountState, action: OwnerAction, envelope: E
       if (action.scope === "payees" && named.includes("*") && !opts.anyPayee) return bad("an approval never covers every payee: name them");
       if (!(perPayment > 0) || perPayment > budget) return bad("the per-payment maximum is more than zero and no more than the budget");
       if (!(action.validUntil > nowMs) || action.validUntil > nowMs + MAX_AGENT_DAYS * DAY) return limit(`a spending approval ends in the future, at most ${MAX_AGENT_DAYS} days away`, { maxDays: MAX_AGENT_DAYS });
+      // a budget that renews: a trading limit's alone (an entry budget a day, say), in whole hours, at most the longest a limit stands
+      const renew = action.renewHours;
+      if (renew !== undefined && action.scope !== "trade") return bad("a budget that renews is a trading limit's: an entry budget counted afresh each window, closes counting against none of it");
+      if (renew !== undefined && !(Number.isSafeInteger(renew) && renew >= 1 && renew <= MAX_AGENT_DAYS * 24)) return bad(`a trading limit's budget renews every 1 to ${MAX_AGENT_DAYS * 24} hours, in whole hours`);
       const seq = s.seq + 1;
-      const spend: SpendApproval = { id: `spend-${String(seq).padStart(4, "0")}`, agent, scope: action.scope, allow, perPaymentMicro: perPayment, budgetMicro: budget, windowHours: Math.max(0, Math.trunc(action.windowHours)), validUntil: action.validUntil, spentMicro: 0, reservedMicro: 0, last: {}, payTo: {}, envelope, at, ...(intent ? { intent } : {}) };
+      const spend: SpendApproval = { id: `spend-${String(seq).padStart(4, "0")}`, agent, scope: action.scope, allow, perPaymentMicro: perPayment, budgetMicro: budget, windowHours: Math.max(0, Math.trunc(action.windowHours)), validUntil: action.validUntil, spentMicro: 0, reservedMicro: 0, last: {}, payTo: {}, envelope, at, ...(intent ? { intent } : {}), ...(renew !== undefined ? { renewHours: renew, renewedAt: nowMs } : {}) };
       // one standing approval per agent and scope: a new one replaces the old
       return { ...s, seq, spends: [...s.spends.map((x) => (standing.includes(x) ? { ...x, revokedAt: at } : x)), spend] };
     }
@@ -521,14 +530,28 @@ export function spendFor(s: AccountState, agent: string, scope: SpendApproval["s
   return live;
 }
 
+/** A BUDGET THAT RENEWS (a trading limit signed with `renewHours`), as it stands at `nowMs`: once a whole window has passed since it last
+ * renewed, what it has spent is counted afresh — as what the orders placed under it and still open hold (`heldMicro`: an order counts on
+ * its limit from when it is placed until it is done, and is settled then) — and its window moves on by whole windows. The same approval,
+ * untouched, when it does not renew or its window has not passed */
+export function renewSpend(a: SpendApproval, nowMs: number, heldMicro: number): SpendApproval {
+  const hours = a.renewHours ?? 0;
+  if (!(hours > 0)) return a;
+  const every = hours * 3_600_000;
+  const from = a.renewedAt ?? Date.parse(a.at);
+  if (!Number.isFinite(from) || nowMs - from < every) return a;
+  return { ...a, spentMicro: Math.max(0, heldMicro), renewedAt: from + Math.floor((nowMs - from) / every) * every };
+}
+
 /** Does this approval cover a payment of `amount` to `target` now? The answer names the limit that said no. The window (`windowHours`) is
  * one refill, one order, one supply per window at each target; `window: false` leaves it unjudged — a change to an order already placed
- * is not a second order */
-export function covers(a: SpendApproval, target: string, amountMicro: number, nowMs: number, opts: { window?: boolean | undefined } = {}): Refusal | null {
+ * is not a second order. `close`: the order only closes what is held (a sell of a holding, a reduce-only order) — on a trading limit whose
+ * budget renews, a close counts against none of the budget, and its per-order cap and its window still hold */
+export function covers(a: SpendApproval, target: string, amountMicro: number, nowMs: number, opts: { window?: boolean | undefined; close?: boolean | undefined } = {}): Refusal | null {
   if (!a.allow.includes(target) && !((a.scope === "venues" || a.scope === "payees") && a.allow.includes("*"))) return no("E_MANDATE_RECIPIENT", { message: a.scope === "trade" ? `the trading limit does not cover "${target}" (it covers ${a.allow.join(", ")})` : a.scope === "earn" ? `the earn limit does not cover "${target}" (it covers ${a.allow.join(", ")})` : `"${target}" is not in the spending approval (${a.allow.join(", ")})`, detail: { approval: a.id, allow: a.allow, target } });
   if (amountMicro > a.perPaymentMicro) return no("E_MANDATE_PER_ORDER_CAP", { ...(a.scope === "trade" ? { message: `an order of $${(amountMicro / 1e6).toFixed(2)} is more than the $${(a.perPaymentMicro / 1e6).toFixed(2)} an order the trading limit allows` } : {}), detail: { approval: a.id, perPayment: a.perPaymentMicro / 1e6, amount: amountMicro / 1e6 } });
   const left = a.budgetMicro - a.spentMicro - a.reservedMicro;
-  if (amountMicro > left) return no("E_MANDATE_BUDGET", { message: `the spending approval has $${(left / 1e6).toFixed(2)} left of $${(a.budgetMicro / 1e6).toFixed(2)}; $${(amountMicro / 1e6).toFixed(2)} is more than that`, detail: { approval: a.id, budget: a.budgetMicro / 1e6, spent: a.spentMicro / 1e6, reserved: a.reservedMicro / 1e6, amount: amountMicro / 1e6 } });
+  if (amountMicro > left && !(opts.close === true && (a.renewHours ?? 0) > 0)) return no("E_MANDATE_BUDGET", { message: `the spending approval has $${(left / 1e6).toFixed(2)} left of $${(a.budgetMicro / 1e6).toFixed(2)}; $${(amountMicro / 1e6).toFixed(2)} is more than that`, detail: { approval: a.id, budget: a.budgetMicro / 1e6, spent: a.spentMicro / 1e6, reserved: a.reservedMicro / 1e6, amount: amountMicro / 1e6 } });
   const last = a.last[target];
   if (opts.window !== false && a.windowHours > 0 && last !== undefined && nowMs - last < a.windowHours * 3_600_000) {
     const ago = Math.round((nowMs - last) / 60_000);

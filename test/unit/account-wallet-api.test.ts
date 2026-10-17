@@ -31,7 +31,9 @@ const DEPOSIT = "0x3333333333333333333333333333333333333333";
 const BTC: Market = { symbol: "BTC/USDT", name: "BTC / USDT", kind: "spot", base: "BTC", quote: "USDT", price: 60_000, bid: 59_990, ask: 60_010, minQty: 0.0001, qtyStep: 0.0001, priceStep: 0.1, open: true, types: ["market", "limit"], changePct24h: 2.5, volumeUsd24h: 5e9 };
 const ETH: Market = { symbol: "ETH/USDT", name: "ETH / USDT", kind: "spot", base: "ETH", quote: "USDT", price: 3_000, bid: 2_999, ask: 3_001, minQty: 0.001, qtyStep: 0.001, priceStep: 0.01, open: true, types: ["market", "limit"] };
 const PERP: Market = { symbol: "BTC/USDT:USDT", name: "BTC perpetual", kind: "perp", base: "BTC", quote: "USDT", price: 60_020, bid: 60_010, ask: 60_030, minQty: 1, qtyStep: 1, priceStep: 0.1, contractSize: 0.01, open: true, types: ["market", "limit"], reduceOnly: true, fundingRate: 0.0001 };
-const BARS: Candle[] = [0, 1, 2].map((i) => ({ t: 1_700_000_000_000 + i * 3_600_000, o: 59_000 + i, h: 59_500 + i, l: 58_800 + i, c: 59_200 + i, v: 10 }));
+/** three hourly bars of the last few hours: a price history is held to the window asked (the Asset sheet's hourly bars: a month back) */
+const BARS_FROM = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3 * 3_600_000;
+const BARS: Candle[] = [0, 1, 2].map((i) => ({ t: BARS_FROM + i * 3_600_000, o: 59_000 + i, h: 59_500 + i, l: 58_800 + i, c: 59_200 + i, v: 10 }));
 const calls = { markets: 0, market: 0, stats: [] as Array<string[] | undefined>, candles: [] as string[], deposit: [] as string[], positions: 0 };
 const exTrader: LiveTrader = {
   can: true,
@@ -270,7 +272,7 @@ describe("Portfolio: what is held", () => {
     // Markets' name for a coin is taken too; a key that is not one, or an interval there is none of, is refused
     expect((await get("/api/account/asset?key=coin:BTC")).body.key).toBe("crypto:BTC");
     expect((await get("/api/account/asset?key=BTC")).status).toBe(409);
-    expect((await get("/api/account/asset?key=crypto:BTC&interval=4h")).status).toBe(409);
+    expect((await get("/api/account/asset?key=crypto:BTC&interval=2h")).status).toBe(409);
   });
 });
 

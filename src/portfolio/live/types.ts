@@ -17,6 +17,7 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no, unaddressed } from "../refuse.ts";
 import type { AccountKind, AssetClass } from "../accounts.ts";
 import type { LiveEarner } from "./earn.ts";
+import type { PaperBookSummary, PaperChange } from "./paper.ts";
 import type { LiveTrader } from "./trade.ts";
 import type { LiveWriter } from "./writes.ts";
 
@@ -80,6 +81,37 @@ export interface LiveSource {
   /** a paper account the account keeps itself: one look at its book between the page's reads — resting orders judged, stops watched, a
    * day's orders ended, funding paid — true when the book changed (service.ts watches every paper account so, every few seconds) */
   settle?: (() => Promise<boolean>) | undefined;
+  /** a paper account the account keeps itself: the owner's own controls over its book, each signed (live/paper.ts) */
+  paperBook?: PaperControls | undefined;
+  /** a paper account the account keeps itself: what its book tells as it changes (live/paper.ts PaperChange), for the account's push
+   * channel (service.ts) */
+  paperEvents?: PaperEvents | undefined;
+  /** a paper account the account keeps itself, let go (unplugged, or connected again under its id): its markets' live ticks judge its book
+   * no more, and what waits to be written is written (live/paper.ts) */
+  stop?: (() => void) | undefined;
+  /** a paper account the account keeps itself: the public source a market is priced by here — its listing source, the book's own for a
+   * market it traded — or nothing while it has not been listed in this run: what the venues' live streams are asked for it by */
+  priceSource?: ((symbol: string) => string | undefined) | undefined;
+}
+
+/** A PAPER ACCOUNT'S BOOK, as it tells its changes: listen(fn) → fn(change) after each write that moved an order, a fill, a position, a
+ * holding or the cash (live/paper.ts PaperChange); the function it returns stops listening */
+export interface PaperEvents {
+  listen(fn: (change: PaperChange) => void): () => void;
+}
+
+/** A PAPER ACCOUNT'S BOOK, as its owner runs it (live/paper.ts; the owner signs each: account/exchange.ts resetPaper, topUpPaper) */
+export interface PaperControls {
+  /** started again with `cashUsd` of paper money: the book as it stood archived beside it (the archive's file name), a new one in its place
+   * under the same id and name */
+  reset(cashUsd: number): Promise<{ archived: string; book: PaperBookSummary } | Refusal>;
+  /** `usd` of paper money added to its cash, written in the book as paper money put in */
+  topUp(usd: number): { book: PaperBookSummary } | Refusal;
+  /** the book said of itself, without its orders */
+  summary(): PaperBookSummary;
+  /** every change written: what the background writes (a fill a live tick found, a trailing stop's move) still hold is on disk when it
+   * resolves (the service's close, a test) */
+  flush(): Promise<void>;
 }
 
 export interface HttpReply {

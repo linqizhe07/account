@@ -8,12 +8,30 @@
  *
  * Nothing here is any venue's data. It is made up, and every page that shows it is the stand-in's.
  */
-import type { Candle, CandleInterval } from "../../src/portfolio/live/trade.ts";
+import { HISTORY_MOST, INTERVAL_MS, type Candle, type CandleInterval, type CandlePage, type CandleWindow } from "../../src/portfolio/live/trade.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
-const INTERVAL_MS: Record<CandleInterval, number> = { "5m": 5 * MINUTE, "1h": HOUR, "1d": DAY };
+
+/** a window (live/trade.ts CandleWindow) as the stand-in's start and end: a window with no start is that many bars before its end */
+export function spanOf(w: CandleWindow, interval: CandleInterval, now: number): { since: number; until: number } {
+  const until = w.until ?? Number.POSITIVE_INFINITY;
+  return { since: w.since ?? Math.max(0, Math.min(until, now) - (w.limit ?? 300) * INTERVAL_MS[interval]), until };
+}
+
+/** HOW MUCH HISTORY THE STAND-IN'S EXCHANGE AND BROKER KEEP: about three years before the stand-in started, so a chart scrolled left reaches
+ * its start and says so — and as many bars at once as a window asks for (the account's first view asks up to HISTORY_MOST), else the 400
+ * it has always given (a paper account's own reads name no limit) */
+export const STANDIN_HISTORY_MS = 1_100 * DAY;
+export const standinMost = (w: CandleWindow): number => (w.limit !== undefined && Number.isFinite(w.limit) ? Math.min(HISTORY_MOST, Math.max(1, Math.floor(w.limit))) : 400);
+/** the stand-in's bars as a page (live/trade.ts CandlePage): only those from the start of its history (`start`), whether older ones exist,
+ * and — where a window reaches back to that start — where its history starts, in the stand-in's own words */
+export function standinPage(bars: Candle[], interval: CandleInterval, start: number, symbol: string): CandlePage {
+  const kept = bars.filter((b) => b.t >= start);
+  const more = kept.length > 0 && kept[0]!.t - INTERVAL_MS[interval] >= start;
+  return { bars: kept, more, ...(more ? {} : { ends: `The stand-in's ${symbol} history starts ${new Date(start).toISOString().slice(0, 10)}` }) };
+}
 
 /** FNV-1a: a name as a 32-bit seed */
 export function seedOf(text: string): number {
@@ -150,13 +168,13 @@ export class PriceBook {
 
   /** bars from `sinceMs` to now, oldest first: each bar's open and close off the curve (the last close is the price now), its high and low
    * from points inside it */
-  candles(key: string, interval: CandleInterval, sinceMs: number, volumePerDay = 0): Candle[] {
+  candles(key: string, interval: CandleInterval, sinceMs: number, volumePerDay = 0, untilMs = Number.POSITIVE_INFINITY, most = 400): Candle[] {
     const c = this.curve(key);
     const size = INTERVAL_MS[interval];
     const now = this.clock();
     const out: Candle[] = [];
-    const from = Math.max(Math.floor(sinceMs / size) * size, now - 400 * size);
-    for (let t = from; t <= now; t += size) {
+    const from = Math.max(Math.floor(sinceMs / size) * size, Math.min(now, untilMs) - most * size);
+    for (let t = from; t <= now && t < untilMs; t += size) {
       const end = Math.min(t + size, now);
       const o = this.value(c, t);
       const close = end >= now ? this.now(key) : this.value(c, end);

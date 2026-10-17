@@ -209,7 +209,7 @@ describe("Polymarket's history is the CLOB's, its listings Gamma's (R3-5)", () =
     ]);
     const pm = polymarketPublic({ http: net.http, clock: () => NOW });
     expect(pm.historyApart).toBe(true);
-    expect(await pm.candles!("fed-cut:Yes", "1h", NOW - 3_600_000)).toMatchObject({ code: "E_VENUE_GEOBLOCKED" });
+    expect(await pm.candles!("fed-cut:Yes", "1h", { since: NOW - 3_600_000 })).toMatchObject({ code: "E_VENUE_GEOBLOCKED" });
     const listed = (await pm.listings({ limit: 5 })) as Listing[];
     expect(listed.map((l) => l.symbol)).toEqual(["fed-cut:Yes", "fed-cut:No"]);
   });
