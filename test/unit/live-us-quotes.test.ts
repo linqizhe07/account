@@ -4,7 +4,7 @@ import { fromEt } from "../../src/portfolio/account/calendar.ts";
 import { HOST_LIMITS } from "../../src/portfolio/live/history.ts";
 import { fixedHosts, PUBLIC_HOSTS } from "../../src/portfolio/live/public-markets.ts";
 import { realHttp, type Http, type HttpReply } from "../../src/portfolio/live/types.ts";
-import { FRESH_MS, NASDAQ_AT_ONCE, NASDAQ_EVERY_MS, NASDAQ_FROM, NASDAQ_UA, NO_ANSWER_HOLD_AFTER, nasdaqChart, nasdaqNumber, nasdaqQuote, nasdaqSource, nasdaqTimeMs, ROBINHOOD_AFTER_MS, ROBINHOOD_BACKOFF, ROBINHOOD_EVERY_MS, ROBINHOOD_FROM, ROBINHOOD_JITTER_MS, ROBINHOOD_PRECISE_MS, ROBINHOOD_NEXT_MS, ROBINHOOD_OVERNIGHT, ROBINHOOD_PRICES, ROBINHOOD_RETRIES, ROBINHOOD_RETRY_MS, ROBINHOOD_STANDS_MS, robinhoodQuotes, RT_WAIT_MS, US_IDLE_MS, usQuote, UsQuoteFeed, withoutStrays, type UsQuote, type UsQuotes } from "../../src/portfolio/live/us-quotes.ts";
+import { FRESH_MS, NASDAQ_AT_ONCE, NASDAQ_EVERY_MS, NASDAQ_FROM, NASDAQ_UA, NO_ANSWER_HOLD_AFTER, nasdaqChart, nasdaqNumber, nasdaqQuote, nasdaqSource, nasdaqTimeMs, ROBINHOOD_AFTER_MS, ROBINHOOD_BACKOFF, ROBINHOOD_EVERY_MS, ROBINHOOD_FIRST_MS, ROBINHOOD_FROM, ROBINHOOD_JITTER_MS, ROBINHOOD_PRECISE_MS, ROBINHOOD_NEXT_MS, ROBINHOOD_OVERNIGHT, ROBINHOOD_PRICES, ROBINHOOD_RETRIES, ROBINHOOD_RETRY_MS, ROBINHOOD_SPREAD_MS, ROBINHOOD_STANDS_MS, robinhoodQuotes, RT_WAIT_MS, US_IDLE_MS, usQuote, UsQuoteFeed, withoutStrays, type UsQuote, type UsQuotes } from "../../src/portfolio/live/us-quotes.ts";
 import { STOCK_JUDGE_MS } from "../../src/portfolio/live/paper.ts";
 import type { HubTick } from "../../src/portfolio/live/stream-hub.ts";
 import { json, network } from "./live-public-markets-fixtures.ts";
@@ -661,6 +661,52 @@ describe("Robinhood read as it is written", () => {
     expect(r.everyMs()).toBe(15_109);
   });
 
+  it("ONE WRITE, SEVERAL COPIES (ROBINHOOD_SPREAD_MS): a copy made a moment after the first one read is that write's newer word — its books taken — and never the next write: the cadence is the writes', the window's end stays where the write's stamp put it and only its floor rises; a write first read late is placed by its stamp, not by when it was read", async () => {
+    // Monday 2026-10-19: copies of one write made at 16:27:25.172, 25.243, 25.375, 25.515 and 25.582 UTC; the next write's from 40.322
+    const copy = (stamp: string, nvdaBid: string) => json({ quotes: [rh("AAPL", "341.38", "341.41", { generatedAt: stamp }), rh("NVDA", nvdaBid, (Number(nvdaBid) + 0.02).toFixed(2), { generatedAt: stamp })] });
+    let now = 0;
+    let reply = copy("2026-10-19T16:27:10.400Z", "219.40");
+    const r = robinhoodQuotes({ http: async () => reply, clock: () => now });
+    // the write before, read a tenth of a second after it was made: the books seen
+    const w0 = Date.parse("2026-10-19T16:27:10.400Z");
+    now = w0 + 100;
+    await r.read();
+    // the write of 25.172, read 0.4 s after it was made (a copy made for this read): the cadence, and the next write's window placed by
+    // its stamp and the least time a copy has taken to come back here (0.1 s)
+    const w1 = Date.parse("2026-10-19T16:27:25.172Z");
+    now = w1 + 400;
+    reply = copy("2026-10-19T16:27:25.172Z", "219.43");
+    await r.read();
+    expect(r.everyMs()).toBe(w1 - w0);
+    const { hi } = r.nextWrite()!;
+    expect(hi).toBe(w1 + 100 + (w1 - w0) + ROBINHOOD_JITTER_MS);
+    // fourteen seconds on, a read answered by the copy made at 25.515, NVDA's book a cent on in it: its newer word, stamped with that copy
+    const later = Date.parse("2026-10-19T16:27:25.515Z");
+    now = w1 + 14_000;
+    reply = copy("2026-10-19T16:27:25.515Z", "219.44");
+    const got = (await r.read()) as Map<string, UsQuote>;
+    expect(got.get("NVDA")!.at).toBe(later);
+    expect(r.latest()!.written).toBe(later);
+    // never the next write: no cadence of a third of a second, and the window's end where it was — the next write had not shown where
+    // this read was answered, so its floor rose to when the read was sent
+    expect(r.everyMs()).toBe(w1 - w0);
+    expect(r.nextWrite()).toEqual({ lo: w1 + 14_000, hi });
+    // a copy older than the one read last (25.243) says nothing of its books, and still raises the floor
+    now = w1 + 14_300;
+    reply = copy("2026-10-19T16:27:25.243Z", "219.41");
+    expect(((await r.read()) as Map<string, UsQuote>).has("NVDA")).toBe(false);
+    expect([r.latest()!.written, r.nextWrite()]).toEqual([later, { lo: w1 + 14_300, hi }]);
+    // the next write, first read six seconds after it was made (a listing's ask): the window after it is placed by its stamp — the copy
+    // that came back late does not move it six seconds on
+    const w2 = Date.parse("2026-10-19T16:27:40.322Z");
+    now = w2 + 6_000;
+    reply = copy("2026-10-19T16:27:40.322Z", "219.50");
+    await r.read();
+    expect(r.everyMs()).toBe(w2 - w1);
+    expect(r.nextWrite()!.hi).toBe(w2 + 100 + (w2 - w1) + ROBINHOOD_JITTER_MS);
+    expect(ROBINHOOD_SPREAD_MS).toBeLessThan(ROBINHOOD_EVERY_MS / 2);
+  });
+
   it("one lost read holds nothing back — the next ask reads again — and three in a row hold it twenty seconds; a refusal that says to wait (a 451) holds it at once, and read() does not read past it", async () => {
     let now = NOW;
     let fail = true;
@@ -790,8 +836,10 @@ describe("the background reader: the shares someone is looking at, read as their
     // Nasdaq writes nothing on a cadence of its own: what is said is how often the account ASKS it (askedEveryMs), never a write's cadence
     expect(feed.quote("cboe", "JPM")).toMatchObject({ src: "Nasdaq", from: NASDAQ_FROM, last: 334.82, bid: 334.8, ask: 334.85, at: fromEt(2026, 10, 14, 12, 33), askedEveryMs: NASDAQ_EVERY_MS });
     expect([feed.quote("cboe", "JPM")!.priceAt, feed.quote("cboe", "JPM")!.everyMs]).toEqual([undefined, undefined]);
-    expect(feed.quote("cboe", "AAPL")!.from).toBe(NASDAQ_FROM);
-    // Robinhood's next write prices AAPL: its quote replaces Nasdaq's, and AAPL is asked of Nasdaq no more; JPM every five seconds
+    // AAPL, which Robinhood quotes: Nasdaq's answer, stamped with its last trade's minute, is set aside — never AAPL's first quote while
+    // Robinhood is still to give it (ROBINHOOD_FIRST_MS)
+    expect(feed.quote("cboe", "AAPL")).toBeUndefined();
+    // Robinhood's next write prices AAPL: its quote is AAPL's first, and AAPL is asked of Nasdaq no more; JPM every five seconds
     await vi.advanceTimersByTimeAsync(30_000);
     feed.want("cboe", "JPM");
     feed.want("cboe", "AAPL");
@@ -847,10 +895,12 @@ describe("the background reader: the shares someone is looking at, read as their
     const asked = (from: number, until: number) => nqGets.filter((x) => x.url.includes("/AAPL/") && x.at >= NOW + from && x.at < NOW + until).length;
     feed.want("cboe", "AAPL");
     await to(300);
-    // at once: Nasdaq's (Robinhood's first answer is a book first seen), stamped 12:33
-    expect(feed.quote("cboe", "AAPL")).toMatchObject({ src: "Nasdaq", at: fromEt(2026, 10, 14, 12, 33) });
-    // Robinhood's write of NOW + 8 s moved the book (read a few seconds after it, as the reader halves its first window): newer than
-    // Nasdaq's 12:33, it replaces it — and stands, so Nasdaq is not asked for AAPL while it is ROBINHOOD_STANDS_MS old at most
+    // at once: nothing — Nasdaq's 12:33 set aside while Robinhood, whose first answer is a book first seen, is still to give AAPL's first
+    // quote (ROBINHOOD_FIRST_MS)
+    expect(feed.quote("cboe", "AAPL")).toBeUndefined();
+    expect(asked(0, 300)).toBe(1);
+    // Robinhood's write of NOW + 8 s moved the book (read a few seconds after it, as the reader halves its first window): AAPL's first
+    // quote — and it stands, so Nasdaq is not asked for AAPL while it is ROBINHOOD_STANDS_MS old at most
     const moved = first + 15_000;
     await to(13_000);
     expect(feed.quote("cboe", "AAPL")).toMatchObject({ src: "Robinhood", at: moved });
@@ -903,9 +953,12 @@ describe("the background reader: the shares someone is looking at, read as their
     const after = rhGets.filter((t) => t >= resumesAt);
     expect(after[0]! - resumesAt).toBeLessThanOrEqual(ROBINHOOD_EVERY_MS);
     const lagOf = (t: number) => (t - first) % 15_000;
-    const settled = after.filter((t) => t >= resumesAt + 2 * 15_000);
+    const writeOf = (t: number) => Math.floor((t - first) / 15_000);
+    // the writes from the second after it goes on — each whole, its first read among them (a read just before a write is the write
+    // before's: the window's halfway read)
+    const settled = after.filter((t) => first + writeOf(t) * 15_000 >= resumesAt + 2 * 15_000);
     const seen = new Map<number, number>();
-    for (const t of settled) if (!seen.has(Math.floor((t - first) / 15_000))) seen.set(Math.floor((t - first) / 15_000), lagOf(t));
+    for (const t of settled) if (!seen.has(writeOf(t))) seen.set(writeOf(t), lagOf(t));
     expect(seen.size).toBeGreaterThanOrEqual(3);
     for (const lag of seen.values()) expect(lag).toBeLessThan(ROBINHOOD_PRECISE_MS);
     expect(feed.quote("cboe", "AAPL")).toMatchObject({ src: "Robinhood", live: true });
@@ -971,6 +1024,122 @@ describe("the background reader: the shares someone is looking at, read as their
     expect(got).toMatchObject({ from: ROBINHOOD_FROM, at: feed.quote("cboe", "AAPL")!.at });
     expect(rhGets.length).toBe(reads);
     feed.close();
+  });
+
+  /** Robinhood as it was read on Monday 2026-10-19: each write made as several COPIES — `spread` ms after the write's moment each — each
+   * served until the same copy of the next write is made, a read answered by the copies in turn: a read a moment after a write may be
+   * answered by a copy of the write before, and one just before the next write by a later copy of this one. AAPL's book a cent on at each
+   * copy, so each is seen to move. Each GET kept: when, and the write and copy that answered it */
+  function copies(first: number, spread = [0, 150, 400]) {
+    const gets: Array<{ at: number; write: number; copy: number }> = [];
+    let turn = 0;
+    const http: Http = async (url) => {
+      if (url !== ROBINHOOD_PRICES) return url.includes("/AAPL/") ? NQ_AAPL : NQ_NONE;
+      const now = Date.now();
+      const c = turn++ % spread.length;
+      const k = Math.floor((now - first - spread[c]!) / 15_000);
+      gets.push({ at: now, write: k, copy: c });
+      const cents = (k * spread.length + c) * 0.01;
+      return json({ quotes: [rh("AAPL", (344.36 + cents).toFixed(2), (344.39 + cents).toFixed(2), { generatedAt: new Date(first + k * 15_000 + spread[c]!).toISOString() }), rh("NVDA", "222.52", "222.55", { generatedAt: new Date(first + k * 15_000 + spread[c]!).toISOString() })] });
+    };
+    return { http, gets };
+  }
+
+  it("ONE WRITE, SEVERAL COPIES: a read answered by a later copy of a write takes its books as their newer word, never as the next write — so write after write, each is read within a second of it and its quote told then, with a few reads a write", async () => {
+    const first = NOW - 7_000;
+    const net = copies(first);
+    const quotes = usQuote({ pace: async () => undefined, http: net.http });
+    const feed = new UsQuoteFeed({ source: "cboe", quotes, listed: () => true });
+    const told: Array<{ at: number; stamp: number }> = [];
+    feed.onTick((t) => {
+      if (t.what === "quote" && t.symbol === "AAPL") told.push({ at: Date.now(), stamp: feed.quote("cboe", "AAPL")!.at });
+    });
+    feed.want("cboe", "AAPL");
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      feed.want("cboe", "AAPL");
+    }
+    // from the fourth write on: the first read answered by any copy of a write comes within a second of the write's first copy
+    const writeAt = (k: number) => first + k * 15_000;
+    const firstRead = new Map<number, number>();
+    for (const g of net.gets) if (!firstRead.has(g.write)) firstRead.set(g.write, g.at - writeAt(g.write));
+    const settled = [...firstRead.entries()].filter(([k]) => k >= 4);
+    expect(settled.length).toBeGreaterThanOrEqual(9);
+    for (const [k, lag] of settled) expect(lag, `write ${k}`).toBeLessThan(1_000);
+    // and each write's quote told within a second of it — Robinhood's, stamped with the copy its book moved in
+    for (const [k] of settled.slice(0, -1)) {
+      const t = told.find((x) => x.stamp >= writeAt(k) && x.stamp < writeAt(k + 1));
+      expect(t, `write ${k}`).toBeDefined();
+      expect(t!.at - writeAt(k), `write ${k}`).toBeLessThan(1_000);
+    }
+    expect(net.gets.length).toBeLessThanOrEqual(4 * firstRead.size + 8);
+    expect(feed.quote("cboe", "AAPL")).toMatchObject({ src: "Robinhood", live: true });
+    feed.close();
+  });
+
+  it("an answer read first by another — a listing's ask — is told at once, not a cadence later; and a share wanted while the reader runs is given Robinhood's answer read last, not Nasdaq's", async () => {
+    const first = NOW - 7_000;
+    const { feed, quotes, rhGets, nqGets } = sources(first);
+    feed.want("cboe", "NVDA");
+    await vi.advanceTimersByTimeAsync(40_000);
+    feed.want("cboe", "NVDA");
+    const nvda = () => feed.quote("cboe", "NVDA")!;
+    expect(nvda()).toMatchObject({ src: "Robinhood" });
+    // just after a write, before the reader's own read: another read of Robinhood brings it (a listing's, or a paper account's)
+    const next = first + Math.ceil((Date.now() - first) / 15_000) * 15_000;
+    await vi.advanceTimersByTimeAsync(next + 20 - Date.now());
+    const reads = rhGets.length;
+    await quotes.robinhood.read();
+    expect(rhGets.length).toBe(reads + 1);
+    // told at the reader's next look at the latest — within a second — never at the write after
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(nvda().at).toBe(next);
+    // AAPL wanted now: Robinhood's answer read last prices it at once — Robinhood's quote its first, Nasdaq never asked for it
+    const asked = nqGets.length;
+    feed.want("cboe", "AAPL");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(feed.quote("cboe", "AAPL")).toMatchObject({ src: "Robinhood", at: next, live: true });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(nqGets.slice(asked).filter((x) => x.url.includes("/AAPL/"))).toEqual([]);
+    feed.close();
+  });
+
+  it("A SHARE'S FIRST QUOTE IS ROBINHOOD'S where Robinhood quotes it: Nasdaq's, stamped with the minute, is set aside — told never, where Robinhood gives its first in time; taken after ROBINHOOD_FIRST_MS where Robinhood's book has not moved; at once where Robinhood refuses", async () => {
+    // a book that moves: Robinhood's quote is AAPL's first, and no Nasdaq quote of AAPL is ever told
+    const moving = sources(NOW - 7_000, { nqMs: 200 });
+    const toldFrom: string[] = [];
+    moving.feed.onTick((t) => {
+      if (t.symbol === "AAPL" && t.what === "quote") toldFrom.push(moving.feed.quote("cboe", "AAPL")!.src);
+    });
+    moving.feed.want("cboe", "AAPL");
+    for (let t = 0; t < ROBINHOOD_FIRST_MS + 10_000; t += 5_000) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      moving.feed.want("cboe", "AAPL");
+    }
+    expect(moving.nqGets.some((x) => x.url.includes("/AAPL/"))).toBe(true);
+    expect(moving.feed.quote("cboe", "AAPL")).toMatchObject({ src: "Robinhood" });
+    expect(toldFrom.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(toldFrom)).toEqual(new Set(["Robinhood"]));
+    expect(moving.feed.status()).toEqual([{ symbol: "AAPL", live: true, from: ROBINHOOD_FROM }]);
+    moving.feed.close();
+    // a book that never moves: Robinhood cannot give its first quote — Nasdaq's taken once ROBINHOOD_FIRST_MS has passed, not before
+    vi.setSystemTime(NOW);
+    const still = sources(NOW - 7_000, { still: true, nqMs: 200 });
+    still.feed.want("cboe", "AAPL");
+    await vi.advanceTimersByTimeAsync(ROBINHOOD_FIRST_MS - 1_000);
+    still.feed.want("cboe", "AAPL");
+    expect(still.feed.quote("cboe", "AAPL")).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(still.feed.quote("cboe", "AAPL")).toMatchObject({ src: "Nasdaq", from: NASDAQ_FROM, live: true });
+    still.feed.close();
+    // Robinhood refusing this network: Nasdaq's at once
+    vi.setSystemTime(NOW);
+    const http: Http = async (url) => (url === ROBINHOOD_PRICES ? { status: 451, body: undefined, text: "" } : url.includes("/AAPL/") ? NQ_AAPL : NQ_NONE);
+    const refused = new UsQuoteFeed({ source: "cboe", quotes: usQuote({ pace: async () => undefined, http }), listed: () => true });
+    refused.want("cboe", "AAPL");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refused.quote("cboe", "AAPL")).toMatchObject({ src: "Nasdaq", from: NASDAQ_FROM });
+    refused.close();
   });
 });
 
