@@ -85,12 +85,20 @@
  * it holds (live/paper.ts renews its want at each look), the shares a page on the account's push channel shows (service.ts) — read as their
  * sources write them, in memory only, and told to whoever listens as they move: Robinhood's one answer read just after each of its writes
  * (robinhoodQuotes nextWrite: the window on this machine's clock in which its next write shows, learnt from the answers themselves — a
- * read that still has the write before raises its floor, the first with the new one ends it, the next a cadence on — and read halfway into
- * it until it is narrow, then at its end. Robinhood wrote at 04:35:19.07, 04:35:34.18 and 04:35:49.14 UTC on Saturday 2026-10-17, 15.1 s and
- * 15.0 s apart, each read in 59–95 ms: an answer is read within ROBINHOOD_PRECISE_MS of its write, with one or two reads a write, instead of
- * anywhere up to ten seconds after it; a write that does not come — Robinhood late, or its writer stopped — asked for again a few times
- * quickly, then less and less often, a cadence apart at most, until a new one is read), and Nasdaq every NASDAQ_EVERY_MS for each wanted
- * share Robinhood does not price young (ROBINHOOD_STANDS_MS). It stands beside the venues' streams (live/stream-hub.ts) as one more
+ * read that still has the write before raises its floor, the write's own stamp read on this clock ends it (its stamp, and the least time a
+ * copy has taken to come back here after its stamp), the next a cadence on — and read halfway into it until it is narrow, then at its end.
+ * Robinhood wrote at 04:35:19.07, 04:35:34.18 and 04:35:49.14 UTC on Saturday 2026-10-17, 15.1 s and 15.0 s apart, each read in 59–95 ms:
+ * an answer is read within ROBINHOOD_PRECISE_MS of its write, with one or two reads a write, instead of anywhere up to ten seconds after it;
+ * a write that does not come — Robinhood late, or its writer stopped — asked for again a few times quickly, then less and less often, a
+ * cadence apart at most, until a new one is read. ONE WRITE IS SEVERAL COPIES (ROBINHOOD_SPREAD_MS, measured Monday 2026-10-19 in the regular
+ * session): a read reaches whichever copy it reaches, made up to half a second after another — a later copy of the same write is that
+ * write's newer word, never the next write. Read as the next write, it set the window a whole cadence on from when it was read, and every
+ * US share reached the page five to eleven seconds after its write that day, 5.7 s at the middle; and a window ended by when a write was
+ * first read, not by its stamp, was set late by any read that came late — a listing's. Read as one write, each write reached the page
+ * 0.45 s after it at the middle the same afternoon, 0.47 s at the 90th percentile), and Nasdaq every NASDAQ_EVERY_MS for each wanted
+ * share Robinhood does not price young (ROBINHOOD_STANDS_MS) — never as a share's FIRST quote while Robinhood is still to give it
+ * (ROBINHOOD_FIRST_MS): Nasdaq stamps its quote with the minute, and the first quote a page was pushed after a start was Nasdaq's, 35 to
+ * 75 seconds old by its stamp, before Robinhood's came. It stands beside the venues' streams (live/stream-hub.ts) as one more
  * MarketHub, for the US stocks line alone: its quotes are the same REST reads, never a stream's, and say so (`from`; `everyMs`, how often
  * Robinhood writes its answer; `askedEveryMs`, how often the account asks Nasdaq, which writes nothing on a cadence of its own) */
 import { isRefusal, type Refusal } from "../../core/errors.ts";
@@ -132,6 +140,16 @@ export const ROBINHOOD_EVERY_MS = 15_000;
 export const ROBINHOOD_AFTER_MS = 250;
 /** how much a write's moment wobbles about its cadence (15.109 s and 14.969 s apart on 2026-10-17), either side */
 export const ROBINHOOD_JITTER_MS = 150;
+/** ONE WRITE, SEVERAL COPIES: Robinhood serves its answer from several copies, each made on its own as the one before it runs out — five
+ * made between 16:27:25.172 and 25.582 UTC on Monday 2026-10-19, five more between 40.322 and 40.743, each then served about fifteen
+ * seconds, a read answered by whichever it reaches (one made for the read itself, in half a second, or one made a moment before for another,
+ * in a tenth) — their books as they stood at each copy's moment (11 to 20 of 195 moved from one copy to the next). A copy whose stamp lies
+ * within this long of the first copy read of a write is one more copy of that write: a newer word of its books where its stamp is later,
+ * never the next write — the cadence and the next write's window are a write's, not a copy's */
+export const ROBINHOOD_SPREAD_MS = 2_000;
+/** how soon after its stamp a copy has come back here at best — the way back from Robinhood and the difference of the two clocks — is
+ * kept for each of the last this many writes: the next write's window is placed by its stamp with the least of them */
+export const ROBINHOOD_LAGS = 8;
 /** the background reader reads at the window's end (`hi`) once the window is this narrow, and halfway into it before: a write is read at
  * most this long after it shows, with one or two reads a write once the window has narrowed */
 export const ROBINHOOD_PRECISE_MS = 700;
@@ -254,11 +272,12 @@ export interface RobinhoodReader {
   read(): Promise<Map<string, UsQuote> | Refusal>;
   /** the latest answer read, or undefined before one */
   latest(): RobinhoodAnswer | undefined;
-  /** WHEN ITS NEXT WRITE SHOWS HERE, on this machine's clock: not before `lo`, and by `hi`. The write before showed between the latest read
-   * that still came back with the one before it (sent then) and the first that came back with it (back then) — and never more than a cadence
-   * before that first one — and the next shows a cadence (everyMs) later, give or take ROBINHOOD_JITTER_MS. A read that comes back with the
-   * same write raises `lo` to when it was sent. Read halfway between them, the window halves; read at `hi`, the write is out. Undefined
-   * before an answer */
+  /** WHEN ITS NEXT WRITE SHOWS HERE, on this machine's clock: not before `lo`, and by `hi`. The write before showed after the latest read
+   * that still came back with the one before it (sent then), and by its stamp read on this clock — its stamp, and the least time any copy
+   * has taken to come back here after its stamp (ROBINHOOD_LAGS writes of it): never later than the first read that came back with it, and
+   * never pushed later by a copy read long after it was made — and the next shows a cadence (everyMs) after, give or take
+   * ROBINHOOD_JITTER_MS. A read that comes back with a copy of the same write (ROBINHOOD_SPREAD_MS) raises `lo` to when it was sent. Read
+   * halfway between them, the window halves; read at `hi`, the write is out. Undefined before an answer */
   nextWrite(): { lo: number; hi: number } | undefined;
   /** the cadence of its writes as its answers have shown it: the middle of the last gaps between two writes read one after the other,
    * ROBINHOOD_EVERY_MS before any */
@@ -291,6 +310,11 @@ export function robinhoodQuotes(deps: PublicDeps = {}): RobinhoodReader {
     return s[Math.floor(s.length / 2)]!;
   };
   let next: { lo: number; hi: number } | undefined;
+  // the write the copies read last are of: the earliest and the latest stamp read of it (ROBINHOOD_SPREAD_MS) — and how soon after its
+  // stamp a copy came back here at best, for each of the last ROBINHOOD_LAGS writes (a copy read long after it was made says nothing of it)
+  let write: { first: number; last: number } | undefined;
+  const lags: number[] = [];
+  const lagMs = (): number => Math.min(...lags);
   // no answers in a row (a timeout, a reset): held back only from NO_ANSWER_HOLD_AFTER
   let quiet = 0;
   const once = async (sentAt: number): Promise<Map<string, UsQuote> | Refusal> => {
@@ -327,24 +351,34 @@ export function robinhoodQuotes(deps: PublicDeps = {}): RobinhoodReader {
       since.set(symbol, { bid, ask, at, saw: written });
       if (at !== undefined) out.set(symbol, { symbol, price, bid, ask, at, delayMs: 0, from: ROBINHOOD_FROM });
     }
-    // when the next write shows here, and the writes' cadence — an answer older than the latest read says nothing of either
-    if (stamp !== undefined && latest && stamp === latest.written) {
-      // the same write again: the next had not shown when this read was sent
-      if (next) next.lo = Math.max(next.lo, sentAt);
-      latest = { quotes: out, symbols, written: stamp, readAt: gotAt };
-    } else if (stamp !== undefined && (!latest || stamp > latest.written)) {
-      const gap = latest ? stamp - latest.written : 0;
+    // when the next write shows here, and the writes' cadence: what this copy is beside the write read before (ROBINHOOD_SPREAD_MS)
+    if (stamp !== undefined && write && Math.abs(stamp - write.first) <= ROBINHOOD_SPREAD_MS) {
+      // ONE MORE COPY OF THE SAME WRITE: the next had not shown where this read was answered when it was sent — and a copy that came back
+      // sooner after its stamp, or one made earlier, brings the next write's end closer, never later. A later copy is its books' newer word
+      write.first = Math.min(write.first, stamp);
+      write.last = Math.max(write.last, stamp);
+      lags[lags.length - 1] = Math.min(lags[lags.length - 1]!, gotAt - stamp);
+      if (next) next = { lo: Math.max(next.lo, sentAt), hi: Math.min(next.hi, write.first + lagMs() + everyMs() + ROBINHOOD_JITTER_MS) };
+      if (latest && stamp >= latest.written) latest = { quotes: out, symbols, written: stamp, readAt: gotAt };
+    } else if (stamp !== undefined && (!write || stamp > write.first)) {
+      // A NEW WRITE: its cadence taken where it follows the write before (a gap of two writes is not one)
+      const gap = write ? stamp - write.first : 0;
       if (gap >= ROBINHOOD_EVERY_MS / 2 && gap <= (ROBINHOOD_EVERY_MS * 3) / 2) {
         gaps.push(gap);
         if (gaps.length > 8) gaps.shift();
       }
+      write = { first: stamp, last: stamp };
+      lags.push(gotAt - stamp);
+      if (lags.length > ROBINHOOD_LAGS) lags.shift();
       const every = everyMs();
       // this write showed after the window's floor (a read sent then still had the write before), within a cadence before it first came
-      // back, and by then; the next a cadence on
+      // back, and by its stamp read on this clock (at the latest when it first came back: no copy came back sooner after its stamp than
+      // this one did); the next a cadence on
       const lo = Math.max(next?.lo ?? Number.NEGATIVE_INFINITY, gotAt - every - ROBINHOOD_JITTER_MS);
-      next = { lo: lo + every - ROBINHOOD_JITTER_MS, hi: gotAt + every + ROBINHOOD_JITTER_MS };
+      next = { lo: lo + every - ROBINHOOD_JITTER_MS, hi: stamp + lagMs() + every + ROBINHOOD_JITTER_MS };
       latest = { quotes: out, symbols, written: stamp, readAt: gotAt };
     }
+    // (a copy older than the write read before — an edge behind the others — says nothing of either)
     return out;
   };
   // the answer kept (or the refusal held), and the read on its way
@@ -769,6 +803,13 @@ export const US_IDLE_MS = 60_000;
 export const US_MAX_SHARES = 100;
 /** the reader's own look: shares no one wants any more let go, Nasdaq asked for the wanted shares Robinhood does not price, live flips told */
 const US_LOOK_MS = 1_000;
+/** A SHARE'S FIRST QUOTE IS ROBINHOOD'S where Robinhood quotes it: Robinhood prices a book once it has been seen to move, at the first write
+ * read after the share is wanted — a cadence at most, and the halving of the reader's first window after a start — while
+ * Nasdaq's quote, which comes in a second, is stamped with its last trade's MINUTE (35 to 75 s old by that stamp when it was the first quote
+ * pushed on Monday 2026-10-19). So Nasdaq's quote waits this long from when the share is first wanted, set aside, to be a share's first —
+ * taken then only where Robinhood has not priced it (a book that has not moved) — save where Robinhood will not price it: its session not
+ * on, the share not listed under that ticker or not in its answer, or its last read refused */
+export const ROBINHOOD_FIRST_MS = 20_000;
 
 export interface UsFeedOptions {
   /** the US stocks line's id (public-stocks.ts US_STOCKS_ID): the one public source whose markets this reads */
@@ -794,16 +835,23 @@ interface Share {
   live: boolean;
   recvAt: number;
   askedAt: number;
+  /** when it was first wanted; Nasdaq's latest answer set aside while Robinhood is still to give its first quote (robinhoodDue), with when
+   * it came; and Robinhood's answer last taken for it (each answer is taken once) */
+  addedAt: number;
+  held?: { q: UsQuote; at: number } | undefined;
+  rhSeen?: RobinhoodAnswer | undefined;
 }
 
 /** THE US SHARES' BACKGROUND READER (see the top of this file): the shares someone is looking at, read as their sources write them —
  *   Robinhood    its one answer read as each write shows (RobinhoodReader.nextWrite: halfway into the window the write shows in, then
  *                at its end once it is ROBINHOOD_PRECISE_MS narrow; a write past its window asked for again every ROBINHOOD_RETRY_MS,
  *                ROBINHOOD_RETRIES times, then backing off to a cadence apart until a new write is read), while a wanted share is one
- *                Robinhood may quote (in its latest answer, or not yet known) and its session is on;
+ *                Robinhood may quote (in its latest answer, or not yet known) and its session is on — and each answer read, by this
+ *                reader or by a listing first, taken at once (a share wanted while it runs is given the answer read last);
  *   Nasdaq       every NASDAQ_EVERY_MS for each wanted share Robinhood does not price young now (ROBINHOOD_STANDS_MS) — before Robinhood's
  *                first answer each of them, AT THE SAME TIME as Robinhood is read, never after it — at most NASDAQ_AT_ONCE on their way at
- *                once, in pre-market, the regular session and after-hours;
+ *                once, in pre-market, the regular session and after-hours; its answer set aside, never a share's first quote, while
+ *                Robinhood is still to give that (ROBINHOOD_FIRST_MS);
  * and Cboe never: its delayed quote is the line's (public-stocks.ts), never this reader's, so a delayed quote is never pushed as live. A
  * share's quote is its source's own, with its own stamp (`at`: Robinhood's "unchanged since", Nasdaq's last trade, to the minute) — and it
  * is LIVE while that stamp is fresh (FRESH_MS, the chain's own rule) and its source's session is on: otherwise its last word, its age said.
@@ -821,6 +869,8 @@ export class UsQuoteFeed implements MarketHub {
   private rhTimer: ReturnType<typeof setTimeout> | undefined;
   private rhBusy = false;
   private rhTries = 0;
+  /** Robinhood's last read refused (or lost): no share waits for its first quote then */
+  private rhDown = false;
   private readonly asking = new Set<string>();
   /** the count every share's seq is taken from: it only rises */
   private seqNo = 0;
@@ -932,8 +982,10 @@ export class UsQuoteFeed implements MarketHub {
       if (!spare) return undefined;
       this.shares.delete(spare.symbol);
     }
-    const sh: Share = { symbol, holds: 0, until: 0, seq: this.seqNo, live: false, recvAt: 0, askedAt: Number.NEGATIVE_INFINITY };
+    const sh: Share = { symbol, holds: 0, until: 0, seq: this.seqNo, live: false, recvAt: 0, askedAt: Number.NEGATIVE_INFINITY, addedAt: this.clock() };
     this.shares.set(symbol, sh);
+    // a share wanted while the reader runs is given Robinhood's answer read last at the end of this turn, not at the reader's next look
+    if (this.timer) queueMicrotask(() => this.fromRobinhood(this.clock()));
     this.start();
     return sh;
   }
@@ -975,21 +1027,36 @@ export class UsQuoteFeed implements MarketHub {
   private robinhoodStands(sh: Share, now: number): boolean {
     return sh.q?.from === ROBINHOOD_FROM && this.isLive(sh, now) && now - sh.q.at <= ROBINHOOD_STANDS_MS;
   }
+  /** ROBINHOOD IS STILL TO GIVE THIS SHARE ITS FIRST QUOTE (ROBINHOOD_FIRST_MS): none taken for it yet, less than that since it was first
+   * wanted, Robinhood's session on and its last read not refused, the share listed under that ticker and in Robinhood's latest answer (or
+   * none read yet). Nasdaq's quote is set aside meanwhile, never the share's first */
+  private robinhoodDue(sh: Share, now: number): boolean {
+    if (sh.q || this.rhDown || now - sh.addedAt >= ROBINHOOD_FIRST_MS) return false;
+    if (!this.o.quotes.sessions(now).robinhood || !this.o.listed(sh.symbol)) return false;
+    const last = this.o.quotes.robinhood.latest();
+    return !last || last.symbols.has(sh.symbol);
+  }
   /** a quote a source gave for a share, taken where it is newer: told as a quote where it moved (its seq rising), as a live flip where only
-   * that changed. Robinhood's standing quote is not replaced by Nasdaq's; and one source's quote replaces the other's only with a NEWER
-   * stamp — a Robinhood book that has stood unchanged longer than Nasdaq's last trade is older than it, not a fresher word */
-  private take(symbol: string, q: UsQuote): void {
+   * that changed. Robinhood's standing quote is not replaced by Nasdaq's, and Nasdaq's is not a share's first while Robinhood is still to
+   * give it (set aside: letHeld); and one source's quote replaces the other's only with a NEWER stamp — a Robinhood book that has stood
+   * unchanged longer than Nasdaq's last trade is older than it, not a fresher word. `recvAt`: when the source's answer came, now unless said */
+  private take(symbol: string, q: UsQuote, recvAt?: number): void {
     const sh = this.shares.get(symbol);
     if (!sh) return;
     const now = this.clock();
     if (q.from !== ROBINHOOD_FROM && this.robinhoodStands(sh, now)) return;
-    sh.recvAt = now;
+    if (q.from !== ROBINHOOD_FROM && this.robinhoodDue(sh, now)) {
+      if (!sh.held || q.at >= sh.held.q.at) sh.held = { q, at: recvAt ?? now };
+      return;
+    }
+    sh.recvAt = recvAt ?? now;
     const was = sh.q;
     // an older word of the same source (an answer that crossed a newer one on its way) says nothing new; the other source's, nothing newer
     // unless its own stamp is
     if (was && (was.from === q.from ? q.at < was.at : q.at <= was.at)) return;
     const moved = !was || was.from !== q.from || was.at !== q.at || was.bid !== q.bid || was.ask !== q.ask || was.price !== q.price;
     sh.q = q;
+    sh.held = undefined;
     const live = this.isLive(sh, now);
     if (moved) {
       sh.seq = ++this.seqNo;
@@ -1012,6 +1079,8 @@ export class UsQuoteFeed implements MarketHub {
       }
     }
     if (!this.shares.size) return void this.stop();
+    this.fromRobinhood(now);
+    this.letHeld(now);
     for (const sh of this.shares.values()) {
       const live = this.isLive(sh, now);
       if (live === sh.live) continue;
@@ -1020,6 +1089,29 @@ export class UsQuoteFeed implements MarketHub {
     }
     this.askNasdaq(now);
     if (!this.rhTimer && !this.rhBusy) this.rhAgain(0);
+  }
+  /** ROBINHOOD'S LATEST ANSWER, whoever read it — this reader, or a listing's ask that came first — taken for each wanted share it prices
+   * fresh, once an answer: a write a listing read first is told at this reader's next look, not a cadence later at its next write; a share
+   * wanted while the reader runs is given the answer read last at once */
+  private fromRobinhood(now: number): void {
+    const l = this.o.quotes.robinhood.latest();
+    if (!l) return;
+    for (const sh of this.shares.values()) {
+      if (sh.rhSeen === l) continue;
+      sh.rhSeen = l;
+      const q = l.quotes.get(sh.symbol);
+      if (q && this.o.listed(sh.symbol) && freshQuote(q, now)) this.take(sh.symbol, q, l.readAt);
+    }
+  }
+  /** Nasdaq's answers set aside while Robinhood was still to give a share its first quote (robinhoodDue), once it no longer is: let go where
+   * Robinhood has given it; else taken — Robinhood did not in time (a book that has not moved), or will not (its session over, a refusal) */
+  private letHeld(now: number): void {
+    for (const sh of this.shares.values()) {
+      if (!sh.held || this.robinhoodDue(sh, now)) continue;
+      const h = sh.held;
+      sh.held = undefined;
+      if (!sh.q) this.take(sh.symbol, h.q, h.at);
+    }
   }
   /** Nasdaq for each wanted share Robinhood does not price fresh, every NASDAQ_EVERY_MS — or, for more shares than Nasdaq's line takes in
    * that (HOST_LIMITS.nasdaq: a few a second), as often as the line lets each have its turn — the shares a page shows asked first, at most
@@ -1079,16 +1171,16 @@ export class UsQuoteFeed implements MarketHub {
     this.rhTries = 0;
     return Math.max(0, (w.hi - w.lo <= ROBINHOOD_PRECISE_MS ? w.hi : Math.max(now, (w.lo + w.hi) / 2)) - now);
   }
-  /** ROBINHOOD READ AS IT IS WRITTEN: its answer read when the window says (rhWait), the wanted shares it prices fresh taken from a new write;
-   * a refusal (held as its rule says) asked again a cadence later, the reads past the window still counted; nothing it may quote wanted, or
-   * its session not on, looked at again each US_LOOK_MS without a read — and read at once when it is */
+  /** ROBINHOOD READ AS IT IS WRITTEN: its answer read when the window says (rhWait), the wanted shares it prices fresh taken from the answer
+   * read last (fromRobinhood: a copy of the same write is its books' newer word where its stamp is later); a refusal (held as its rule says)
+   * asked again a cadence later, the reads past the window still counted, and no share waiting for Robinhood's first quote meanwhile; nothing
+   * it may quote wanted, or its session not on, looked at again each US_LOOK_MS without a read — and read at once when it is */
   private async rhRead(): Promise<void> {
     this.rhTimer = undefined;
     if (!this.shares.size || this.rhBusy) return;
     const r = this.o.quotes.robinhood;
     const now = this.clock();
     if (!this.o.quotes.sessions(now).robinhood || !this.robinhoodWanted(now)) return void this.rhAgain(US_LOOK_MS);
-    const before = r.latest()?.written;
     this.rhBusy = true;
     let got: Map<string, UsQuote> | Refusal | undefined;
     try {
@@ -1099,15 +1191,10 @@ export class UsQuoteFeed implements MarketHub {
       this.rhBusy = false;
     }
     if (!this.shares.size) return;
-    if (!got || isRefusal(got)) return void this.rhAgain(r.everyMs());
+    this.rhDown = !got || isRefusal(got);
     const t = this.clock();
-    const after = r.latest();
-    if (before === undefined || (after && after.written > before)) {
-      for (const sh of this.shares.values()) {
-        const q = got.get(sh.symbol);
-        if (q && this.o.listed(sh.symbol) && freshQuote(q, t)) this.take(sh.symbol, q);
-      }
-    }
-    this.rhAgain(this.rhWait(t));
+    this.fromRobinhood(t);
+    this.letHeld(t);
+    this.rhAgain(this.rhDown ? r.everyMs() : this.rhWait(t));
   }
 }
