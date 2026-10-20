@@ -157,7 +157,7 @@ describe("the chrome around the mode", () => {
 
   it("the top bar is the lens and the Statement, with the Account's header on its tabs (the mode, What changes, Settings) and the search on Markets' and Trade's; the Settings sheet is Trading · the agents' session and leverage · Background · Devices, with no Mode; the Agents sheet has the setup command and no Devices", () => {
     const top = html.slice(html.indexOf('<header class="topbar">'), html.indexOf("</header>"));
-    expect([...top.matchAll(/<button\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1])).toEqual(["lens", "mode-more", "open-settings", "open-statement"]);
+    expect([...top.matchAll(/<button\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1])).toEqual(["lens", "mode-more", "open-settings", "sign-out", "open-statement"]);
     expect(top).toMatch(/<div class="acct-tools" data-only="account">/);
     expect(top).toMatch(/id="search-form"[^>]*data-only="trading"/);
     const p = page();
@@ -203,5 +203,107 @@ describe("the chrome around the mode", () => {
     // the content stays until the longer of the two fades (the drawer's 160 ms) is over
     expect(shell).toContain("const FADE_MS = 200;");
     expect(shell).toMatch(/\$\("modal"\)\.addEventListener\("close", \(\) => \{\s*SHEET = null;[\s\S]*?setTimeout\(\(\) => \{\s*if \(\$\("modal"\)\.open\) return;\s*\$\("sheet"\)\.replaceChildren\(\);/);
+  });
+});
+
+describe("signing out of this browser", () => {
+  const KID = "abcd1234abcd1234";
+  const ME = `Object.defineProperty(Owner, "kid", { get: () => "${KID}", configurable: true })`;
+  const signers = (others: number) => ({ owners: [{ id: `device:${KID}`, kind: "device" }, ...Array.from({ length: others }, (_, i) => ({ id: `device:other${i}other${i}xx`, kind: "device" }))], pendingDevices: [], threshold: 1 });
+  /** the dialog answered: `yes` or Cancel; what it showed kept; Owner.signOut stood in for, answering `out` */
+  const asked = (p: ReturnType<typeof page>, answer: "yes" | "", out: unknown = { status: 200, body: { ok: true, kind: "account" } }) =>
+    p.run(`var ASKED = []; var OUTS = 0; asking = async (html, read) => { ASKED.push(html); return read(${JSON.stringify(answer)}); }; Owner.signOut = async () => { OUTS++; return ${JSON.stringify(out)}; }`);
+
+  it("is offered while this browser signs: the top bar's Sign out, and Sign out on this browser's row under Settings · Devices — never on another device's row, never to a browser that only looks", () => {
+    const html = source("account.html");
+    expect(html).toContain('<button type="button" class="btn btn-sm btn-ghost" id="sign-out" hidden title="This browser stops signing for the account, and its key is deleted here">Sign out</button>');
+    const p = page();
+    p.run(OWNER);
+    p.run(ME);
+    p.set("A", account({ signers: signers(1) }));
+    p.run("renderChrome(connected(), true)");
+    expect(p.el("sign-out").hidden).toBe(false);
+    p.run("renderDevices(true)");
+    const rows = String(p.el("devices").innerHTML).split("</tr>");
+    expect(rows[0]).toContain('This browser</td><td class="num2 mono dim">');
+    expect(rows[0]).toContain('1 of 2 must sign · <button type="button" class="link" data-sign-out>Sign out</button>');
+    expect(rows[1]).toContain("Another browser");
+    expect(rows[1]).not.toContain("data-sign-out");
+    p.run(LOOKER);
+    p.run("renderChrome(connected(), false)");
+    expect(p.el("sign-out").hidden).toBe(true);
+    p.run("renderDevices(false)");
+    expect(String(p.el("devices").innerHTML)).not.toContain("data-sign-out");
+    expect(source("ui/shell.js")).toContain('$("sign-out").addEventListener("click", () => A && signOutAsk());');
+  });
+
+  it("asks first, saying what it does: the last browser signed out, none signs until one pairs with a NEW code — where to read it said; with another device, that device signs on. A yes signs out; Cancel does nothing", async () => {
+    const p = page({ fetch: async () => ({ status: 200, ok: true, json: async () => ({ ok: true }) }) });
+    p.run(OWNER);
+    p.run(ME);
+    p.set("A", account({ signers: signers(0) }));
+    asked(p, "");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out("OUTS")).toBe(0);
+    const dialog = p.out<string[]>("ASKED")[0]!;
+    expect(dialog).toContain('<h2 id="ask-title">Sign out of this browser?</h2>');
+    expect(dialog).toContain("The account stops taking this browser's signature, and its signing key is deleted here: nothing in this browser can sign again — not this page, another tab or a script.");
+    expect(dialog).toContain('No browser will sign for the account until one pairs again, with a new pairing code: the terminal the account runs in shows it, or <span class="mono">npm run account:service -- code</span> when it runs in the background. The code from before no longer works.');
+    expect(dialog).toContain('<button type="submit" value="yes" class="btn btn-danger">Sign out</button>');
+    // Guard: nothing to switch, so no box
+    expect(dialog).not.toContain("so-guard");
+    asked(p, "yes");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out("[OUTS, said, flash]")).toEqual([1, "Signed out: this browser no longer signs for the account, and its key is deleted.", ""]);
+    // another device of the owner's signs on
+    p.set("A", account({ signers: signers(1) }));
+    asked(p, "");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out<string[]>("ASKED")[0]).toContain("<p>Your 1 other device keeps signing.</p>");
+  });
+
+  it("in Beast, switching to Guard first is offered, ticked — Guard a free POST before the sign-out, the sign-out only if it was taken; unticked, the agents run on; a refused sign-out leaves this browser signing and says why", async () => {
+    const posts: Array<{ path: string; body: unknown }> = [];
+    let guard = { status: 200, body: { ok: true, mode: "guard" } };
+    const p = page({ fetch: async (path, init) => { posts.push({ path, body: JSON.parse(init?.body ?? "{}") }); return { status: guard.status, ok: guard.status < 400, json: async () => guard.body }; } });
+    p.run(OWNER);
+    p.run(ME);
+    p.set("A", account({ mode: "open", signers: signers(0) }));
+    // ticked: Guard, then the sign-out
+    p.run('document.getElementById("ask").querySelector = (q) => (q === \'input[name="so-guard"]:checked\' ? {} : null)');
+    asked(p, "yes");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out<string[]>("ASKED")[0]).toContain('<label class="chk1"><input type="checkbox" name="so-guard" checked /> Switch to Guard first: whatever an agent asks for waits for a signature</label>');
+    expect(posts).toEqual([{ path: "/api/mode", body: { mode: "guard" } }]);
+    expect(p.out("[OUTS, said, flash]")).toEqual([1, "Signed out: this browser no longer signs for the account, and its key is deleted. Guard is on.", ""]);
+    // Guard refused: nothing is signed out
+    guard = { status: 409, body: { ok: false, refusal: { message: "the account is restoring" } } as never };
+    asked(p, "yes");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out("[OUTS, flash]")).toEqual([0, "Not signed out: Guard was refused — the account is restoring"]);
+    // unticked: no Guard, the sign-out alone
+    posts.length = 0;
+    p.run('document.getElementById("ask").querySelector = () => null; flash = ""; said = ""');
+    asked(p, "yes");
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(posts).toEqual([]);
+    expect(p.out("[OUTS, said]")).toEqual([1, "Signed out: this browser no longer signs for the account, and its key is deleted."]);
+    // the account refused the sign-out: this browser signs as it did, and the words say why
+    p.run('said = ""; flash = ""');
+    asked(p, "yes", { status: 409, body: { ok: false, refusal: { message: "signed 12 min ago: a sign-out is taken within 10 minutes of signing it — sign out again" } } });
+    await p.run<Promise<void>>("signOutAsk()");
+    expect(p.out("[OUTS, said, flash]")).toEqual([1, "", "Not signed out: signed 12 min ago: a sign-out is taken within 10 minutes of signing it — sign out again"]);
+  });
+
+  it("a browser signed out says so, with Sign in; one asked for the code says where to read it", () => {
+    const p = page();
+    p.set("A", account());
+    p.run('Object.defineProperty(Owner, "role", { get: () => "signed-out", configurable: true })');
+    p.run("drawBanner(false)");
+    expect(p.el("banner").innerHTML).toBe('<div class="codeform"><span>You signed out of this browser: it no longer signs for the account, and its key is deleted.</span><button type="button" class="btn btn-primary" id="sign-in">Sign in</button></div>');
+    expect(p.el("banner").hidden).toBe(false);
+    p.run('Object.defineProperty(Owner, "role", { get: () => "needs-code", configurable: true })');
+    p.run("drawBanner(false)");
+    expect(String(p.el("banner").innerHTML)).toContain('<label for="code-in">Enter the pairing code shown in the terminal the account runs in — running in the background, <span class="mono">npm run account:service -- code</span> shows it.</label>');
   });
 });

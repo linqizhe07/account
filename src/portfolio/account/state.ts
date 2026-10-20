@@ -460,6 +460,14 @@ export function applyOwner(state: AccountState, action: OwnerAction, envelope: E
       }
       return { ...s, owners, threshold, pendingDevices: s.pendingDevices.filter((d) => !users.includes(`device:${d.kid}`)) };
     }
+    case "signOut": {
+      // a device of the owner's leaves the signers (the door takes this only from that device itself). The threshold never stays above the
+      // signers left; the last one gone leaves none, and the account's next browser pairs with a new code
+      const me = s.owners.find((o) => o.id === action.device && o.kind === "device");
+      if (!me) return bad(`"${action.device}" is not a device that signs for this account`);
+      const owners = s.owners.filter((o) => o !== me);
+      return { ...s, owners, threshold: Math.max(1, Math.min(s.threshold, owners.length)) };
+    }
     case "setDestination": {
       const label = action.label.trim();
       if (!label) return bad("a destination needs a label of 1 to 32 characters");

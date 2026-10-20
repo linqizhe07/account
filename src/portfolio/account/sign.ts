@@ -99,6 +99,10 @@ export type OwnerAction =
   | { type: "createSubAccount"; name: string; agent: Hex; float: string; nonce: number }
   | { type: "userSetAbstraction"; abstraction: string; nonce: number }
   | { type: "convertToMultiSigUser"; signers: string; nonce: number }
+  /** SIGNING OUT: a device of the owner's (`device`, `device:<kid>`) is no longer one of the account's signers. Signed by that device and
+   * no other — a browser signs only itself out — and sent at once (SIGN_OUT_TTL_MS); the browser then deletes its key. The last device
+   * signed out leaves the account with no owner's browser: the next pairs only with a new pairing code (account/pairing.ts) */
+  | { type: "signOut"; device: string; nonce: number }
   | { type: "setDestination"; label: string; address: string; chain: string; token: string; nonce: number }
   /** the owner's answer to a card: it names the card AND the hash of what the card would release */
   | { type: "approveCard"; card: string; action: Hex; decision: string; nonce: number }
@@ -214,7 +218,7 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper", "signOut"] as const;
 export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
@@ -232,6 +236,8 @@ export const BRAIN_KEY_TTL_MS = MONEY_TTL_MS;
  * envelope is good for as long as a money instruction, around the moment it is dated — never one kept to start the book again days later */
 export const PAPER_TYPES: ReadonlySet<string> = new Set(["resetPaper", "topUpPaper"]);
 export const PAPER_TTL_MS = MONEY_TTL_MS;
+/** a sign-out is signed and sent at once: an envelope kept for later is never one that signs a browser out of the account days after */
+export const SIGN_OUT_TTL_MS = MONEY_TTL_MS;
 
 export function isOwnerAction(a: { type: string }): a is OwnerAction {
   return (OWNER_TYPES as readonly string[]).includes(a.type);
@@ -321,6 +327,7 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   setBrainKey: { primary: "AccountBrain:SetKey", fields: [{ name: "provider", type: "string" }, { name: "baseUrl", type: "string" }, { name: "model", type: "string" }, { name: "keyHash", type: "string" }, { name: "salt", type: "string" }, NONCE] },
   resetPaper: { primary: "AccountPaper:Reset", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
   topUpPaper: { primary: "AccountPaper:TopUp", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
+  signOut: { primary: "AccountDevice:SignOut", fields: [{ name: "device", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };

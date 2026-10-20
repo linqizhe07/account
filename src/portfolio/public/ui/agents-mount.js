@@ -217,11 +217,46 @@ function renderAgents(L, owner) {
    the page sends one signature per action, so a threshold above one is not offered until there is a way to add the second signature */
 function renderDevices(owner) {
   if (!$("devices")) return;
-  $("devices").innerHTML = `<table><tbody>${A.signers.owners.map((o) => `<tr><td>${o.id === `device:${Owner.kid}` ? "This browser" : o.kind === "device" ? "Another browser" : "Wallet key"}</td><td class="num2 mono dim">${esc(short(o.id.replace("device:", "")))}</td><td class="r dim">${A.signers.threshold} of ${A.signers.owners.length} must sign</td></tr>`).join("")}${A.signers.pendingDevices.map((d) => `<tr><td>A browser asked to sign</td><td class="num2 mono dim">${esc(d.kid)}</td><td class="r">${owner ? `<button type="button" class="link" data-signer="${esc(d.kid)}">Let it sign</button>` : ""}</td></tr>`).join("")}</tbody></table><p class="dim small hint">Every device signs alone: a device let in is a key beside yours, and one signature is enough. Requiring two signatures on each action waits for a way to give the second one.</p>`;
+  $("devices").innerHTML = `<table><tbody>${A.signers.owners.map((o) => `<tr><td>${o.id === `device:${Owner.kid}` ? "This browser" : o.kind === "device" ? "Another browser" : "Wallet key"}</td><td class="num2 mono dim">${esc(short(o.id.replace("device:", "")))}</td><td class="r dim">${A.signers.threshold} of ${A.signers.owners.length} must sign${owner && o.id === `device:${Owner.kid}` ? ' · <button type="button" class="link" data-sign-out>Sign out</button>' : ""}</td></tr>`).join("")}${A.signers.pendingDevices.map((d) => `<tr><td>A browser asked to sign</td><td class="num2 mono dim">${esc(d.kid)}</td><td class="r">${owner ? `<button type="button" class="link" data-signer="${esc(d.kid)}">Let it sign</button>` : ""}</td></tr>`).join("")}</tbody></table><p class="dim small hint">Every device signs alone: a device let in is a key beside yours, and one signature is enough. Requiring two signatures on each action waits for a way to give the second one.</p>`;
+  const out = $("devices").querySelector("button[data-sign-out]");
+  if (out) out.addEventListener("click", signOutAsk);
   for (const b of $("devices").querySelectorAll("button[data-signer]")) {
     b.addEventListener("click", () => {
       const users = [...A.signers.owners.map((o) => o.id), `device:${b.dataset.signer}`].sort();
       own({ type: "convertToMultiSigUser", signers: JSON.stringify({ authorizedUsers: users, threshold: A.signers.threshold }) });
     });
   }
+}
+
+/* SIGNING OUT OF THIS BROWSER, asked first: the account stops taking this browser's signature and its key is deleted here (Owner.signOut).
+   The last browser signed out, none signs until one pairs again with a NEW code — where to read it, said. Beast left on runs agents inside
+   their limits with no browser here to stop them, so switching to Guard first is offered, ticked; Guard needs no signature (setMode).
+   Nothing is said done that was not: a refusal, or no answer, leaves this browser signing, and says why */
+async function signOutAsk() {
+  if (!A || !owns() || busy) return;
+  const others = A.signers.owners.filter((o) => o.id !== `device:${Owner.kid}`).length;
+  const beast = modeOf(A.mode) === "open";
+  const next = others
+    ? `Your ${plural(others, "other device")} ${others === 1 ? "keeps" : "keep"} signing.`
+    : 'No browser will sign for the account until one pairs again, with a new pairing code: the terminal the account runs in shows it, or <span class="mono">npm run account:service -- code</span> when it runs in the background. The code from before no longer works.';
+  const ask = await asking(`<form method="dialog" class="ask-f"><h2 id="ask-title">Sign out of this browser?</h2><p>The account stops taking this browser's signature, and its signing key is deleted here: nothing in this browser can sign again — not this page, another tab or a script.</p><p>${next}</p><p class="dim small">You can still look at the account here. Agents keep the limits you signed.</p>${beast ? '<p><label class="chk1"><input type="checkbox" name="so-guard" checked /> Switch to Guard first: whatever an agent asks for waits for a signature</label></p>' : ""}<div class="end"><button type="submit" value="" class="btn">Cancel</button><button type="submit" value="yes" class="btn btn-danger">Sign out</button></div></form>`, (v) => (v === "yes" ? { guard: beast && !!$("ask").querySelector('input[name="so-guard"]:checked') } : null));
+  if (!ask || busy) return;
+  busy = true;
+  document.body.classList.add("busy");
+  try {
+    const guard = ask.guard ? await postJson("/api/mode", { mode: "guard" }) : null;
+    if (guard && refusedAt(guard)) flash = `Not signed out: Guard was refused — ${Owner.why(guard) || "no answer"}`;
+    else {
+      const r = await Owner.signOut();
+      if (refusedAt(r)) flash = `Not signed out: ${Owner.why(r) || "the account did not answer"}`;
+      else said = `Signed out: this browser no longer signs for the account, and its key is deleted.${guard ? " Guard is on." : ""}`;
+    }
+  } catch (err) {
+    flash = `Not signed out: ${String((err && err.message) || err).slice(0, 200) || "the account did not answer"}`;
+  } finally {
+    busy = false;
+    document.body.classList.remove("busy");
+  }
+  closeSheet();
+  await load();
 }
