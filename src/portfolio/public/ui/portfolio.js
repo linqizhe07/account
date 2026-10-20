@@ -237,7 +237,7 @@ function renderPortfolio({ el, owner, params = {} }) {
   if (!el.firstElementChild || el.firstElementChild.dataset.pf !== mode) {
     el.innerHTML = mode === "fresh"
       ? '<div class="pf pf-fresh" data-pf="fresh"><div data-pf-part="worth"></div><div data-pf-part="steps"></div><div data-pf-part="waiting"></div></div>'
-      : '<div class="pf cols" data-pf="full"><div class="col-main"><div data-pf-part="steps"></div><section class="sec pf-worth" data-pf-part="worth" aria-label="Net worth"></section><section class="sec pf-live" data-pf-part="live" aria-label="Open positions, live"></section><div class="quick" data-pf-part="quick"></div><section class="sec pf-table" data-pf-part="table" aria-label="Assets, positions and accounts"></section></div><div class="col-side"><div data-pf-part="waiting"></div><section class="sec pf-agents" data-pf-part="agents" aria-label="Agents at work"></section><section class="sec pf-cash" data-pf-part="cash" aria-label="Cash ready"></section><section class="sec pf-alloc" data-pf-part="alloc" aria-label="Allocation"></section></div></div>';
+      : '<div class="pf cols" data-pf="full"><div class="col-main"><div data-pf-part="steps"></div><section class="sec pf-worth" data-pf-part="worth" data-ocean-calm aria-label="Net worth"></section><section class="sec pf-live" data-pf-part="live" aria-label="Open positions, live"></section><div class="quick" data-pf-part="quick"></div><section class="sec pf-table" data-pf-part="table" aria-label="Assets, positions and accounts"></section></div><div class="col-side"><div data-pf-part="waiting"></div><section class="sec pf-agents" data-pf-part="agents" aria-label="Agents at work"></section><section class="sec pf-cash" data-pf-part="cash" aria-label="Cash ready"></section><section class="sec pf-alloc" data-pf-part="alloc" aria-label="Allocation"></section></div></div>';
   }
   pfWire(el);
   pfDraw(el, owner);
@@ -404,7 +404,7 @@ function pfWorthHtml(l, venueIn, rows) {
     // nothing read yet; a connection may be on the account all the same, waiting for its venue to answer this network (one the venue
     // refused is under Venues, with Connect again)
     const w = pfWaiting().filter((x) => !x.stopped).length;
-    return `<section class="sec pf-worth"><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : `Nothing is connected yet. Connect an account and what it holds shows here — or ${pfBtn("paper", "start a paper account", { cls: "link" })}: paper money in the public markets, nothing to connect.`}</p></section>`;
+    return `<section class="sec pf-worth" data-ocean-calm><div class="label">Net worth</div><div class="num">${money(0)}</div><p class="dim">${w ? `Nothing is read yet: ${plural(w, "connection")} ${w === 1 ? "waits for its venue" : "wait for their venues"} to answer this network (see Venues).` : `Nothing is connected yet. Connect an account and what it holds shows here — or ${pfBtn("paper", "start a paper account", { cls: "link" })}: paper money in the public markets, nothing to connect.`}</p></section>`;
   }
   return pfBook(l) === "paper" ? pfPaperWorthHtml(l) : pfRealWorthHtml(l, venueIn, rows);
 }

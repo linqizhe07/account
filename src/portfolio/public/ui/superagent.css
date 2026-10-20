@@ -1,13 +1,14 @@
 /* THE SUPERAGENT (ui/superagent.js): Trade's second mode, the desk on a paper account as a live trading floor. Its chrome is Hyperliquid's
-   trade app on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]: every value measured from app.hyperliquid.xyz/trade,
-   scratchpad hl-reference.md), the same as Regular's — so switching modes changes what the screen shows, never how it looks: panels of
-   #0f1a1f 3 px apart on the ground, radius 5, no edge and no shadow; one face (Inter) at 12 on 15, one weight; labels in the dim colour
-   over their values; controls 33 high with 8 px corners; the soft accent for what is on, the bright one under the pointer; up, down and
-   the area's amber for waiting. .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it
-   (the chart, the book, chg(), the toggles) is the area's too.
-   ONLY THE FLOOR keeps a field of its own: the deep green of the house's floor, declared on its panel (.sg-floor) for ui/floor.js, which reads
+   trade app's grammar on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]: the ocean's Black), the same as Regular's —
+   so switching modes changes what the screen shows, never how it looks: dark glass panels 6 px apart over the water, radius 10, a hairline
+   inside the edge and no shadow; one face (Manrope) at 12 on 15, one weight; labels in the dim colour over their values; controls 33 high
+   with 8 px corners; the soft accent (the wake's cyan) for what is on, the bright one under the pointer; up, down and the area's amber for
+   waiting. .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, the book,
+   chg(), the toggles) is the area's too.
+   ONLY THE FLOOR keeps a field of its own: a deep-sea room under the panels, declared on its panel (.sg-floor) for ui/floor.js, which reads
    its colours from there (--sg-deep, --sg-deep-2, --sg-line, --sg-scan; the rest from the area's names). The seats' tints (--sg-r-<role>)
-   are the house's own and stay: each is a mascot's colour and a room chip's, never alone (the seat's name is always beside it).
+   are the house's own, in the accent's family: each is a mascot's colour and a room chip's, never alone (the seat's name is always beside
+   it).
    The --sg-* names the floor and the older rules know are kept as aliases of the area's: mint is the accent, coral is down, amber is the
    area's caution.
    MOTION in the chrome is HL's: colour, background and edge over 0.2 s ease-in-out; a card or a room line comes in from 5 px above, fading,
@@ -25,16 +26,16 @@
   --sg-line-2: var(--hl-tabline);
   --sg-ink: var(--hl-on-accent);
   --sg-deep-2: var(--hl-panel);
-  /* the seats' tints: the green family at distinct lightness, each light enough for the ink's words on it at 4.5:1 or better (the darkest,
-     Sentiment's, 4.9:1) */
-  --sg-r-head: #97fce3;
-  --sg-r-search: #6fe0c4;
-  --sg-r-risk: #b9f2e3;
-  --sg-r-sniper: #4fc9a8;
-  --sg-r-exit: #82e8cf;
-  --sg-r-watch: #5eb79e;
-  --sg-r-flow: #4aa58c;
-  --sg-r-sentiment: #44997f;
+  /* the seats' tints: the wake's cyan family at distinct lightness, each light enough for the ink's words on it at 4.5:1 or better (the
+     darkest, Sentiment's, 5.5:1) */
+  --sg-r-head: #8cefff;
+  --sg-r-search: #66d6ee;
+  --sg-r-risk: #b8f3ff;
+  --sg-r-sniper: #4bc2dc;
+  --sg-r-exit: #7fe2f5;
+  --sg-r-watch: #5ab4c9;
+  --sg-r-flow: #4ba3b8;
+  --sg-r-sentiment: #4596aa;
   display: flex;
   flex-direction: column;
   gap: var(--hl-gap);
@@ -56,7 +57,7 @@
 .sg-chip { display: inline-flex; align-items: center; padding: 0 4px; border-radius: var(--hl-r-panel); background: var(--hl-badge); color: var(--hl-accent-soft); font: 400 12px/20.4px var(--font-sans); white-space: nowrap; }
 
 /* ---- a panel: HL's, flat ------------------------------------------------------------------------------------------------------------ */
-.sg-panel { position: relative; min-width: 0; padding: 10px 12px; border: 0; border-radius: var(--hl-r-panel); background: var(--hl-panel); box-shadow: none; }
+.sg-panel { position: relative; min-width: 0; padding: 10px 12px; border: 0; border-radius: var(--hl-r-panel); background: var(--hl-glass); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
 .sg-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; min-width: 0; }
 .sg-sec-h .sg-lab { color: var(--hl-text); }
 .sg-wait { display: flex; flex-direction: column; gap: 10px; padding: 16px 12px; }
@@ -149,8 +150,8 @@
 
 /* ---- the floor: its own deep green field, the canvas filling the panel, the frame rate in its corner, a caption under it ---------- */
 .sg-floor {
-  --sg-deep: #072723;
-  --sg-deep-2: #0f3933;
+  --sg-deep: #05090c;
+  --sg-deep-2: #0c161b;
   --sg-line: rgba(151, 252, 228, 0.16);
   --sg-scan: rgba(0, 0, 0, 0.16);
   padding: 0;
@@ -180,7 +181,7 @@
 /* a card is not a size container of its own: in Chromium a card that was one lost its contents' height (every card 20 px high, empty) once
    the pane went from a phone's width to a wide one and the strip turned from a scrolling row back into a grid. Its few width rules read the
    pane's width (.sg) instead */
-.sg-card { --sg-role: var(--hl-accent); position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: var(--hl-r-panel); background: var(--hl-panel); outline: none; animation: sg-in 0.3s ease both; transition: box-shadow var(--hl-ease); }
+.sg-card { --sg-role: var(--hl-accent); position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: var(--hl-r-panel); background: var(--hl-glass); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); outline: none; animation: sg-in 0.3s ease both; transition: box-shadow var(--hl-ease); }
 .sg-card:focus-visible { box-shadow: inset 0 0 0 2px var(--hl-accent-soft); }
 /* the seat whose brain call is under way: HL's active-tab line, at the card's foot */
 .sg-card[data-s="thinking"] { box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }

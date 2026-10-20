@@ -26,6 +26,8 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <link rel="stylesheet" href="/ui/superagent.css" />
 </head>
 <body>
+<!-- the ocean under the whole page (ui/ocean.js draws it, ui/tokens.css colours it): decor, never read out -->
+<canvas id="ocean" aria-hidden="true"></canvas>
 <!-- the page's icons: stroke drawings of its own (no venue's or wallet's logo). icon("name") in ui/core.js draws one -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
@@ -135,6 +137,8 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <script src="/owner.js"></script>
 <!-- one global scope, run in this order once the page is parsed (owner.js above runs first): ui/core.js holds the contract between them -->
 <script defer src="/ui/core.js"></script>
+<!-- the ocean (ui/ocean.js): drawn as soon as the contract is there, before the panes, so the first paint has its ground -->
+<script defer src="/ui/ocean.js"></script>
 <!-- the account's push channel (ui/stream.js): loaded early, so every pane after it can listen; the shell opens it after its first read -->
 <script defer src="/ui/stream.js"></script>
 <script defer src="/ui/connect.js"></script>

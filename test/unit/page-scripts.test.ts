@@ -105,9 +105,10 @@ describe("the account page's scripts", () => {
     expect(new Set(named).size).toBe(named.length);
     const onDisk = readdirSync(join(PUBLIC, "ui")).filter((f) => f.endsWith(".js")).map((f) => `/ui/${f}`);
     expect(named.filter((s) => s.startsWith("/ui/")).sort()).toEqual(onDisk.sort());
-    // the order the contract names: the account's push channel right after the contract (every pane after it listens to it), what moves
-    // money and what connects before the panes that use it, the statement and the agents' mount point after them, the shell last
-    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/stream.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/live.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/chart.js", "/ui/book.js", "/ui/terminal.js", "/ui/brains.js", "/ui/desk.js", "/ui/floor.js", "/ui/superagent.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
+    // the order the contract names: the ocean right after the contract (the page's ground, drawn before any pane), then the account's push
+    // channel (every pane after it listens to it), what moves money and what connects before the panes that use it, the statement and the
+    // agents' mount point after them, the shell last
+    expect(named).toEqual(["/owner.js", "/ui/core.js", "/ui/ocean.js", "/ui/stream.js", "/ui/connect.js", "/ui/money.js", "/ui/asset.js", "/ui/intent.js", "/ui/live.js", "/ui/portfolio.js", "/ui/memory.js", "/ui/earn.js", "/ui/markets.js", "/ui/trade.js", "/ui/chart.js", "/ui/book.js", "/ui/terminal.js", "/ui/brains.js", "/ui/desk.js", "/ui/floor.js", "/ui/superagent.js", "/ui/statement.js", "/ui/agents-mount.js", "/ui/shell.js"]);
     // each ui script waits for the page to be parsed and runs in the order named
     for (const m of html.matchAll(/<script\b([^>]*)\bsrc="(\/ui\/[^"]+)"/g)) expect(m[1], m[2] ?? "").toMatch(/\bdefer\b/);
     // the tokens first (both backgrounds), then the shell, then what the earlier renderers still draw; the classic page's sheet is not needed
@@ -131,9 +132,14 @@ describe("the account page's scripts", () => {
     const font = await fetch(`${srv.url}${preload[0]}`);
     expect([font.status, font.headers.get("content-type"), font.headers.get("cache-control")]).toEqual([200, "font/woff2", "public, max-age=31536000, immutable"]);
     expect(html).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
-    // the trading area's face (Inter) is this account's too, declared in the tokens and not preloaded: no stylesheet asks another host
+    // the mono face (Geist Mono: the ocean's glyphs, the labels, what is signed) is this account's too, declared in the tokens and not
+    // preloaded: no stylesheet asks another host, and every face the tokens name is served from here
     for (const css of styles()) expect(source(css), css).not.toMatch(/fonts\.(googleapis|gstatic)\.com|@import/);
-    expect(source("ui/tokens.css")).toMatch(/@font-face \{ font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url\(\/fonts\/inter-v4-latin-400\.woff2\) format\("woff2"\)/);
+    expect(source("ui/tokens.css")).toMatch(/@font-face \{ font-family: "Geist Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url\(\/fonts\/geist-mono-v5-latin-400\.woff2\) format\("woff2"\)/);
+    for (const m of source("ui/tokens.css").matchAll(/url\((\/fonts\/[a-z0-9-]+\.woff2)\)/g)) {
+      const r = await fetch(`${srv.url}${m[1]}`);
+      expect([m[1], r.status, r.headers.get("content-type")]).toEqual([m[1], 200, "font/woff2"]);
+    }
     for (const path of ["/fonts/../server.ts", "/fonts/OFL.txt", "/fonts/nope.woff2"]) expect((await raw(path)).status, path).toBe(404);
   });
 
@@ -255,10 +261,10 @@ describe("the account page's scripts", () => {
     const shell = source("ui/shell.css").replace(/\/\*[\s\S]*?\*\//g, "");
     // the colours on html itself (so the rail and the page's background take them), the shape and face on the area's containers only
     const colours = /:root\[data-area="trade"\],\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
-    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-panel);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-panel);", "--hl-panel: #0f1a1f;", "--warn: var(--hl-warn);", "color-scheme: dark;"]) expect(colours, d).toContain(d);
+    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-glass);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-glass);", "--hl-glass: rgba(9, 10, 12, 0.8);", "--hl-panel: #0a0b0d;", "--warn: var(--hl-warn);", "--oc-ground: #000000;", "color-scheme: dark;"]) expect(colours, d).toContain(d);
     for (const d of ["--font-sans", "--radius-pill", "font-weight", "font-family"]) expect(colours, d).not.toContain(d);
     const shape = [...tokens.matchAll(/(?:^|\})\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/g)].map((m) => m[1] ?? "").join("");
-    for (const d of ['--font-sans: "Inter"', "--radius-pill: 8px;", "font-weight: 400;"]) expect(shape, d).toContain(d);
+    for (const d of ['--font-sans: "Manrope"', "--radius-pill: 8px;", "font-weight: 400;"]) expect(shape, d).toContain(d);
     // the rail: no edge beside the main column, its current item in HL's bright accent, its colours fading over 0.2 s — and cut under
     // reduced motion
     expect(shell).toContain(':root[data-area="trade"] .rail { border-right-color: transparent; }');

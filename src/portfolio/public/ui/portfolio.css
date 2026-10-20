@@ -1,15 +1,23 @@
 /* The Portfolio pane (ui/portfolio.js), the Account drawer, Receive and Move money (ui/money.js), and the Earn and Sell many sheets
-   (ui/earn.js), in the Clean cards look (M2): each part of the pane a white card on the ground (shell.css .card, which a .sec in a pane
-   is), what waits for the owner a warm card with a soft orange edge, numbers in Manrope 800, labels in sentence case. Colours, radii and
-   shadows only from ui/tokens.css, so Cream and Black alike; up and down always with their glyph. Motion: transform and opacity only
-   (and an outline's colour), none under prefers-reduced-motion. */
+   (ui/earn.js), in the ocean look: the net worth floats on open water, every other part of the pane is a glass card over it (shell.css
+   .card, which a .sec in a pane is), what waits for the owner a warm card with a soft orange edge, the large figures in Manrope's thinnest
+   weight, labels in Geist Mono. Colours, radii and shadows only from ui/tokens.css, so Light and Black alike; up and down always with
+   their glyph. Motion: transform and opacity only (and an outline's colour), none under prefers-reduced-motion. */
 
 .pf { min-width: 0; }
 .pf-fresh { display: flex; flex-direction: column; gap: 20px; max-width: 760px; }
 
-/* the net worth card: its label, the number (52, 800), ONE change line (today's, or the range's) with the ⓘ at its end, the range, and
-   the curve (140 high, the line in the text colour, the area under it barely) */
-.pane .sec.pf-worth { padding: 20px; gap: 16px; }
+/* the net worth: its label, the number (58, Manrope 200), ONE change line (today's, or the range's) with the ⓘ at its end, the range, and
+   the curve (140 high, the line in the text colour, the area under it barely). No card: it floats on the water as the reference's headline
+   does, over a fog of the ground's own colour (thick in the middle, gone at the edge) that keeps it legible while something swims under
+   it — and the sharks swim round it (account.html's ocean reads [data-ocean-calm]) */
+.pane .sec.pf-worth { padding: 20px; gap: 16px; position: relative; isolation: isolate; background: transparent; border-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.pane .sec.pf-worth::before { content: ""; position: absolute; inset: -40px -56px; z-index: -1; background: radial-gradient(closest-side, var(--fog) 35%, transparent); pointer-events: none; }
+/* the figure and its lines keep a fog of their own, thicker, so a shark crossing the edge of the water never crosses a word */
+.pf-worth-n { position: relative; }
+.pf-worth-n::before { content: ""; position: absolute; inset: -18px -36px; z-index: -1; background: radial-gradient(closest-side, var(--fog) 70%, transparent); pointer-events: none; }
+/* and so does the curve: a band of fog under the plot, soft at its two ends, so a school crossing it never reads as a mark on the curve */
+.pf-worth .pf-plot::before { content: ""; position: absolute; inset: -6px -14px; z-index: -1; background: linear-gradient(to right, transparent, var(--fog) 5%, var(--fog) 95%, transparent); pointer-events: none; }
 .pf-worth-h { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .pf-worth-n { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pf-today { font-size: 14px; display: flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; min-height: 20px; }
@@ -41,7 +49,7 @@
    connection keep their own words on hover) */
 .pf-curve path { pointer-events: none; }
 /* the point under the pointer, in figures, on the card's own white */
-.pf-read { position: absolute; top: 0; right: 0; background: var(--surface); color: var(--text); padding: 2px 0 2px 10px; font-weight: 600; pointer-events: none; will-change: transform; }
+.pf-read { position: absolute; top: 0; right: 0; background: var(--fog); color: var(--text); padding: 2px 0 2px 10px; font-weight: 600; pointer-events: none; will-change: transform; }
 .pf-read:empty { display: none; }
 
 /* the rules between the parts of a warm card: the orange itself, faint, so they read on its fill in Cream and in Black */

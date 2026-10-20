@@ -173,7 +173,7 @@ describe("the chrome around the mode", () => {
     expect(settings.html).toContain('<h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div>');
     // the cap is said here, once
     expect(p.el("set-writes").textContent).toBe("On: an order or a move goes through only when you sign it, or inside a limit you gave an agent, and is worth up to $250.00 each. The cap is yours to change: your signature, up or down.");
-    expect(String(p.el("set-theme").innerHTML)).toMatch(/data-v="cream" aria-pressed="true">Cream<\/button><button type="button" data-v="black" aria-pressed="false">Black<\/button>/);
+    expect(String(p.el("set-theme").innerHTML)).toMatch(/data-v="cream" aria-pressed="true">Light<\/button><button type="button" data-v="black" aria-pressed="false">Black<\/button>/);
     expect(String(p.el("dial").innerHTML)).toContain("Agents' session");
     // the agents' table itself is ui-agents.test's: here only the sheet around it
     p.run("renderAgents = () => {}; openAgents()");
