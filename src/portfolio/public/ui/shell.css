@@ -327,6 +327,8 @@ table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
 dialog .row, .row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 label.chk1 { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: 13px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text); white-space: nowrap; min-height: 32px; }
 label.chk1 input { width: auto; flex: none; margin: 0; accent-color: var(--text); }
+/* a sentence beside a box in a dialog (the sign-out's "Switch to Guard first") wraps at a phone's width */
+.ask-f label.chk1 { white-space: normal; align-items: flex-start; }
 .msg { font-size: 13px; min-height: 18px; }
 .msg:empty { display: none; }
 .msg.no { color: var(--text); }

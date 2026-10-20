@@ -57,6 +57,8 @@ function renderChrome(L, owner) {
   // a lens on a venue disconnected, or an agent revoked, is let go; so is Paper once no paper account is open
   const l = lensNow();
   if ((l.kind === "venue" && !L.some((v) => v.id === l.id)) || (l.kind === "agent" && !A.keys.some((k) => k.address.toLowerCase() === l.id.toLowerCase())) || (l.kind === "paper" && !L.some((v) => v.paper))) view.lens = "";
+  // signing out: offered while this browser signs (agents-mount.js signOutAsk)
+  $("sign-out").hidden = !owner;
   $("lens-name").textContent = lensNow().name;
   $("lens").setAttribute("aria-label", `Showing ${lensNow().name}: choose what the page shows`);
   drawBanner(owner);
@@ -77,14 +79,21 @@ const count = (id, n, label) => {
 };
 
 /* pairing: on a server that moves real money the first browser pairs with the code the terminal printed; a code half typed is not wiped
-   by a refresh (the banner is drawn again only when this browser's role changes) */
+   by a refresh (the banner is drawn again only when this browser's role changes). A browser signed out says so, and signs in again only
+   when asked to (Owner.signIn): a new key, then the code — or a wait for another device of the owner's */
 function drawBanner(owner) {
   const b = $("banner");
   if (b.dataset.role === Owner.role) return;
   b.dataset.role = Owner.role;
   b.hidden = owner;
-  if (Owner.role === "needs-code") {
-    b.innerHTML = '<form id="code-form" class="codeform"><label for="code-in">Enter the pairing code shown in the terminal.</label><input id="code-in" name="code" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" spellcheck="false" required /><button type="submit" class="btn btn-primary">Pair</button><span class="msg" id="code-msg" role="status"></span></form>';
+  if (Owner.role === "signed-out") {
+    b.innerHTML = '<div class="codeform"><span>You signed out of this browser: it no longer signs for the account, and its key is deleted.</span><button type="button" class="btn btn-primary" id="sign-in">Sign in</button></div>';
+    $("sign-in").addEventListener("click", async () => {
+      await Owner.signIn();
+      await load();
+    });
+  } else if (Owner.role === "needs-code") {
+    b.innerHTML = '<form id="code-form" class="codeform"><label for="code-in">Enter the pairing code shown in the terminal the account runs in — running in the background, <span class="mono">npm run account:service -- code</span> shows it.</label><input id="code-in" name="code" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" spellcheck="false" required /><button type="submit" class="btn btn-primary">Pair</button><span class="msg" id="code-msg" role="status"></span></form>';
     $("code-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const r = await Owner.ready($("code-form").elements.code.value);
@@ -354,6 +363,7 @@ $("mode-more").addEventListener("click", () => A && openMode());
 /* Agents: the desk pane (ui/desk.js), where every agent is reached from — the sheet (openAgents, agents-mount.js) opens from there */
 $("open-agents").addEventListener("click", () => go("desk"));
 $("open-settings").addEventListener("click", () => A && openSettings());
+$("sign-out").addEventListener("click", () => A && signOutAsk());
 
 /* one click handler for what is drawn over and over: the trading area's Regular · Superagent, a toggle (seg), the mode (the rail's seg
    and the Mode sheet's), a sheet's or the drawer's close button, and a click outside the lens's menu */

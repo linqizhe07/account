@@ -179,7 +179,7 @@ const namedIn = (signers: string): string[] => {
 };
 
 /** a standing instruction the owner signs, which the restore applies again */
-const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "createSubAccount", "setWatch", "setIntent"]);
+const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "signOut", "createSubAccount", "setWatch", "setIntent"]);
 const num = (id: unknown, prefix: string): number => {
   const m = typeof id === "string" ? new RegExp(`^${prefix}-(\\d+)$`).exec(id) : null;
   return m ? Number(m[1]) : 0;
@@ -200,7 +200,6 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   // Beast needs the owner's signature: the row of the last verified `setPolicy mode open`, and of the last snapshot that said Guard
   let openedAt = -1;
   let closedAt = -1;
-  let owner = base.owners.length > 0;
   // devices that asked to sign, by their pairing rows: a key is taken from here only for a signed change of signers that names it
   const asked = new Map<string, { jwk: { kty: "EC"; crv: "P-256"; x: string; y: string }; label?: string | undefined }>();
   // authorisations a payee held, by nonce, until a later row says they were used or lapsed
@@ -235,7 +234,6 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
       }
       if (s.owners.length === 0 && n && isJwk(n.jwk) && row.signer === `device:${kidOf(n.jwk)}`) {
         s = { ...s, owners: [{ id: row.signer, kind: "device", label: typeof n.label === "string" ? n.label : "this browser", jwk: { kty: "EC", crv: "P-256", x: n.jwk.x, y: n.jwk.y }, addedAt: row.ts }] };
-        owner = true;
       }
       continue;
     }
@@ -283,6 +281,11 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
       }
       applied.add(digest);
       const action = a as OwnerAction;
+      // a browser signs only itself out (the door took it only so): a row that says otherwise is not taken now either
+      if (action.type === "signOut" && action.device !== signer) {
+        skipped.push(`signOut of ${row.ts}: it names another device than the one that signed it`);
+        continue;
+      }
       if (STANDING.has(action.type)) {
         // a change of signers names devices by id: the ones that had asked to sign are taken as waiting, with the keys their rows recorded
         let from = s;
@@ -364,7 +367,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   // save one whose owner's cancel waits to be sent again once its venue answers this network
   const unfinishedOrder = (o: LiveOrder) => (!o.unfollowed || o.cancelWanted === true) && (!DONE.has(o.status) || (!!o.walletTxs && !o.ref && o.status === "pending"));
   const unfinishedPayment = (p: Payment) => !!p.live && (p.status === "pending" || (p.status === "authorized" && !p.live.expired));
-  return { state: s, dial, authorisations: [...kept.values()], connections: [...connections.values()], orders: [...orders.values()].filter(unfinishedOrder), payments: [...payments.values()].filter(unfinishedPayment), earns: [...earns.values()].filter((e) => e.status === "pending"), ids, skipped, owner };
+  return { state: s, dial, authorisations: [...kept.values()], connections: [...connections.values()], orders: [...orders.values()].filter(unfinishedOrder), payments: [...payments.values()].filter(unfinishedPayment), earns: [...earns.values()].filter((e) => e.status === "pending"), ids, skipped, owner: s.owners.length > 0 };
 }
 
 /** a wallet's proof kept on its connection row, checked again: the wallet's signature over the sentence, naming the address */

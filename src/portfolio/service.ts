@@ -49,6 +49,7 @@ import type { Side } from "./venues.ts";
 import { cents, detailOf, plainRefusal, routeLine, sayOf, waitWords } from "./words.ts";
 import { HOW_TEXT, MAX_NOTES, MemoryStore, NOTE_TEXT, TOPIC_WORDS, TOPICS, type MemoryNote, type MemoryRules, type Topic } from "./account/memory.ts";
 import { etDate, isEarlyClose } from "./account/calendar.ts";
+import { pairingCode } from "./account/pairing.ts";
 import { AccountEngine, CARD_TTL_MS, slug, type AccountPage, type AccountSeed, type AgentAsk, type CardOffer, type DeclinedAsk, type Outcome, type WaitingConnection } from "./account/exchange.ts";
 import { defaultKeyRef } from "./live/credentials.ts";
 import { assetKey, byAsset, change24h, withEarn, type AssetRow, type DayChange, type EarnHeld, type MoneySummary } from "./account/holdings.ts";
@@ -357,6 +358,9 @@ export class PortfolioService {
   private capUsd: number;
   /** the venues of a restarted account are being connected again: what they hold is not on the account yet */
   private reconnecting = false;
+  /** the code the first browser pairs with (absent: a server that asks for none): this run's own, and a new one once the last device has
+   * signed out (newPairingCode) */
+  private pairCode: string | undefined;
 
   private constructor(
     private readonly opts: ServiceOptions,
@@ -375,6 +379,7 @@ export class PortfolioService {
     // real money starts Guard: every move an agent asks for waits for the owner until the owner signs the dial open
     if (opts.real) this.openness = { ...this.openness, mode: "guard" };
     this.capUsd = opts.liveWrites?.capUsd ?? 0;
+    this.pairCode = opts.liveWrites?.pairingCode ?? opts.pairingCode;
     this.ledger = this.openLedger();
     this.mount();
     this.memory = opts.account !== undefined || opts.venues === "frontline" ? new MemoryStore(join(opts.home, "memory"), () => Date.parse(this.now())) : undefined;
@@ -590,7 +595,8 @@ export class PortfolioService {
         const edition = v?.edition ? { venue: v.edition.connector.replace(/^live:(exchange:)?/, ""), name: v.edition.name } : undefined;
         return v ? { name: v.name, verdict: v.verdict, ...(v.said ? { said: v.said } : {}), ...(edition ? { edition } : {}) } : undefined;
       },
-      pairingCode: () => this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode,
+      pairingCode: () => this.pairCode,
+      ownerGone: () => this.newPairingCode(),
       memory: () => this.memory,
       desk: (action, who) => (this.desk ? this.desk.apply(action, who) : Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "this account keeps no desk: it is the real account's" }))),
       // a brain's key (account/brain-keys.ts): the key staged for this signature is taken here — once — and written to the provider's file.
@@ -2385,6 +2391,15 @@ export class PortfolioService {
    * the page's orders list carries them, and each paper account's book said of itself. The page reads the rest afresh */
   private streamSnapshot(): Record<string, unknown> {
     return { orders: (this.account?.orders ?? []).filter((o) => !DONE.has(o.status)).slice(0, 60), paper: [...this.paperControls.values()].map((c) => c.summary()) };
+  }
+
+  /** THE LAST DEVICE SIGNED OUT (account/exchange.ts ownerGone): on a server that asks for a pairing code, a new one replaces this run's — a
+   * code seen before lets no browser in now — and is said where the first one was, in the server's own output, which only the user reads
+   * (`npm run account:service -- code` takes the last one said there) */
+  private newPairingCode(): void {
+    if (this.pairCode === undefined) return;
+    this.pairCode = pairingCode();
+    console.log(`signed out: no browser signs for the account now\n  pairing code: ${this.pairCode} — the next browser becomes the owner only with this code, typed on the page (the code before it no longer works)`);
   }
 
   /** A PAPER ACCOUNT the account keeps itself, as its owner runs it — what a signed resetPaper or topUpPaper does, once the door has checked

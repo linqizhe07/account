@@ -62,7 +62,7 @@ import { parseIntent, parseOrder } from "../intents.ts";
 import { achArrival, etDate, whenLabel } from "./calendar.ts";
 import { doorOf, plan, type Door, type Leg, type Rail, type Route, type RouteRequest, type VenueView, whyWatchOnly } from "./doors.ts";
 import { heldUsd, inFlightUsd, launch, newPayment, settleDue, type Advance, type Authority, type Money, type Payment, type PaymentKind } from "./payments.ts";
-import { actionHash, BRAIN_KEY_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownEnvelope, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
+import { actionHash, BRAIN_KEY_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, SIGN_OUT_TTL_MS, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownEnvelope, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
 import { deskBrainKeyProblem, fingerprintOf, setBrainKeyProblem } from "./brain-keys.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
@@ -162,6 +162,9 @@ export interface Host {
   liveMoney?(): LiveMoney;
   /** when the server moves real money, the code it printed in its terminal: the first device becomes the owner only with it */
   pairingCode?(): string | undefined;
+  /** the last device that signed for the account signed out: a new pairing code is made and said where the first one was, so that the
+   * code seen before lets no browser in */
+  ownerGone?(): void;
   /** a real account's agent wallets (live/agent-wallet.ts): the address of the key made for one, and the wallet shown on the account once
    * the owner has signed it into being */
   agentWalletAddress?(name: string): Hex | Refusal;
@@ -624,6 +627,10 @@ export class AccountEngine {
     if (MONEY_TYPES.has(action.type) && Math.abs(now - action.nonce) > MONEY_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a money instruction is good for ${MONEY_TTL_MS / 60_000} minutes` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a money instruction is good for ${MONEY_TTL_MS / 60_000} minutes around its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     // a paper account started again or topped up: signed and sent at once, never an envelope kept to wipe the book days later
     if (PAPER_TYPES.has(action.type) && Math.abs(now - action.nonce) > PAPER_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a paper account's reset or paper money added is good for ${PAPER_TTL_MS / 60_000} minutes after signing — sign again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a paper account's reset or paper money added is good for ${PAPER_TTL_MS / 60_000} minutes around its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
+    // a browser signs only ITSELF out: another device's signature, or an owner's wallet key, signs no device out (Devices lets a browser
+    // in; a change of signers is convertToMultiSigUser) — and a sign-out is signed and sent at once, never an envelope kept for later
+    if (action.type === "signOut" && action.device !== signer) return this.refused(no("E_ACCOUNT_BAD_ACTION", { message: "a browser signs only itself out: this sign-out names another device", detail: { signer, device: action.device } }), envelope, signer);
+    if (action.type === "signOut" && Math.abs(now - action.nonce) > SIGN_OUT_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a sign-out is taken within ${SIGN_OUT_TTL_MS / 60_000} minutes of signing it — sign out again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a sign-out is taken within ${SIGN_OUT_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     // a brain's key is signed and sent at once (account/brain-keys.ts): a signature kept for later is not one the owner is still waiting on
     if (action.type === "setBrainKey" && Math.abs(now - action.nonce) > BRAIN_KEY_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of signing it — sign again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     for (const who of signers) this.nonces.use(who, action.nonce);
@@ -656,6 +663,7 @@ export class AccountEngine {
       case "createSubAccount":
       case "userSetAbstraction":
       case "convertToMultiSigUser":
+      case "signOut":
       case "setDestination":
       case "setWatch":
       case "setIntent": {
@@ -672,6 +680,12 @@ export class AccountEngine {
         if (action.type === "createSubAccount" && this.host.real) {
           const sub = next.subAccounts.find((x) => x.name === action.name.trim());
           if (sub) await this.host.agentWalletUp?.(sub);
+        }
+        // the last device signed out: no browser signs for the account now, and the code that let the first one in is replaced — the wrong
+        // tries counted against the old one with it
+        if (action.type === "signOut" && next.owners.length === 0) {
+          this.codeMisses = 0;
+          this.host.ownerGone?.();
         }
         return { ok: true, kind: "account", summary };
       }
@@ -875,6 +889,8 @@ export class AccountEngine {
         return `sub-account "${a.name}" created with a float of up to $${a.float}`;
       case "userSetAbstraction":
         return `account type → ${a.abstraction === "unifiedAccount" ? "Unified" : "Separate"}`;
+      case "signOut":
+        return `signed out: device ${a.device.slice("device:".length, "device:".length + 8)} no longer signs for the account${this.state.owners.length ? "" : " · no browser signs for it now: the next one pairs with a new pairing code"}`;
       case "convertToMultiSigUser":
         return `signers changed: ${(JSON.parse(a.signers) as { threshold: number; authorizedUsers: string[] }).threshold} of ${(JSON.parse(a.signers) as { authorizedUsers: string[] }).authorizedUsers.length}`;
       case "setDestination":
@@ -1557,6 +1573,11 @@ export class AccountEngine {
       quote = { words: r.quote.words, feeUsd: 0, receiveUsd: r.quote.usd, lands: r.quote.kind === "withdraw" ? r.quote.lands : "in the product", access: "owner", final: true, legs: [], earn: r.quote };
     } else if (isOwnerAction({ type })) {
       action = { ...draft, type, nonce } as unknown as OwnerAction;
+      // signing out: only a device that signs for the account now has anything to sign out of — said before anything is shown to sign
+      if (action.type === "signOut") {
+        const device = action.device;
+        if (!this.state.owners.some((o) => o.id === device && o.kind === "device")) return no("E_ACCOUNT_BAD_ACTION", { message: "this browser does not sign for the account: there is nothing to sign out of" });
+      }
       // a limit that names no intent carries no `intent` field at all: it then signs exactly as a limit always has
       if (action.type === "approveSpend" && typeof action.intent === "string" && action.intent.trim() === "") delete action.intent;
       // a limit whose budget does not renew carries no `renewHours` at all: it then signs, and spends, exactly as a limit always has

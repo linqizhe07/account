@@ -142,7 +142,7 @@
  * content's hash (?v=), which is kept a year unchanged (immutable); a file asked for without it, or with an older one, is revalidated.
  * The fonts (public/fonts, named by their version) are kept a year.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import express from "express";
 import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
@@ -170,6 +170,7 @@ import { sessionFrom } from "./openness.ts";
 import type { OrderPlan } from "./router.ts";
 import { isPending, loadOpenness, PortfolioService } from "./service.ts";
 import { defaultHome } from "./home.ts";
+import { pairingCode } from "./account/pairing.ts";
 import type { Side } from "./venues.ts";
 
 const PUBLIC = fileURLToPath(new URL("./public/", import.meta.url));
@@ -1077,15 +1078,7 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
   };
 }
 
-/** eight characters a person can read off a terminal and type: no 0/O, no 1/I/L */
-export function pairingCode(): string {
-  const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-  const bytes = randomBytes(8);
-  const chars = [...bytes].map((b) => alphabet[b % alphabet.length]).join("");
-  return `${chars.slice(0, 4)}-${chars.slice(4)}`;
-}
-
-export { defaultHome };
+export { defaultHome, pairingCode };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
