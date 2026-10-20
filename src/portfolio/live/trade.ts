@@ -122,6 +122,19 @@ export interface Market {
   /** a perpetual's funding rate per interval (0.0001 = 0.01%) and when it is next paid, ISO 8601 */
   fundingRate?: number | undefined;
   nextFundingAt?: string | undefined;
+  /** a perpetual: the hours between two funding payments, where the venue says (Hyperliquid pays every hour: 1) — what makes the rate a
+   * day's or a year's, and the next payment after `nextFundingAt` */
+  fundingEveryH?: number | undefined;
+  /** A PERPETUAL'S OWN PRICES AND DAY, as its venue says them: its MARK, the price positions are valued and liquidated at (Hyperliquid's
+   * markPx — not its mid); its ORACLE, the index its funding measures the mark against (oraclePx); its PREMIUM, the venue's own measure of
+   * the mark over the oracle that its funding comes from (Hyperliquid's premium: -0.0003749 = −0.0375%); and its OPEN INTEREST, the
+   * contracts open now in base units (openInterest) — and that worth at the mark, in dollars (openInterestUsd: the coins times the mark,
+   * as Hyperliquid's own page shows it). Each only where the venue says it */
+  markPrice?: number | undefined;
+  oraclePrice?: number | undefined;
+  premium?: number | undefined;
+  openInterest?: number | undefined;
+  openInterestUsd?: number | undefined;
   /** a token an issuer stands behind (category RWA_CATEGORY, live/categories.ts): who issues it, and whom the issuer says it is not for, in
    * the issuer's own words (dex.ts carries them; a venue that says nothing of it leaves them out) */
   issuer?: string | undefined;
@@ -402,6 +415,21 @@ export interface OrderState {
   walletTxs?: Array<{ chainId: number; chainIdHex: `0x${string}`; from: `0x${string}`; to: `0x${string}`; data: `0x${string}`; value: `0x${string}`; /** the gas the route needs, when the venue says: the wallet is given it */ gas?: `0x${string}` | undefined; what: string }> | undefined;
 }
 
+/** ONE FUNDING PAYMENT on a perpetual position (LiveTrader.funding): when (ISO 8601), the market, the position's side and size then, the
+ * price it was settled at where the venue says (the oracle at Hyperliquid), the rate, and the dollars — paid out of the position (above
+ * zero) or received (below). `quoted`: the rate was the one the quote carried, the venue's own history not having said it (a paper
+ * account's) */
+export interface FundingLine {
+  at: string;
+  symbol: string;
+  side?: "long" | "short" | undefined;
+  qty?: number | undefined;
+  price?: number | undefined;
+  rate?: number | undefined;
+  usd: number;
+  quoted?: true | undefined;
+}
+
 export interface LiveTrader {
   /** may this key or sign-in trade here: what the venue said, `unknown` where it has no call that says (its first refusal will) */
   can: boolean | "unknown";
@@ -431,6 +459,9 @@ export interface LiveTrader {
   amend?(ref: string, symbol: string, change: OrderChange, order: OrderRequest): Promise<OrderState | Refusal>;
   /** what is held here, where the venue lists positions */
   positions?(): Promise<Position[] | Refusal>;
+  /** THE FUNDING ITS PERPETUALS PAID AND RECEIVED, hour by hour, newest first — `limit` lines at most, none from before `since` (ms) where
+   * said — where the venue lists it: a paper account's book, Hyperliquid's userFunding for the account's address */
+  funding?(o: { limit: number; since?: number | undefined }): Promise<FundingLine[] | Refusal>;
   /** a position closed by the venue's own call (Alpaca's DELETE /positions); absent: the account closes it with a reduce-only market order */
   close?(symbol: string, qty: number, clientId: string): Promise<OrderState | Refusal>;
   /** what an order of `qty` at `price` would leave by the venue's own rule (OrderEstimate: its fee, a perpetual's liquidation price, and

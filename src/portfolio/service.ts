@@ -73,7 +73,7 @@ import { KEY_SHAPES, keyFileStatus, liveOptions, openLive, parseConnector, type 
 import { exchangeEarner, type EarnPosition, type EarnProduct, type LiveEarner } from "./live/earn.ts";
 import { exchangeEarnHook } from "./live/exchange-trade.ts";
 import type { LiveVenue } from "./account/live-moves.ts";
-import { CANDLE_INTERVALS, CANDLE_RANGES, DONE, floorTo, HISTORY_MOST, inDollars, INTERVAL_MS, type Candle, type CandleInterval, type CandlePage, type CandleRange, type CandleWindow, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderBook, type Position, type PublicTrade } from "./live/trade.ts";
+import { CANDLE_INTERVALS, CANDLE_RANGES, DONE, floorTo, HISTORY_MOST, inDollars, INTERVAL_MS, type Candle, type CandleInterval, type CandlePage, type CandleRange, type CandleWindow, type FundingLine, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderBook, type Position, type PublicTrade } from "./live/trade.ts";
 import { historyKeep, INTERVAL_RANGE, keepMsOf, PAGE_MOST, pageOf, pageWeight, RANGE_BAR, rangeSince, sessionsSince, windowKey } from "./live/history.ts";
 import { compareAcross, normalBase, type Comparison, type PlaceRule } from "./live/compare.ts";
 import { fold, paperFillLine, type StatementLine } from "./account/statement.ts";
@@ -1033,6 +1033,27 @@ export class PortfolioService {
       else positions.push(...r.map((p) => ({ ...p, venue: v.id, venueName: v.name, ...(v.paper ? { paper: true as const } : {}) })));
     }
     return { positions, missing };
+  }
+
+  /** FUNDING: what each venue's perpetuals paid and received, hour by hour, newest first — at one venue, or at every venue that lists it
+   * (LiveTrader.funding: a paper account's own book; Hyperliquid's userFunding for the account's address, keyless) — `limit` lines at most
+   * (FUNDING_LINES_MAX), each read through the same short-lived cache as the venues' positions (half a minute); a venue that could not be
+   * read is in `missing`, in its own words. A read */
+  async allFunding(o: { venue?: string | undefined; limit?: number | undefined } = {}): Promise<{ lines: VenueFunding[]; missing: ReadMissing[] } | Refusal> {
+    if (!this.account) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
+    const limit = Math.max(1, Math.min(FUNDING_LINES_MAX, Math.floor(o.limit ?? FUNDING_LINES_MAX)));
+    const all = this.tradingVenues();
+    const venues = all.filter((v) => v.trader!.funding && (!o.venue || v.id === o.venue));
+    if (o.venue && !venues.length) return no("E_VENUE_RAIL_CLOSED", { venue: o.venue, message: all.some((v) => v.id === o.venue) ? `${this.nameOf(o.venue)} lists no funding to the account` : `"${o.venue}" is not a venue connected live` });
+    const got = await Promise.all(venues.map(async (v) => ({ v, r: await this.marketReads.get(`funding|${v.id}|${limit}`, 30_000, () => v.trader!.funding!({ limit }).catch((err: unknown) => thrownBy(v.id, v.name, err)), this.liveVenues.has(v.id) ? v.id : undefined) })));
+    const lines: VenueFunding[] = [];
+    const missing: ReadMissing[] = [];
+    for (const { v, r } of got) {
+      if (isRefusal(r)) missing.push({ venue: v.id, venueName: v.name, why: r.message, code: r.code, part: "funding" });
+      else lines.push(...r.map((f) => ({ ...f, venue: v.id, venueName: v.name, ...(v.paper ? { paper: true as const } : {}) })));
+    }
+    lines.sort((x, y) => Date.parse(y.at) - Date.parse(x.at));
+    return { lines: lines.slice(0, limit), missing };
   }
 
   /** EARN: the products the venues connected live offer (DeFi vaults through the MetaMask Agent Wallet's mm, OKX's Simple Earn, Kraken
@@ -2249,7 +2270,7 @@ export class PortfolioService {
         this.stream.emit("quote", later(() => {
           const q = hub.quote(source, symbol);
           if (!q) return { live: false };
-          return { ...(q.bid !== undefined ? { bid: q.bid } : {}), ...(q.ask !== undefined ? { ask: q.ask } : {}), ...(q.bidSz !== undefined ? { bidSz: q.bidSz } : {}), ...(q.askSz !== undefined ? { askSz: q.askSz } : {}), ...(q.last !== undefined ? { last: q.last } : {}), ...(q.mark !== undefined ? { mark: q.mark } : {}), ...(q.funding !== undefined ? { funding: q.funding } : {}), ...(q.bar ? { bar: q.bar } : {}), at: new Date(q.at).toISOString(), ...(q.priceAt !== undefined ? { priceAt: new Date(q.priceAt).toISOString() } : {}), seenAt: new Date(q.seenAt).toISOString(), from: q.from ?? `${q.src} · live`, ...(q.delayMs !== undefined ? { delayMs: q.delayMs } : {}), ...(q.everyMs !== undefined ? { everyMs: q.everyMs } : {}), ...(q.askedEveryMs !== undefined ? { askedEveryMs: q.askedEveryMs } : {}), live: q.live, seq: q.seq };
+          return { ...(q.bid !== undefined ? { bid: q.bid } : {}), ...(q.ask !== undefined ? { ask: q.ask } : {}), ...(q.bidSz !== undefined ? { bidSz: q.bidSz } : {}), ...(q.askSz !== undefined ? { askSz: q.askSz } : {}), ...(q.last !== undefined ? { last: q.last } : {}), ...(q.mark !== undefined ? { mark: q.mark } : {}), ...(q.oracle !== undefined ? { oracle: q.oracle } : {}), ...(q.funding !== undefined ? { funding: q.funding } : {}), ...(q.openInterest !== undefined ? { openInterest: q.openInterest } : {}), ...(q.volumeUsd24h !== undefined ? { volumeUsd24h: q.volumeUsd24h } : {}), ...(q.prevDayPx !== undefined ? { prevDayPx: q.prevDayPx } : {}), ...(q.premium !== undefined ? { premium: q.premium } : {}), ...(q.bar ? { bar: q.bar } : {}), at: new Date(q.at).toISOString(), ...(q.priceAt !== undefined ? { priceAt: new Date(q.priceAt).toISOString() } : {}), seenAt: new Date(q.seenAt).toISOString(), from: q.from ?? `${q.src} · live`, ...(q.delayMs !== undefined ? { delayMs: q.delayMs } : {}), ...(q.everyMs !== undefined ? { everyMs: q.everyMs } : {}), ...(q.askedEveryMs !== undefined ? { askedEveryMs: q.askedEveryMs } : {}), live: q.live, seq: q.seq };
         }), key);
       } else if (what === "book") {
         this.stream.emit("book", later(() => {
@@ -3749,13 +3770,18 @@ const statementOf = (rows: readonly LedgerRow[]): StatementRow[] => rows.filter(
 // ---- what the wallet's reads answer -----------------------------------------------------------------------------------------------
 
 /** a venue, or a part of one, that could not be read for an answer: why, in its own words where it gave some */
+/** one funding payment at a venue (LiveTrader.funding), with the venue it is at — said paper where it is a paper account's */
+export type VenueFunding = FundingLine & { venue: string; venueName: string; paper?: true | undefined };
+/** the most funding lines one read lists */
+export const FUNDING_LINES_MAX = 500;
+
 export interface ReadMissing {
   venue: string;
   venueName: string;
   why: string;
   code?: string | undefined;
-  /** which read: its 24 hours, its positions, its price history, the comparison, its earn */
-  part?: "stats" | "positions" | "candles" | "compare" | "earn" | undefined;
+  /** which read: its 24 hours, its positions, its price history, the comparison, its earn, its funding */
+  part?: "stats" | "positions" | "candles" | "compare" | "earn" | "funding" | undefined;
 }
 
 /** EARN across the venues connected live: which venues earn (and whether the key or wallet may put money in), the products they offer, what

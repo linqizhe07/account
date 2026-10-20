@@ -1783,20 +1783,33 @@ function tkTicket(panel, kind0, preset) {
     const own = Date.parse(String(mk.quoteAt || ""));
     const readAt = Number.isFinite(own) ? own : mkAt;
     const read = !(Number(mk.delayMs) > 0) && readAt > 0 && Date.now() - readAt <= TK_TOP_LIVE_MS ? { bid: ok(mk.bid), ask: ok(mk.ask), price: ok(mk.price) } : {};
-    const sq = picked && typeof stQuoteOf === "function" ? stQuoteOf(picked.venue, picked.symbol) : null;
-    const seen = sq ? Date.parse(String(sq.seenAt || sq.at || "")) : NaN;
-    if (sq && sq.live === true && !(Number(sq.delayMs) > 0) && !(Number.isFinite(own) && Number.isFinite(seen) && seen < own)) {
+    const sq = streamNow();
+    if (sq) {
       const price = typeof stPrice === "function" ? ok(stPrice(sq, mk.kind === "perp" || mk.kind === "future")) : undefined;
-      return { bid: ok(sq.bid) ?? read.bid, ask: ok(sq.ask) ?? read.ask, price: price ?? read.price, at: seen };
+      return { bid: ok(sq.bid) ?? read.bid, ask: ok(sq.ask) ?? read.ask, price: price ?? read.price, at: Date.parse(String(sq.seenAt || sq.at || "")) };
     }
     return read.bid !== undefined || read.ask !== undefined || read.price !== undefined ? { ...read, at: readAt } : none;
   };
+  /* the stream's latest quote of the market picked, where the account says it is live, it is not a delayed one, and it is no older than the
+     market's own read: else null */
+  const streamNow = () => {
+    if (!mk || !picked || typeof stQuoteOf !== "function") return null;
+    const sq = stQuoteOf(picked.venue, picked.symbol);
+    if (!sq || sq.live !== true || Number(sq.delayMs) > 0) return null;
+    const own = Date.parse(String(mk.quoteAt || ""));
+    const seen = Date.parse(String(sq.seenAt || sq.at || ""));
+    return Number.isFinite(own) && Number.isFinite(seen) && seen < own ? null : sq;
+  };
   const topKey = () => { const t = topNow(); return [t.bid, t.ask, t.price].join("|"); };
-  /* the market as read, its top laid over as it is now: what the face's block and the smallest-order check read */
+  /* the market as read, its top laid over as it is now: what the face's block and the smallest-order check read — and a perpetual's mark,
+     oracle and funding rate as the stream says them now (streamNow), so the block never says a mark a minute old beside the bar's live one */
   const mkNow = () => {
     if (!mk) return mk;
     const t = topNow();
-    return { ...mk, ...(t.bid !== undefined ? { bid: t.bid } : {}), ...(t.ask !== undefined ? { ask: t.ask } : {}), ...(t.price !== undefined ? { price: t.price } : {}) };
+    const sq = mk.kind === "perp" ? streamNow() : null;
+    const pos = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+    const perp = sq ? { ...(pos(sq.mark) !== undefined ? { markPrice: sq.mark } : {}), ...(pos(sq.oracle) !== undefined ? { oraclePrice: sq.oracle } : {}), ...(typeof sq.funding === "number" && Number.isFinite(sq.funding) ? { fundingRate: sq.funding } : {}) } : {};
+    return { ...mk, ...(t.bid !== undefined ? { bid: t.bid } : {}), ...(t.ask !== undefined ? { ask: t.ask } : {}), ...(t.price !== undefined ? { price: t.price } : {}), ...perp };
   };
   /* the limit's placeholder: the price on the order's own side now (a buy's ask, a sell's bid, else the last price), as the field takes it;
      none while no price is now (topNow) — never the last one left standing as if it were */
@@ -2742,8 +2755,11 @@ function tkKindBlock(kind, m, at, item, c = {}) {
       L.push("Becomes a stock perpetual at the IPO; the venue rebases when the share count is public.");
     }
     if (m) {
-      if (m.price && !pre) L.push(`Mark ${esc(px(m.price))} ${esc(m.quote)}${m.changePct24h !== undefined ? ` · 24h ${chg(m.changePct24h)}` : ""}`);
-      if (m.fundingRate !== undefined) L.push(`Funding ${esc((m.fundingRate * 100).toFixed(4))}% a period${m.nextFundingAt ? `, next paid ${esc(nyTime(m.nextFundingAt))} New York` : ""}${m.maxLeverage ? ` · up to ${esc(String(m.maxLeverage))}x here` : ""}.`);
+      // the venue's mark where it says one (Hyperliquid's markPx: what a position is valued and liquidated at) and its oracle beside it — else
+      // the market's price, which is its middle or its last trade, never called a mark
+      if (m.price && !pre) L.push(`${m.markPrice ? `Mark ${esc(px(m.markPrice))}` : `Price ${esc(px(m.price))}`} ${esc(m.quote)}${m.markPrice && m.oraclePrice ? ` · oracle ${esc(px(m.oraclePrice))}` : ""}${m.changePct24h !== undefined ? ` · 24h ${chg(m.changePct24h)}` : ""}`);
+      const every = Number(m.fundingEveryH) > 0 ? Number(m.fundingEveryH) : 0;
+      if (m.fundingRate !== undefined) L.push(`Funding ${esc((m.fundingRate * 100).toFixed(4))}% ${every === 1 ? "an hour" : every ? `every ${every} hours` : "a period"}${m.nextFundingAt ? `, next paid ${esc(nyTime(m.nextFundingAt))} New York` : ""}${m.maxLeverage ? ` · up to ${esc(String(m.maxLeverage))}x here` : ""}.`);
       else if (m.maxLeverage) L.push(`Up to ${esc(String(m.maxLeverage))}x here.`);
       // the margin an order needs is the quote's (tkOrderWords: Margin required), worked out from the order the account prepared — never
       // from the amount typed, which a market's step may round down

@@ -158,6 +158,13 @@ export interface HubQuote {
   mark?: number | undefined;
   oracle?: number | undefined;
   funding?: number | undefined;
+  /** a perpetual, as its venue streams its day (Hyperliquid's activeAssetCtx, about every second): the contracts open, in base units
+   * (openInterest), the dollars traded over the last 24 hours (dayNtlVlm), the price 24 hours ago (prevDayPx), and the venue's premium of the
+   * mark over the oracle that its funding comes from (premium: -0.0003749 = −0.0375%) — each where the venue said it */
+  openInterest?: number | undefined;
+  volumeUsd24h?: number | undefined;
+  prevDayPx?: number | undefined;
+  premium?: number | undefined;
   /** the venue's own time of the latest message, ms (this machine's when the venue stamps none) */
   at: number;
   /** THE VENUE'S OWN MOMENT OF THE BEST BID AND ASK this quote carries, ms: their own channel's stamp (Hyperliquid's bbo, Coinbase's and
@@ -407,6 +414,10 @@ interface Mkt {
   mark?: number | undefined;
   oracle?: number | undefined;
   funding?: number | undefined;
+  openInterest?: number | undefined;
+  volumeUsd24h?: number | undefined;
+  prevDayPx?: number | undefined;
+  premium?: number | undefined;
   at: number;
   recvAt: number;
   seq: number;
@@ -559,7 +570,7 @@ export class StreamHub implements MarketHub {
     const seenAt = top ? (live ? Math.max(mk.bookRecvAt, c.lastMsgAt) : mk.bookRecvAt) : mk.bboSnapped ? (live && BBO_EVERY_CHANGE[mk.venue] ? Math.max(mk.bboRecvAt, c.lastMsgAt) : mk.bboRecvAt) : mk.recvAt;
     // the venue's own moment of that best bid and ask: the book's top's message, else their channel's — none before either has spoken
     const priceAt = top ? mk.topAt : mk.bboSnapped ? mk.bboAt : undefined;
-    return { ...(bid !== undefined ? { bid } : {}), ...(ask !== undefined ? { ask } : {}), ...(bid !== undefined && bidSz !== undefined ? { bidSz } : {}), ...(ask !== undefined && askSz !== undefined ? { askSz } : {}), ...(mk.last !== undefined ? { last: mk.last } : {}), ...(mk.mark !== undefined ? { mark: mk.mark } : {}), ...(mk.oracle !== undefined ? { oracle: mk.oracle } : {}), ...(mk.funding !== undefined ? { funding: mk.funding } : {}), at: mk.at, ...(priceAt !== undefined ? { priceAt } : {}), recvAt: mk.recvAt, seenAt, src: HUB_NAMES[mk.venue], seq: mk.seq, live, ...(mk.bar ? { bar: { ...mk.bar } } : {}) };
+    return { ...(bid !== undefined ? { bid } : {}), ...(ask !== undefined ? { ask } : {}), ...(bid !== undefined && bidSz !== undefined ? { bidSz } : {}), ...(ask !== undefined && askSz !== undefined ? { askSz } : {}), ...(mk.last !== undefined ? { last: mk.last } : {}), ...(mk.mark !== undefined ? { mark: mk.mark } : {}), ...(mk.oracle !== undefined ? { oracle: mk.oracle } : {}), ...(mk.funding !== undefined ? { funding: mk.funding } : {}), ...(mk.openInterest !== undefined ? { openInterest: mk.openInterest } : {}), ...(mk.volumeUsd24h !== undefined ? { volumeUsd24h: mk.volumeUsd24h } : {}), ...(mk.prevDayPx !== undefined ? { prevDayPx: mk.prevDayPx } : {}), ...(mk.premium !== undefined ? { premium: mk.premium } : {}), at: mk.at, ...(priceAt !== undefined ? { priceAt } : {}), recvAt: mk.recvAt, seenAt, src: HUB_NAMES[mk.venue], seq: mk.seq, live, ...(mk.bar ? { bar: { ...mk.bar } } : {}) };
   }
 
   book(source: string, symbol: string, depth = BOOK_TOP): HubBook | undefined {
@@ -1130,6 +1141,10 @@ export class StreamHub implements MarketHub {
       mk.mark = pos(ctx.markPx) ?? mk.mark;
       mk.oracle = pos(ctx.oraclePx) ?? mk.oracle;
       mk.funding = num(ctx.funding) ?? mk.funding;
+      mk.openInterest = nonNeg(ctx.openInterest) ?? mk.openInterest;
+      mk.volumeUsd24h = nonNeg(ctx.dayNtlVlm) ?? mk.volumeUsd24h;
+      mk.prevDayPx = pos(ctx.prevDayPx) ?? mk.prevDayPx;
+      mk.premium = num(ctx.premium) ?? mk.premium;
       this.stamp(mk, undefined, now);
       touch(mk, "quote");
     } else if (m.channel === "candle") {

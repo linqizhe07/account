@@ -11,8 +11,10 @@ import { signAgent, signOwner, simKey, type AgentAction, type OwnerAction } from
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
 import { liquidationPriceOf, paperBookPath, paperDir, type PaperBook } from "../../src/portfolio/live/paper.ts";
 import { readLike, type Listing, type PublicSource } from "../../src/portfolio/live/public-markets.ts";
+import { hlPerpSteps } from "../../src/portfolio/live/hl-rules.ts";
 import type { LiveTrader, Market, OrderState, Position } from "../../src/portfolio/live/trade.ts";
 import { no } from "../../src/portfolio/refuse.ts";
+import { startPortfolioServer } from "../../src/portfolio/server.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
 import { cents } from "../../src/portfolio/words.ts";
 
@@ -79,6 +81,25 @@ register({ kind: "standin-paper-broker", label: "a broker stand-in", needs: "key
   return { source: { name: req.label || "Broker", kind: "broker", reference: "standin", via: "a stand-in", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USD", amount: 5000, usd: 5000 }], trader: traderOf({ AAPL: AAPL_CLOSED }, []), readOnlyBecause: "a stand-in moves no money" } as never, first: [{ asset: "USD", amount: 5000, usd: 5000 }], summary: "connected" };
 } });
 
+/* two stand-ins for the funding a venue lists (LiveTrader.funding): one that says its perpetuals' hours, one whose venue does not answer */
+const FUND_T: LiveTrader = { ...traderOf({}, []), async funding(o) {
+  const all = [
+    { at: "2026-10-20T15:00:00.000Z", symbol: "BTC/USDC:USDC", side: "long" as const, qty: 0.5, rate: 0.0000125, usd: 0.51 },
+    { at: "2026-10-20T17:00:00.000Z", symbol: "BTC/USDC:USDC", side: "long" as const, qty: 0.5, rate: 0.0000125, usd: 0.52 },
+  ];
+  // newest first, as a venue answers it
+  return all.reverse().slice(0, o.limit);
+} };
+const MUTE_T: LiveTrader = { ...traderOf({}, []), async funding() {
+  return no("E_VENUE_UNREACHABLE", { venue: "mute", message: "Mute Ex did not answer" });
+} };
+register({ kind: "standin-funding", label: "a venue that lists funding", needs: "key-file", example: "", venues: [], async open(req) {
+  return { source: { name: req.label || "Fund Ex", kind: "cex", reference: "standin", via: "a stand-in", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USDC", amount: 100, usd: 100 }], trader: FUND_T, readOnlyBecause: "a stand-in" } as never, first: [{ asset: "USDC", amount: 100, usd: 100 }], summary: "connected" };
+} });
+register({ kind: "standin-funding-mute", label: "a venue whose funding does not answer", needs: "key-file", example: "", venues: [], async open(req) {
+  return { source: { name: req.label || "Mute Ex", kind: "cex", reference: "standin", via: "a stand-in", probe: { can: ["read", "trade"], note: "" }, read: async () => [{ asset: "USDC", amount: 100, usd: 100 }], trader: MUTE_T, readOnlyBecause: "a stand-in" } as never, first: [{ asset: "USDC", amount: 100, usd: 100 }], summary: "connected" };
+} });
+
 const homes: string[] = [];
 afterAll(() => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
@@ -109,6 +130,74 @@ async function boot(o: { writes?: boolean; home?: string; sources?: PublicSource
   return { svc, engine, home, own, ag, order };
 }
 const code = (o: Outcome | Refusal): string => (isRefusal(o) ? o.code : o.kind);
+
+describe("a Hyperliquid perpetual on paper: Hyperliquid's own order rules", () => {
+  it("keeps Hyperliquid's rules as its listing says them — a size in its lot, a price on its tick, $10 at least, refused before anything is signed — and a close of the WHOLE position is always taken, whatever its size and worth: one opened under another step, or worth less than $10 now, is never stranded; a close of part of one keeps the rules", async () => {
+    // Hyperliquid's BTC perpetual as its listing says it — first without its rules (a position opened before they were said), then with them
+    const perp: Listing = { symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", kind: "perp", base: "BTC", quote: "USDC", price: 60000, bid: 59999, ask: 60001, open: true, types: [], volumeUsd24h: 2e9, maxLeverage: 40 } as Listing;
+    const hl: PublicSource = { id: "hyperliquid", name: "Hyperliquid", kind: "exchange", connectTo: "hyperliquid-trade", connector: "live:hyperliquid-trade", listings: async (q) => [perp].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    const { svc, engine, own, order, home } = await boot({ sources: [hl], connect: false });
+    expect(code(await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" }))).toBe("account");
+    const book = () => JSON.parse(readFileSync(paperBookPath(home, "paper-1"), "utf8")) as PaperBook;
+    // 0.000123 BTC, worth $7.38: on the paper account's own step, and over its dollar, before Hyperliquid's rules were said
+    expect(code(await order("paper-1", { symbol: "BTC-PERP", side: "buy", orderType: "market", qty: "0.000123" }))).toBe("order");
+    expect(book().positions["BTC-PERP"]).toMatchObject({ side: "long", qty: 0.000123 });
+    // Hyperliquid's rules said now (szDecimals 5 at 60,000): sizes of 0.00001 BTC, whole-dollar prices, $10 at least
+    Object.assign(perp, hlPerpSteps(5, 60000));
+    const why = async (draft: Record<string, unknown>) => {
+      const p = await engine.prepare({ type: "liveOrder", venue: "paper-1", symbol: "BTC-PERP", side: "buy", ...draft });
+      return isRefusal(p) ? p.message : "prepared";
+    };
+    expect(await why({ orderType: "market", qty: "0.0001" })).toBe("Paper account: the smallest order in BTC perpetual on Hyperliquid is worth $10.00");
+    expect(await why({ orderType: "market", qty: "0.000215" })).toBe("Paper account: a size in BTC perpetual on Hyperliquid moves in steps of 0.00001 BTC");
+    expect(await why({ orderType: "limit", qty: "0.001", limitPrice: "59000.5" })).toBe("Paper account: a price in BTC perpetual on Hyperliquid moves in steps of 1");
+    expect(await why({ orderType: "limit", qty: "0.001", limitPrice: "59000" })).toBe("prepared");
+    // the whole position closed — off the lot, and worth less than $10 — is taken at its own size
+    const close = await engine.prepare({ type: "liveClose", venue: "paper-1", symbol: "BTC-PERP" });
+    if (isRefusal(close)) throw new Error(close.message);
+    const { nonce: _n, ...rest } = close.action as Extract<OwnerAction, { type: "liveClose" }>;
+    expect(code(await own(rest as NoNonce<OwnerAction>))).toBe("order");
+    expect(book().positions["BTC-PERP"]).toBeUndefined();
+    // a position worth $12 that falls to $8: closed whole, it is taken; a part of it under $10 is not
+    expect(code(await order("paper-1", { symbol: "BTC-PERP", side: "buy", orderType: "market", qty: "0.0002" }))).toBe("order");
+    Object.assign(perp, { price: 40000, bid: 39999, ask: 40001 });
+    const part = await engine.prepare({ type: "liveClose", venue: "paper-1", symbol: "BTC-PERP", qty: "0.0001" });
+    expect(isRefusal(part) && part.message).toBe("Paper account: the smallest order in BTC perpetual on Hyperliquid is worth $10.00");
+    const whole = await engine.prepare({ type: "liveClose", venue: "paper-1", symbol: "BTC-PERP" });
+    expect(isRefusal(whole) ? whole.message : "prepared").toBe("prepared");
+    void svc;
+  });
+});
+
+describe("the funding the perpetuals paid and received (GET /api/account/funding)", () => {
+  it("reads every venue that lists it, newest first with each line's venue — a paper account's said so — and names the venues that could not be read in their words; one venue alone where asked; a venue that lists none says so; a limit is a count, 1 to 500", async () => {
+    const { svc, own } = await boot({ sources: [] });
+    for (const [venue, connector, label] of [["fund", "live:standin-funding", "Fund Ex"], ["mute", "live:standin-funding-mute", "Mute Ex"]] as const) {
+      const r = await own({ type: "connectVenue", venue, connector, label, credentialRef: "" });
+      if (isRefusal(r)) throw new Error(r.message);
+    }
+    const all = await svc.allFunding();
+    if (isRefusal(all)) throw new Error(all.message);
+    expect(all.lines.map((l) => [l.at.slice(11, 16), l.venue, l.venueName, l.usd])).toEqual([["17:00", "fund", "Fund Ex", 0.52], ["15:00", "fund", "Fund Ex", 0.51]]);
+    expect(all.missing).toEqual([{ venue: "mute", venueName: "Mute Ex", why: "Mute Ex did not answer", code: "E_VENUE_UNREACHABLE", part: "funding" }]);
+    expect(await svc.allFunding({ venue: "real" })).toMatchObject({ code: "E_VENUE_RAIL_CLOSED", message: "Real Ex lists no funding to the account" });
+    expect(await svc.allFunding({ venue: "nowhere" })).toMatchObject({ code: "E_VENUE_RAIL_CLOSED", message: '"nowhere" is not a venue connected live' });
+    // over the page's own route: the same read, a limit kept to, a limit that is no count refused
+    const srv = await startPortfolioServer({ port: 0, service: svc, snapshotMs: 0 });
+    try {
+      const get = async (path: string) => {
+        const r = await fetch(`${srv.url}${path}`);
+        return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+      };
+      const one = await get("/api/account/funding?venue=fund&limit=1");
+      expect(one).toMatchObject({ status: 200, body: { ok: true, lines: [{ at: "2026-10-20T17:00:00.000Z", venue: "fund", symbol: "BTC/USDC:USDC", side: "long", qty: 0.5, rate: 0.0000125, usd: 0.52 }], missing: [] } });
+      expect((one.body.lines as unknown[]).length).toBe(1);
+      for (const bad of ["0", "501", "1e3", "x"]) expect(await get(`/api/account/funding?limit=${bad}`)).toEqual({ status: 400, body: { ok: false, error: "a limit is a count of lines, 1 to 500" } });
+    } finally {
+      await srv.close();
+    }
+  });
+});
 
 describe("a paper account beside a real one", () => {
   it("its row says paper; its balance is not in the totals, the holdings or the ready cash", async () => {

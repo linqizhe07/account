@@ -129,9 +129,13 @@ describe("the stream hub (live/stream-hub.ts)", () => {
     last("coinbase").say({ channel: "ticker", timestamp: "2026-10-16T15:00:00.050Z", sequence_num: 1, events: [{ type: "update", tickers: [{ product_id: "BTC-USD", price: "81766", best_bid: "81766", best_ask: "81767", best_bid_quantity: "2", best_ask_quantity: "3" }] }] });
     expect(hub.quote("coinbase", "BTC/USD")).toMatchObject({ bid: 81766, ask: 81767, last: 81766, seq: 2 });
     last("hyperliquid").say({ channel: "bbo", data: { coin: "BTC", time: t0 - 300, bbo: [{ px: "81765.0", sz: "5.27304", n: 20 }, { px: "81766.0", sz: "1.1", n: 3 }] } });
-    last("hyperliquid").say({ channel: "activeAssetCtx", data: { coin: "BTC", ctx: { funding: "0.0000125", openInterest: "1000", prevDayPx: "80000", markPx: "81765.5", oraclePx: "81760.0", midPx: "81765.5" } } });
-    // the seq is one count for every market of the hub (Coinbase's two messages came first): it only rises, market by market
-    expect(hub.quote("hyperliquid", "BTC-PERP")).toMatchObject({ bid: 81765, ask: 81766, bidSz: 5.27304, askSz: 1.1, mark: 81765.5, oracle: 81760, funding: 0.0000125, src: "Hyperliquid", live: true, seq: 4 });
+    last("hyperliquid").say({ channel: "activeAssetCtx", data: { coin: "BTC", ctx: { funding: "0.0000125", openInterest: "1000", prevDayPx: "80000", dayNtlVlm: "2599518859.45", premium: "-0.0003749322", markPx: "81765.5", oraclePx: "81760.0", midPx: "81765.5" } } });
+    // the seq is one count for every market of the hub (Coinbase's two messages came first): it only rises, market by market. A perpetual's
+    // day as the venue streams it: its open interest in coins, its dollars traded, the price 24 hours ago, its premium
+    expect(hub.quote("hyperliquid", "BTC-PERP")).toMatchObject({ bid: 81765, ask: 81766, bidSz: 5.27304, askSz: 1.1, mark: 81765.5, oracle: 81760, funding: 0.0000125, openInterest: 1000, volumeUsd24h: 2599518859.45, prevDayPx: 80000, premium: -0.0003749322, src: "Hyperliquid", live: true, seq: 4 });
+    // a message without them (the venue says its context in parts): what it said before stands
+    last("hyperliquid").say({ channel: "activeAssetCtx", data: { coin: "BTC", ctx: { funding: "0.000013", markPx: "81766" } } });
+    expect(hub.quote("hyperliquid", "BTC-PERP")).toMatchObject({ mark: 81766, funding: 0.000013, openInterest: 1000, volumeUsd24h: 2599518859.45, prevDayPx: 80000, premium: -0.0003749322, seq: 5 });
     last("kraken").say({ channel: "ticker", type: "snapshot", data: [{ symbol: "BTC/USD", bid: 81760.1, bid_qty: 0.3, ask: 81760.2, ask_qty: 0.7, last: 81760.1, timestamp: "2026-10-16T14:59:59.950Z" }] });
     expect(hub.quote("kraken", "BTC/USD")).toMatchObject({ bid: 81760.1, ask: 81760.2, last: 81760.1, src: "Kraken" });
     // OKX: the ticker's figures stand until bbo-tbt's first, then bbo-tbt's

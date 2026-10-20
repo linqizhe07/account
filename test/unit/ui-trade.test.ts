@@ -309,8 +309,8 @@ describe("the trade terminal (ui/terminal.js): the market bar's figures, its ses
     expect(p.out<string>("TT_CH.innerHTML")).toContain("Pick a market");
   });
 
-  it("offers HL's four tabs under the panels — Positions, Open orders (with how many are open in the lens), Trade history, Order history", () => {
-    expect(p.out("TT_TABS.map((t) => t[1])")).toEqual(["Positions", "Open orders", "Trade history", "Order history"]);
+  it("offers HL's tabs under the panels — Positions, Open orders (with how many are open in the lens), Trade history, Funding history, Order history", () => {
+    expect(p.out("TT_TABS.map((t) => t[1])")).toEqual(["Positions", "Open orders", "Trade history", "Funding history", "Order history"]);
     p.set("A", { ...pageOf([EX]), orders: [{ id: "ord-1", venue: "ex", status: "open" }, { id: "ord-2", venue: "ex", status: "filled" }] });
     expect(p.out("ttOpenCount()")).toBe(1);
   });
@@ -672,6 +672,62 @@ describe("the terminal fitted to the window, its bar's figures whole, its prices
     expect(q.out("KIDS.filter((k) => k.hidden).length")).toBe(0);
   });
 
+  it("a perpetual's bar as Hyperliquid's says it: the price, then its mark and oracle, its open interest in dollars at the mark, and its funding with the time left until it is next paid — counting down each second and rolling on to the next hour — the stream's figures over the read's while it pushes", () => {
+    const q = page();
+    q.set("A", pageOf([EX]));
+    const NEXT = Date.now() + (35 * 60 + 12) * 1000 + 400;
+    q.run(`var BOX = { innerHTML: "" }; var TAGS = { innerHTML: "" }; var SAID = { innerHTML: "" }; var EL = { querySelector: (s) => (s === "[data-tt-stats]" ? BOX : s === "[data-tt-tags]" ? TAGS : s === "[data-tt-said]" ? SAID : null) };
+      TK.got = {}; TT.item = { key: "perp:BTC", kind: "perp", base: "BTC", name: "BTC perpetual" }; TT.at = { venue: "ex", symbol: "BTC-PERP" };
+      TT.mk = { kind: "perp", base: "BTC", quote: "USDC", price: 82383.5, changePct24h: 0.43, change24h: 350.5, volumeUsd24h: 2.6e9, markPrice: 82384, oraclePrice: 82414.9, premium: -0.000375, openInterest: 40687.01858, openInterestUsd: 3351962439.01, fundingRate: 0.0000125, nextFundingAt: new Date(${NEXT}).toISOString(), fundingEveryH: 1 };
+      ttStats(EL);`);
+    const html = q.out<string>("BOX.innerHTML");
+    const stat = (name: string) => new RegExp(`data-k="st:${name.replace(/[/]/g, "\\/")}"[^>]*>(?:<span[^>]*>[^<]*</span>)<span class="tt-st-v[^"]*">(.*?)</span></div>`).exec(html)?.[1] ?? "";
+    expect(stat("Mark")).toBe("82,384");
+    expect(stat("Oracle")).toBe("82,414.9");
+    // open interest in dollars at the mark, the coins on hover
+    expect(html).toContain('<span title="40,687.02 BTC">$3.4B</span>');
+    // funding: its rate, then the time left — the countdown says when it ends and the funding's period, for the clock to roll it on
+    expect(html).toContain('data-k="st:Funding / Countdown"');
+    expect(html).toMatch(new RegExp(`<span class="acc">0\\.0013%</span> <span class="tt-count" data-tt-count="${NEXT}" data-tt-every="3600000">35:12</span>`));
+    // when it is paid and what the rate comes to over a year, on the label
+    expect(html).toMatch(/title="The venue&#39;s funding rate for each period: when it is above zero, longs pay shorts; below zero, shorts pay longs\. Next paid at \d\d:\d\d New York, then every hour\. At this rate a year comes to 10\.95%\."/);
+    // the order the figures go in when the bar is narrow: bid · ask, the oracle, the volume, the open interest, the mark, the funding, the change
+    const drop = (name: string) => Number((new RegExp(`data-k="st:${name}" data-tt-drop="(\\d+)"`).exec(html) ?? [])[1]);
+    expect([drop("Oracle"), drop("24h volume"), drop("Open interest"), drop("Mark"), drop("Funding / Countdown"), drop("24h change")]).toEqual([9, 8, 7, 6, 5, 2]);
+    // the countdown follows the clock: a second on, one second less; once it has run out, the next hour's
+    q.run(`var CNT = { dataset: { ttCount: "${NEXT}", ttEvery: "3600000" }, textContent: "" }; var PANE = { querySelectorAll: (s) => (s === "[data-tt-count]" ? [CNT] : []) }; ttCountdowns(PANE);`);
+    expect(q.out("CNT.textContent")).toMatch(/^35:1[12]$/);
+    q.run(`CNT.dataset.ttCount = String(Date.now() - 1000); ttCountdowns(PANE);`);
+    expect(q.out<string>("CNT.textContent")).toMatch(/^59:5[89]$/);
+    expect(Number(q.out<string>("CNT.dataset.ttCount")) - Date.now()).toBeGreaterThan(3_590_000);
+    expect([q.out("ttCountdown(7 * 3600e3 + 35 * 60e3 + 12e3)"), q.out("ttCountdown(-5)")]).toEqual(["7:35:12", "00:00"]);
+    // a funding time the venue said has passed: the next one a period on (and none for a venue that names no period)
+    const past = Date.parse("2026-10-20T16:00:00.000Z");
+    expect(q.out(`ttNextFunding({ nextFundingAt: "2026-10-20T16:00:00.000Z", fundingEveryH: 1 }, ${past + 25 * 60_000})`)).toBe(past + 3_600_000);
+    expect(q.run(`ttNextFunding({ nextFundingAt: "2026-10-20T16:00:00.000Z" }, ${past + 1}) === undefined`)).toBe(true);
+    // the stream pushing the market: its mark, oracle, open interest and day's volume over the read's
+    q.run(`ttLiveQuote = () => ({ live: true, bid: 82390, ask: 82391, mark: 82391.5, oracle: 82420.1, openInterest: 40700, volumeUsd24h: 2.7e9, funding: 0.000015, seenAt: new Date().toISOString(), from: "Hyperliquid · live", gotAt: Date.now() }); ttStats(EL);`);
+    const pushed = q.out<string>("BOX.innerHTML");
+    expect(pushed).toContain('data-k="st:Mark"');
+    expect(pushed).toContain(">82,391.5<");
+    expect(pushed).toContain(">82,420.1<");
+    expect(pushed).toContain('<span title="40,700 BTC">$3.4B</span>');
+    expect(pushed).toContain(">$2.7B<");
+    expect(pushed).toContain('<span class="acc">0.0015%</span>');
+    // where a perpetual's price is from goes right after bid · ask when the bar is narrow (its venue is the chart's caption, its age the
+    // feed's): before the mark, the oracle, the open interest and the funding, which nothing else says
+    const dropIn = (h: string, name: string) => Number((new RegExp(`data-k="st:${name}" data-tt-drop="(\\d+)"`).exec(h) ?? [])[1]);
+    expect([dropIn(pushed, "Bid · Ask"), dropIn(pushed, "Price from")]).toEqual([11, 10]);
+    expect(dropIn(pushed, "Price from")).toBeGreaterThan(dropIn(pushed, "Oracle"));
+    // the most leverage as HL says it, beside the market's name: 40x
+    q.run(`TT.mk.maxLeverage = 40; ttStats(EL);`);
+    expect(q.out<string>("TAGS.innerHTML")).toMatch(/<span class="tag tt-lev" title="The most leverage [^"]+ takes in this market">40x<\/span>/);
+    // a coin's bar has none of a perpetual's figures — and its price's source stays among the last to go
+    q.run(`ttLiveQuote = () => null; TT.item = { key: "coin:BTC", kind: "crypto", base: "BTC", name: "BTC" }; TT.mk = { kind: "spot", base: "BTC", quote: "USD", price: 82380, quoteFrom: "Coinbase", quoteAt: new Date().toISOString() }; ttStats(EL);`);
+    expect(q.out<string>("BOX.innerHTML")).not.toMatch(/st:Mark|st:Oracle|st:Open interest|st:Funding/);
+    expect(dropIn(q.out<string>("BOX.innerHTML"), "Price from")).toBe(3);
+  });
+
   it("writes a price to its market's step where the page read the market, else to the decimals its venue quotes the market's other prices in, else six figures — never an average's tail — with the figure as it came on hover", () => {
     const q = page();
     const fig = (n: number, o: Record<string, unknown> = {}) => q.out<{ text: string; exact: string }>(`ttFig(${n}, ${JSON.stringify(o)})`);
@@ -925,11 +981,18 @@ describe("the six kinds, as the page runs them", () => {
     expect((ousg.match(/Ondo Finance/g) ?? []).length).toBe(1);
     // with chains to choose from, a Chain field
     expect(kb("rwas", { symbol: "OUSG/USDC@Ethereum", kind: "token", base: "OUSG", quote: "USDC", open: true, types: ["market"] }, null, null, { chains: [{ symbol: "OUSG/USDC@Ethereum", chain: "Ethereum", quote: "USDC" }, { symbol: "OUSG/USDG@Robinhood Chain", chain: "Robinhood Chain", quote: "USDG" }] })).toContain('<select name="chain">');
-    // Perps: mark, funding and its next payment, the leverage the venue takes, the margin the amount needs, what is held
+    // Perps: the price — a venue that says no mark has its price called a price, never a mark — funding and its next payment, the leverage
+    // the venue takes, the margin the amount needs, what is held
     const perp = { symbol: "ETH/USDT:USDT", kind: "perp", base: "ETH", quote: "USDT", price: 2500, open: true, fundingRate: 0.0001, nextFundingAt: "2026-10-06T16:00:00.000Z", maxLeverage: 20, types: ["market", "limit"] };
     const facts = kb("perps", perp, { venue: "ex", venueName: "Exchange" }, null, { amount: "100", unit: "usd", leverage: "5", held: { side: "long", qty: 0.05, leverage: 5, liquidationPrice: 2100, entryPrice: 2480 }, positions: [] });
-    expect(facts).toContain("Mark 2,500 USDT");
+    expect(facts).toContain("Price 2,500 USDT");
+    expect(facts).not.toContain("Mark");
     expect(facts).toContain("Funding 0.0100% a period, next paid 12:00 New York · up to 20x here.");
+    // a venue that says its mark and its oracle (Hyperliquid's markPx and oraclePx), and pays funding every hour: the mark is its own — not
+    // the middle the price is — with the oracle beside it, and the rate an hour's
+    const hl = kb("perps", { ...perp, price: 2500.5, markPrice: 2500, oraclePrice: 2501.3, fundingEveryH: 1 }, { venue: "ex", venueName: "Exchange" }, null, { positions: [] });
+    expect(hl).toContain("Mark 2,500 USDT · oracle 2,501.3");
+    expect(hl).toContain("Funding 0.0100% an hour, next paid 12:00 New York · up to 20x here.");
     // the margin is the quote's, from the order prepared (tkOrderWords), never from the amount typed: a step may round the order down
     expect(facts).not.toContain("Margin");
     expect(facts).toContain("You hold long 0.05 at 5x · liquidation at 2,100 · entry 2,480.");
@@ -1590,6 +1653,42 @@ describe("the trading area in Hyperliquid's grammar: what the terminal and the t
     const all = q.out<string>("HBOX.innerHTML");
     for (const w of ["Filled", "Open", "Canceled", "Waiting at Broker", "SPDR S&amp;P 500 ETF Trust", "BTC / USDT", ">Limit<", ">63,226.6<", ">Market<"]) expect(all, w).toContain(w);
     expect(q.out("ttOrderRec({ key: 'order:x', kind: 'sell', description: 'Sell 0.5 SOL · SOL / USDT · stop at 137.83, limit 136 · 0.2 of 0.5 filled' })")).toMatchObject({ name: "SOL / USDT", side: "sell", type: "stop_limit", qty: 0.5, filled: 0.2, stop: 137.83, limit: 136 });
+  });
+
+  it("Funding history lists what the perpetuals paid and received, hour by hour, newest first, in HL's columns — the payment the owner's way (paid below zero, received above), the price it was settled at, a rate the quote carried marked so — in the lens, with the venues that could not be read said under it", async () => {
+    const q = page();
+    q.set("A", pageOf([EX, { ...HL, id: "paper-1", name: "Paper account", paper: true }]));
+    const lines = [
+      { at: "2026-10-20T17:00:00.000Z", symbol: "BTC-PERP", side: "long", qty: 0.1, price: 82414.9, rate: 0.0000125, usd: 0.103019, venue: "paper-1", venueName: "Paper account", paper: true },
+      { at: "2026-10-20T16:00:00.000Z", symbol: "ETH-PERP", side: "short", qty: 2, price: 2698, rate: 0.00002, usd: -0.10792, quoted: true, venue: "paper-1", venueName: "Paper account", paper: true },
+      { at: "2026-10-20T15:00:00.000Z", symbol: "BTC/USDC:USDC", side: "long", qty: 0.5, rate: 0.0000125, usd: 0.51, venue: "ex", venueName: "Exchange" },
+    ];
+    q.run(`var HBOX = { innerHTML: "", isConnected: true }; var ASKED = []; api = async (path) => (ASKED.push(path), { ok: true, lines: ${JSON.stringify(lines)}, missing: [{ venue: "hl", venueName: "Hyperliquid", why: "Hyperliquid did not answer." }] })`);
+    q.run('TT.tab = "funding"; ttFunding(HBOX)');
+    await settle();
+    const html = q.out<string>("HBOX.innerHTML");
+    expect(q.out("ASKED")).toEqual(["/api/account/funding"]);
+    expect(html).toMatch(/<th title="On your clock: [^"]+">Time<\/th><th>Market<\/th><th>Direction<\/th><th class="r">Size<\/th><th class="r" title="[^"]+">Price<\/th><th class="r" title="[^"]+">Payment<\/th><th class="r" title="[^"]+">Rate<\/th>/);
+    const rows = html.split("<tr>").slice(2);
+    // a long paid: below zero, the oracle it was settled at, the hour's rate
+    expect(rows[0]).toContain("<b>BTC-PERP</b> <span class=\"tag paper\">Paper</span>");
+    expect(rows[0]).toContain('<td class="up">Long</td><td class="r">0.1</td><td class="r">82,414.9</td>');
+    expect(rows[0]).toContain('<td class="r"><span class="down"><span aria-hidden="true">▼</span><span class="sr">down</span> $0.10</span></td><td class="r">0.0013%</td>');
+    // a short received: above zero; its rate the quote's, marked so on hover
+    expect(rows[1]).toContain('<td class="down">Short</td>');
+    expect(rows[1]).toContain('<span class="up"><span aria-hidden="true">▲</span><span class="sr">up</span> $0.11</span>');
+    expect(rows[1]).toContain(`<td class="r tt-quoted" title="The rate the quote carried: the venue's own history had not said this hour's when it was settled">0.0020%</td>`);
+    // a venue that says no price: none made up
+    expect(rows[2]).toContain('<td class="r">0.5</td><td class="r">—</td>');
+    expect(html).toContain('<p class="dim small tt-missed">Not read: Hyperliquid: Hyperliquid did not answer.</p>');
+    // the paper lens: the paper account's alone
+    q.run('view.lens = "paper"; HBOX.innerHTML = ""; ttFunding(HBOX)');
+    await settle();
+    expect(q.out<string>("HBOX.innerHTML")).not.toContain("BTC/USDC:USDC");
+    // nothing paid yet: said so
+    q.run('view.lens = ""; api = async () => ({ ok: true, lines: [], missing: [] }); HBOX.innerHTML = ""; ttFunding(HBOX)');
+    await settle();
+    expect(q.out<string>("HBOX.innerHTML")).toBe('<p class="empty">No funding paid or received yet: an open perpetual pays or receives it every hour.</p>');
   });
 
   it("Open orders: HL's columns, the market by its name, the account's id on hover, Cancel all heading the buttons", () => {
@@ -2977,6 +3076,34 @@ describe("feat/paper-live phase 4: the ticket follows the market, its summary sa
     t.field(name).value = v;
     t.field(name).dispatchEvent({ type: "input" });
   };
+
+  it("a perpetual's block says the mark, the oracle and the funding the stream pushes now — never the read's from when the ticket opened beside the bar's live ones — and the read's again once the stream is not live", async () => {
+    const PERP = { symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", kind: "perp", base: "BTC", quote: "USDC", price: 82383.5, bid: 82383, ask: 82384, markPrice: 82384, oraclePrice: 82414.9, fundingRate: 0.0000125, fundingEveryH: 1, maxLeverage: 40, priceStep: 1, qtyStep: 0.00001, minNotional: 10, open: true, types: ["market", "limit"], quoteAt: new Date().toISOString() };
+    const t = ticketPage();
+    t.run('Object.defineProperty(Owner, "role", { get: () => "owner", configurable: true })');
+    t.set("A", pageOf([{ ...EX, cashUsd: 1000, holdings: [{ asset: "USDT", amount: 1000, usd: 1000, class: "stable" }] }]));
+    t.run(`ANSWERS["/api/account/market?venue=ex"] = { ok: true, market: ${JSON.stringify(PERP)} }; ANSWERS["/api/account/compare"] = { ok: false };
+      var QUOTE = null; stQuoteOf = () => QUOTE; load = async () => {}; Owner.prepare = () => new Promise(() => {});`);
+    t.set("ITEM", ROW("perp", "BTC", { at: [{ venue: "ex", venueName: "Exchange", symbol: "BTC-PERP", connected: true, canTrade: true, public: false, price: 82383.5 }] }));
+    t.run('TK.kind = "perps"; tkTicket(PANEL, "perps", { venue: "ex", symbol: "BTC-PERP", side: "buy", item: ITEM })');
+    await settle();
+    const block = () => String(t.part("[data-kb]").innerHTML);
+    expect(block()).toContain("Mark 82,384 USDC · oracle 82,414.9");
+    expect(block()).toContain("Funding 0.0013% an hour");
+    // the stream pushes the market: the block's mark, oracle and rate are the push's
+    t.run(`QUOTE = { venue: "ex", symbol: "BTC-PERP", bid: 82390, ask: 82391, mark: 82391.5, oracle: 82420.1, funding: 0.000015, live: true, seenAt: new Date().toISOString() }; stTell("quote", QUOTE)`);
+    await settle();
+    expect(block()).toContain("Mark 82,391.5 USDC · oracle 82,420.1");
+    expect(block()).toContain("Funding 0.0015% an hour");
+    // the stream not live there now (its venue's socket down): the read's figures again, never the last push's standing as now
+    t.run(`QUOTE = { ...QUOTE, live: false }; stTell("quote", QUOTE)`);
+    await settle();
+    expect(block()).toContain("Mark 82,384 USDC · oracle 82,414.9");
+    // a push older than the market's own read is not laid over it
+    t.run(`QUOTE = { ...QUOTE, live: true, seenAt: new Date(Date.now() - 60000).toISOString() }; stTell("quote", QUOTE)`);
+    await settle();
+    expect(block()).toContain("Mark 82,384 USDC");
+  });
 
   it("works out an exit's price from a percent and back, and Mid and BBO from the book's top — on the market's step, the side's own way", () => {
     const p = page();
