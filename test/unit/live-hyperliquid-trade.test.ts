@@ -553,11 +553,13 @@ describe("the markets, as the library loads them", () => {
     expect(refusal(await t.place(order({ symbol: "MATIC/USDC:USDC", qty: 100, limitPrice: 0.4 }))).code).toBe("E_VENUE_MARKET_CLOSED");
   });
 
-  it("one market: the best bid and ask from Hyperliquid's book, the day and the hourly funding from its asset context, the price grid from the price now", async () => {
+  it("one market: the best bid and ask from Hyperliquid's book, the day and the hourly funding from its asset context — with its mark, its oracle, its premium and its open interest — the price grid from the price now", async () => {
     const { t, net } = await connected();
     net.seen.splice(0);
     const m = ok(await t.market("BTC-PERP"));
-    expect(m).toMatchObject<Partial<Market>>({ symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", bid: 81359, ask: 81360, price: 81359.5, priceStep: 1, changePct24h: -2.3776, change24h: -1981.5, volumeUsd24h: 3341631875.3607402, fundingRate: 0.0000125, nextFundingAt: "2026-10-08T19:00:00.000Z", maxLeverage: 40, minNotional: 10 });
+    expect(m).toMatchObject<Partial<Market>>({ symbol: "BTC/USDC:USDC", name: "BTC/USDC perpetual", bid: 81359, ask: 81360, price: 81359.5, priceStep: 1, changePct24h: -2.3776, change24h: -1981.5, volumeUsd24h: 3341631875.3607402, fundingRate: 0.0000125, nextFundingAt: "2026-10-08T19:00:00.000Z", fundingEveryH: 1, maxLeverage: 40, minNotional: 10 });
+    // the mark is markPx, not the mid the price is; open interest in dollars at the mark, to the cent
+    expect(m).toMatchObject<Partial<Market>>({ markPrice: 80992, oraclePrice: 81016.9, premium: 0.0002234102, openInterest: 39982.91944, openInterestUsd: Math.round(39982.91944 * 80992 * 100) / 100 });
     expect(types(net.seen)).toEqual(["info l2Book", "info metaAndAssetCtxs"]);
     expect(net.seen[0]!.body.coin).toBe("BTC");
     // a pre-IPO perpetual carries the valuation its price implies now, in its venue's unit
@@ -712,6 +714,29 @@ describe("positions and leverage", () => {
       { symbol: "SOL/USDC:USDC", name: "SOL/USDC perpetual", kind: "perp", side: "long", qty: 13.05, entryPrice: 114.8627, markPrice: 106.76, usd: 1393.218, unrealizedUsd: -105.7408, leverage: 3, marginMode: "isolated", liquidationPrice: 78.6416169761, marginUsd: 392.601726, native: expect.objectContaining({ coin: "SOL" }) as unknown },
       { symbol: "XYZ-NVDA/USDC:USDC", name: "NVDA perpetual on XYZ (HIP-3, xyz:NVDA)", kind: "perp", side: "short", qty: 1, entryPrice: 235, markPrice: 231.11, usd: 231.11, unrealizedUsd: 3.89, leverage: 5, marginMode: "isolated", liquidationPrice: 270.5, marginUsd: 50, native: expect.objectContaining({ coin: "xyz:NVDA", szi: "-1.0" }) as unknown },
     ]);
+  });
+
+  it("funding: userFunding for the account's own address — keyless, the address alone — each payment newest first by its market, the position's side and size then (szi), the rate, and what was paid: Hyperliquid writes usdc below zero for a payment, so paid is above zero; anything not funding left out; the last week unless said; `limit` at most", async () => {
+    const H = 3_600_000;
+    const UF = [
+      { delta: { type: "funding", coin: "BTC", usdc: "-0.051234", szi: "0.03973", fundingRate: "0.0000125", nSamples: null }, hash: "0xa166e3fa63c25663024b03f2e0da011a00307e4017465df020210d3d432e7cb8", time: NOW - 2 * H + 127 },
+      { delta: { type: "funding", coin: "xyz:NVDA", usdc: "0.002378", szi: "-1.0", fundingRate: "0.00000625", nSamples: null }, hash: "0xb166e3fa63c25663024b03f2e0da011a00307e4017465df020210d3d432e7cb8", time: NOW - H + 130 },
+      { delta: { type: "deposit", usdc: "100.0" }, hash: "0xc166e3fa63c25663024b03f2e0da011a00307e4017465df020210d3d432e7cb8", time: NOW - 3_000 },
+    ];
+    const { t, net } = await connected({ info: { userFunding: () => UF } });
+    net.seen.splice(0);
+    const lines = ok(await t.funding!({ limit: 10, since: NOW - 86_400_000 }));
+    const asked = net.seen.filter((x) => x.to === "info").map((x) => x.body);
+    expect(asked).toEqual([{ type: "userFunding", user: expect.any(String), startTime: NOW - 86_400_000 }]);
+    expect(String((asked[0] as { user: string }).user).toLowerCase()).toBe(ACCOUNT.toLowerCase());
+    expect(lines).toEqual([
+      { at: new Date(NOW - H + 130).toISOString(), symbol: "XYZ-NVDA/USDC:USDC", usd: -0.002378, side: "short", qty: 1, rate: 0.00000625 },
+      { at: new Date(NOW - 2 * H + 127).toISOString(), symbol: "BTC/USDC:USDC", usd: 0.051234, side: "long", qty: 0.03973, rate: 0.0000125 },
+    ]);
+    // no `since`: the last week; `limit` kept to
+    net.seen.splice(0);
+    expect(ok(await t.funding!({ limit: 1 })).map((l) => l.symbol)).toEqual(["XYZ-NVDA/USDC:USDC"]);
+    expect(net.seen.filter((x) => x.to === "info").map((x) => (x.body as { startTime: number }).startTime)).toEqual([NOW - 7 * 86_400_000]);
   });
 
   it("leverage: updateLeverage {asset, isCross, leverage}, signed by the API wallet; the margin mode the account uses there stays when none is asked; isolated-only, the most, spot", async () => {

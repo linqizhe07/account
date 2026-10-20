@@ -317,8 +317,10 @@ export class LiveOrders {
   }
 
   /** Everything that does not depend on who signed: the switch, the venue, the market, the size, the price, the cap. `uncapped`: the cap is
-   * not judged here — only a close's quote asks so, to say what the close is worth and whether that is over the cap before it is signed */
-  private async plan(raw: Fields, uncapped = false): Promise<Plan | Refusal> {
+   * not judged here — only a close's quote asks so, to say what the close is worth and whether that is over the cap before it is signed.
+   * `whole`: a close of the WHOLE position — at a paper account, taken whatever its size's step and worth (a position opened under another
+   * step, or worth less than the smallest order now, is never stranded); a real venue judges its own */
+  private async plan(raw: Fields, uncapped = false, whole = false): Promise<Plan | Refusal> {
     const f: Fields = { venue: text(raw.venue), symbol: text(raw.symbol), side: text(raw.side), orderType: text(raw.orderType), qty: text(raw.qty), usd: text(raw.usd), limitPrice: text(raw.limitPrice), stopPrice: text(raw.stopPrice), tif: text(raw.tif), postOnly: text(raw.postOnly), reduceOnly: text(raw.reduceOnly), extendedHours: text(raw.extendedHours), trailPercent: text(raw.trailPercent), trailPrice: text(raw.trailPrice), takeProfit: text(raw.takeProfit), stopLoss: text(raw.stopLoss) };
     const m = this.money();
     if (!m) return no("E_ACCOUNT_BAD_ACTION", { message: "this account has no venues connected live" });
@@ -416,13 +418,15 @@ export class LiveOrders {
     const worstPrice = type === "market" || type === "stop" || trailing ? (side === "buy" ? floorTo(price * (1 + SLIPPAGE), mk.priceStep) : ceilTo((trailing ? trailStop! : price) * (1 - SLIPPAGE), mk.priceStep)) : undefined;
     const each = notionalOf(mk, 1, side === "buy" && worstPrice !== undefined ? worstPrice : price);
     let qty: number;
+    // a paper account's close of a whole position is taken at the position's own size and worth (see `whole`)
+    const exempt = whole && v.paper === true;
     if (byQty) {
       qty = Number(size);
-      if (!onStep(qty, mk.qtyStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a size in ${mk.name} moves in steps of ${figure(mk.qtyStep!)} ${mk.base}`, detail: { qtyStep: mk.qtyStep } });
+      if (!exempt && !onStep(qty, mk.qtyStep)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: a size in ${mk.name} moves in steps of ${figure(mk.qtyStep!)} ${mk.base}`, detail: { qtyStep: mk.qtyStep } });
     } else qty = floorTo(Number(size) / each, mk.qtyStep);
-    if (!(qty > 0) || (mk.minQty !== undefined && qty < mk.minQty - 1e-12)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is ${figure(mk.minQty ?? mk.qtyStep ?? 0)} ${mk.base}${byUsd ? ` (${usd((mk.minQty ?? mk.qtyStep ?? 0) * each)} at ${figure(price)})` : ""}`, detail: { minQty: mk.minQty, qtyStep: mk.qtyStep } });
+    if (!(qty > 0) || (!exempt && mk.minQty !== undefined && qty < mk.minQty - 1e-12)) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is ${figure(mk.minQty ?? mk.qtyStep ?? 0)} ${mk.base}${byUsd ? ` (${usd((mk.minQty ?? mk.qtyStep ?? 0) * each)} at ${figure(price)})` : ""}`, detail: { minQty: mk.minQty, qtyStep: mk.qtyStep } });
     const notional = notionalOf(mk, qty, price);
-    if (mk.minNotional !== undefined && notional < mk.minNotional - 1e-9) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is worth ${usd(mk.minNotional)}`, detail: { minNotional: mk.minNotional } });
+    if (!exempt && mk.minNotional !== undefined && notional < mk.minNotional - 1e-9) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name}: the smallest order in ${mk.name} is worth ${usd(mk.minNotional)}`, detail: { minNotional: mk.minNotional } });
     const maxUsd = side === "buy" && worstPrice !== undefined ? notionalOf(mk, qty, worstPrice) : notional;
     // the server's cap bounds real money: a paper account holds none, so an order there is bounded by the owner's limits alone
     if (!uncapped && !v.paper && maxUsd > w.capUsd + 1e-9) return no("E_ACCOUNT_LIMIT", { venue: v.id, message: `${usd(maxUsd)} is more than the most one order may be on this server (${usd(w.capUsd)}). It is set when the server starts: --live-cap`, detail: { capUsd: w.capUsd, orderUsd: maxUsd } });
@@ -1395,7 +1399,7 @@ export class LiveOrders {
     if (mk && isRefusal(mk)) return mk;
     const plainSell = !!mk && !mk.reduceOnly && !!mk.sellsReduce && pos.side === "long";
     if (mk && !mk.reduceOnly && !plainSell) return no("E_VENUE_ORDER_INVALID", { venue: v.id, message: `${v.name} takes no reduce-only order in ${mk.name}, and has no close of its own: close it at the venue, so that nothing opens the other way` });
-    const p = await this.plan({ venue: v.id, symbol: pos.symbol, side: pos.side === "long" ? "sell" : "buy", orderType: "market", qty: plain(qty), usd: "", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: native || plainSell ? "" : "true", extendedHours: "", trailPercent: "", trailPrice: "", takeProfit: "", stopLoss: "" }, uncapped);
+    const p = await this.plan({ venue: v.id, symbol: pos.symbol, side: pos.side === "long" ? "sell" : "buy", orderType: "market", qty: plain(qty), usd: "", limitPrice: "", stopPrice: "", tif: "", postOnly: "", reduceOnly: native || plainSell ? "" : "true", extendedHours: "", trailPercent: "", trailPrice: "", takeProfit: "", stopLoss: "" }, uncapped, qty >= pos.qty - 1e-12);
     if (isRefusal(p)) return p;
     return { pos, qty, native, plainSell, p };
   }

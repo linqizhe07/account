@@ -555,7 +555,7 @@ const HL_META = [
   ],
 ];
 /** a stand-in Hyperliquid: answers by the POST body's `type`, records every request with its body */
-function hyperliquidNet(candles: Rec[] = []) {
+function hyperliquidNet(candles: Rec[] = [], funding: Rec[] = []) {
   const sent: Array<{ url: string; method: string; headers: Record<string, string>; body: unknown }> = [];
   const http: Http = async (url, init = {}) => {
     const body: unknown = init.body ? JSON.parse(init.body) : undefined;
@@ -563,21 +563,29 @@ function hyperliquidNet(candles: Rec[] = []) {
     const type = (body as { type?: string } | undefined)?.type;
     if (type === "metaAndAssetCtxs") return json(HL_META);
     if (type === "candleSnapshot") return json(candles);
+    // its funding as fundingHistory answers it: the rows in the window asked, oldest first, 500 at most
+    if (type === "fundingHistory") {
+      const b = body as { coin: string; startTime: number; endTime: number };
+      return json(funding.filter((f) => f.coin === b.coin && Number(f.time) >= b.startTime && Number(f.time) <= b.endTime).slice(0, 500));
+    }
     return json({ error: "unknown" }, 422);
   };
   return { http, sent };
 }
 
 describe("Hyperliquid, keyless", () => {
-  it("asks one POST of one fixed body and lists every perpetual busiest first as <COIN>-PERP, with Hyperliquid's own mid, day, funding and leverage, to be placed through Hyperliquid's connection to trade", async () => {
+  it("asks one POST of one fixed body and lists every perpetual busiest first as <COIN>-PERP, with Hyperliquid's own mid, day, funding and leverage — its mark, oracle, premium and open interest, and its order rules at the price (lot, tick, $10) — to be placed through Hyperliquid's connection to trade", async () => {
     const net = hyperliquidNet();
     const hl = hyperliquidPublic({ http: net.http, clock: () => NOW });
     const got = (await hl.listings({ limit: 10 })) as Listing[];
     expect(net.sent).toEqual([{ url: "https://api.hyperliquid.xyz/info", method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: { type: "metaAndAssetCtxs" } }]);
     // the delisted one is not listed; ETH has no mid, so its mark is its price
     expect(got.map((m) => m.symbol)).toEqual(["BTC-PERP", "ETH-PERP"]);
-    expect(got[0]).toEqual({ symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", kind: "perp", base: "BTC", quote: "USDC", price: 85738.5, open: true, types: [], change24h: 304.5, changePct24h: 0.3564, volumeUsd24h: 1820069402.6143524647, fundingRate: 0.0000125, nextFundingAt: "2026-10-05T15:00:00.000Z", maxLeverage: 40 });
-    expect(got[1]).toMatchObject({ price: 2698.24, maxLeverage: 25 });
+    // its mark is markPx, not the mid the price is; its open interest in dollars at that mark, to the cent; its funding paid every hour; a
+    // size in steps of 10^-szDecimals (BTC's 5), a price on the fifth significant figure (whole dollars at 85,738), $10 at least
+    expect(got[0]).toEqual({ symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", kind: "perp", base: "BTC", quote: "USDC", price: 85738.5, open: true, types: [], change24h: 304.5, changePct24h: 0.3564, volumeUsd24h: 1820069402.6143524647, fundingRate: 0.0000125, nextFundingAt: "2026-10-05T15:00:00.000Z", fundingEveryH: 1, maxLeverage: 40, markPrice: 85738, oraclePrice: 85752, premium: -0.0001516, openInterest: 41005.04312, openInterestUsd: 3515690387.02, qtyStep: 0.00001, minQty: 0.00001, priceStep: 1, minNotional: 10 });
+    // ETH: szDecimals 4 — sizes of 0.0001 ETH, and at 2,698 a price on the tenth of a dollar (five significant figures, under 6 − 4 decimals)
+    expect(got[1]).toMatchObject({ price: 2698.24, maxLeverage: 25, qtyStep: 0.0001, priceStep: 0.1, minNotional: 10 });
     // traded through the account's Hyperliquid connection: an API wallet that places orders and cannot withdraw
     expect(hl).toMatchObject({ id: "hyperliquid", name: "Hyperliquid", kind: "exchange", connectTo: "hyperliquid-trade", connector: "live:hyperliquid-trade" });
     // the answer is kept: a search and a second listing ask nothing more
@@ -590,6 +598,32 @@ describe("Hyperliquid, keyless", () => {
     expect(hl.notes!({})).toEqual(["Hyperliquid: 1 of 2 perpetuals shown · search for the rest · traded once Hyperliquid is connected to trade"]);
     expect(hl.notes!({})[0]!.length).toBeLessThan(160);
     expect(hl.notes!({ q: "eth" })).toEqual([]);
+  });
+
+  it("reads a perpetual's past funding with fundingHistory, hour by hour — each hour's rate at the top of the hour it was paid — keeps what it read (a window asked again asks only for the hours not read), asks a long window 500 hours an answer, and refuses a name that is not <COIN>-PERP before asking", async () => {
+    // BTC's funding paid a moment after each hour for 600 hours, as Hyperliquid writes it (16:00:00.127 UTC)
+    const H = 3_600_000;
+    const top = Math.floor(NOW / H) * H;
+    const rows = Array.from({ length: 600 }, (_, i) => ({ coin: "BTC", fundingRate: (0.0000125 + i * 1e-9).toFixed(10), premium: "-0.0001", time: top - (599 - i) * H + 127 }));
+    const net = hyperliquidNet([], rows);
+    const hl = hyperliquidPublic({ http: net.http, clock: () => NOW, pace: async () => undefined });
+    const three = await hl.fundingHistory!("BTC-PERP", top - 2 * H - 1, top);
+    expect(three).toEqual([0, 1, 2].map((k) => ({ at: top - (2 - k) * H, rate: Number((0.0000125 + (597 + k) * 1e-9).toFixed(10)) })));
+    expect(net.sent.map((x) => x.body)).toEqual([{ type: "fundingHistory", coin: "BTC", startTime: top - 2 * H, endTime: top + H - 1 }]);
+    // asked again with one hour more: only that hour is asked
+    expect(await hl.fundingHistory!("BTC-PERP", top - 3 * H, top)).toHaveLength(4);
+    expect(net.sent.at(-1)!.body).toEqual({ type: "fundingHistory", coin: "BTC", startTime: top - 3 * H, endTime: top - 2 * H - 1 });
+    // 600 hours: asked 500 an answer, from where the first answer ended
+    const all = await hl.fundingHistory!("BTC-PERP", top - 599 * H, top);
+    expect(all).toHaveLength(600);
+    const asked = net.sent.slice(2).map((x) => x.body as { startTime: number });
+    expect(asked).toHaveLength(2);
+    expect(asked[1]!.startTime).toBe(rows[499]!.time + 1);
+    // an hour not paid yet is not in it; a name that is not <COIN>-PERP is not asked
+    expect(await hl.fundingHistory!("BTC-PERP", top + H, top + H)).toEqual([]);
+    const before = net.sent.length;
+    expect(await hl.fundingHistory!("io:ANTH-PERP", top - H, top)).toMatchObject({ code: "E_ACCOUNT_BAD_ACTION" });
+    expect(net.sent).toHaveLength(before);
   });
 
   it("reads a perpetual's bars with candleSnapshot, sorted and as numbers — saying where its bars start — and refuses a name that is not <COIN>-PERP before asking", async () => {

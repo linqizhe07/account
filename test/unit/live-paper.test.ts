@@ -623,7 +623,7 @@ describe("perpetuals with leverage: isolated margin, funding each hour, liquidat
     void hl;
   });
 
-  it("funding: each whole hour the position stands, the notional at the mark times the source's hourly rate, paid out of the margin by the long and received by the short; liquidation when the margin left falls to half the initial margin at the most leverage", async () => {
+  it("funding: at each hour on the clock the position stands across — the top of the hour, as Hyperliquid pays it — its size times the oracle (else the mark, else the price) times the hour's rate, paid out of the margin by the long and received by the short; liquidation when the margin left falls to half the initial margin at the most leverage", async () => {
     const h = home();
     const { hl, all } = leveraged();
     const { t, source: src } = await open(h, "paper-1", { all });
@@ -631,12 +631,14 @@ describe("perpetuals with leverage: isolated margin, funding each hour, liquidat
       ok(await t.setLeverage!("BTC-PERP", 10));
       ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
       const cash = book(h).cashUsd;
-      // two hours on: funding for two hours at 0.01% an hour on $6,000.50 at the mark
+      // two hours on the clock passed (28 min 20 s after the order, then an hour later): funding for two hours at 0.01% an hour on $6,000.50
+      // (no oracle or mark said: the price)
       now = NOW + 2 * 3_600_000 + 60_000;
       const rows = await src.read();
       const margin = rows.find((b) => b.where?.startsWith("paper margin"))!;
       expect(margin.where).toBe("paper margin · long 0.1 BTC-PERP · 10x · −$1.20 unrealised · −$1.20 funding");
-      expect(book(h).positions["BTC-PERP"]).toMatchObject({ marginUsd: 598.96991, fundingUsd: 1.2001, fundedAt: NOW + 2 * 3_600_000 });
+      expect(book(h).positions["BTC-PERP"]).toMatchObject({ marginUsd: 598.96991, fundingUsd: 1.2001, fundedAt: NEXT_HOUR + 3_600_000 });
+      expect(book(h).funding).toEqual([hourPaid(0, 0.60005, { qty: 0.1, price: 60005, rate: 0.0001 }), hourPaid(1, 0.60005, { qty: 0.1, price: 60005, rate: 0.0001 })]);
       // the same hour again charges nothing
       await src.read();
       expect(book(h).positions["BTC-PERP"]!.fundingUsd).toBe(1.2001);
@@ -738,6 +740,10 @@ function slow(s: PublicSource, ms: number): void {
 }
 const legsOf = (st: OrderState): string[] => ((st.native as { legs?: Array<{ ref: string }> }).legs ?? []).map((l) => l.ref);
 const HOUR_MS = 3_600_000;
+/** the first hour on the clock after NOW (NOW is 31 min 40 s past an hour): funding is settled at the top of each hour, as Hyperliquid pays it */
+const NEXT_HOUR = (Math.floor(NOW / HOUR_MS) + 1) * HOUR_MS;
+/** one hour's funding as the book writes it down: a source without a history settles at the rate its quote carries (quoted) */
+const hourPaid = (k: number, usd: number, o: { qty: number; price: number; rate: number; side?: "long" | "short" }) => ({ at: new Date(NEXT_HOUR + k * HOUR_MS).toISOString(), symbol: "BTC-PERP", usd, side: o.side ?? "long", qty: o.qty, price: o.price, rate: o.rate, quoted: true });
 
 describe("an order judged while the account waits on its quote", () => {
   beforeEach(() => {
@@ -1519,9 +1525,10 @@ describe("funding owed is never dropped", () => {
     expect(book(h).positions["BTC-PERP"]).toMatchObject({ fundingUsd: 0, fundedAt: NOW });
     hl.listings = listings;
     await src.read();
-    // ten hours at 0.01% an hour on $60,005 at the mark
+    // ten hours on the clock at 0.01% an hour on $60,005
     expect(book(h).positions["BTC-PERP"]!.fundingUsd).toBeCloseTo(60.005, 6);
-    expect(book(h).positions["BTC-PERP"]!.fundedAt).toBe(NOW + 10 * HOUR_MS);
+    expect(book(h).positions["BTC-PERP"]!.fundedAt).toBe(NEXT_HOUR + 9 * HOUR_MS);
+    expect(book(h).funding).toHaveLength(10);
   });
 
   it("a close in the look that follows hours away pays the funding of those hours first", async () => {
@@ -1533,8 +1540,8 @@ describe("funding owed is never dropped", () => {
     reprice(hl, "BTC-PERP", 62000);
     await src.settle!();
     expect(book(h).positions).toEqual({});
-    // three hours at 0.01% an hour on $6,200 at the mark
-    expect(book(h).funding).toEqual([{ at: new Date(NOW + 3 * HOUR_MS).toISOString(), symbol: "BTC-PERP", usd: 1.86 }]);
+    // three hours on the clock at 0.01% an hour on $6,200, each written down as it was settled
+    expect(book(h).funding).toEqual([0, 1, 2].map((k) => hourPaid(k, 0.62, { qty: 0.1, price: 62000, rate: 0.0001 })));
   });
 
   it("a close by hand after hours the look could not settle (its source silent) pays those hours before it takes the position off", async () => {
@@ -1555,8 +1562,8 @@ describe("funding owed is never dropped", () => {
     const closed = ok(await t.close!("BTC-PERP", 1, clientId()));
     expect(closed).toMatchObject({ status: "filled", avgPrice: 59992.999 });
     expect(book(h).positions).toEqual({});
-    // ten hours at 0.01% an hour on $60,005 at the mark, paid out of the margin before the close gave it back
-    expect(book(h).funding).toEqual([{ at: new Date(NOW + 10 * HOUR_MS).toISOString(), symbol: "BTC-PERP", usd: 60.005 }]);
+    // ten hours on the clock at 0.01% an hour on $60,005, paid out of the margin before the close gave it back
+    expect(book(h).funding).toEqual(Array.from({ length: 10 }, (_, k) => hourPaid(k, 6.0005, { qty: 1, price: 60005, rate: 0.0001 })));
     expect(book(h).cashUsd).toBeCloseTo(cash + 6001.7001 + (59992.999 - 60017.001) - 59.992999 - 60.005, 6);
   });
 
@@ -1568,12 +1575,60 @@ describe("funding owed is never dropped", () => {
     ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
     now = NOW + 3 * HOUR_MS + 60_000;
     ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
-    // three hours on 0.1 ($6,000.50 at the mark), not on the 0.2 held after
-    expect(book(h).funding).toEqual([{ at: new Date(NOW + 3 * HOUR_MS).toISOString(), symbol: "BTC-PERP", usd: 1.80015 }]);
+    // three hours on 0.1 ($6,000.50), not on the 0.2 held after
+    expect(book(h).funding).toEqual([0, 1, 2].map((k) => hourPaid(k, 0.60005, { qty: 0.1, price: 60005, rate: 0.0001 })));
     now = NOW + 4 * HOUR_MS + 60_000;
     await src.settle!();
-    expect(book(h).funding!.map((f) => f.usd)).toEqual([1.80015, 1.2001]);
-    expect(book(h).positions["BTC-PERP"]).toMatchObject({ qty: 0.2, fundingUsd: 3.00025, fundedAt: NOW + 4 * HOUR_MS });
+    expect(book(h).funding!.map((f) => [f.usd, f.qty])).toEqual([[0.60005, 0.1], [0.60005, 0.1], [0.60005, 0.1], [1.2001, 0.2]]);
+    expect(book(h).positions["BTC-PERP"]).toMatchObject({ qty: 0.2, fundingUsd: 3.00025, fundedAt: NEXT_HOUR + 3 * HOUR_MS });
+  });
+});
+
+describe("funding as Hyperliquid pays it: each hour at its own rate, on the oracle", () => {
+  afterEach(() => {
+    now = NOW;
+  });
+
+  it("an hour's funding at the rate its source's history says it was paid at, on the oracle — waited for a minute after the hour while the history does not say it yet, then at the rate the quote carries, written down as the quote's", async () => {
+    const h = home();
+    const s = sources();
+    // the stand-in history: each hour paid, and the rate it was paid at; the windows asked
+    const paid = new Map<number, number>();
+    const asked: Array<[number, number]> = [];
+    const hl = source("hyperliquid", "Hyperliquid", "exchange", [row("BTC-PERP", "perp", "BTC", "USDC", 60005, { fundingRate: 0.0001, maxLeverage: 40, oraclePrice: 60100, markPrice: 60010 })], {
+      fundingHistory: async (_symbol: string, from: number, to: number) => {
+        asked.push([from, to]);
+        return [...paid].filter(([at]) => at >= from && at <= to).map(([at, rate]) => ({ at, rate }));
+      },
+    });
+    const { t, source: src } = await open(h, "paper-1", { all: [s.coinbase, hl] });
+    ok(await t.place(order({ symbol: "BTC-PERP", qty: 0.1 })));
+    // the first hour on the clock passed, its rate in the history: 0.1 × the oracle 60,100 × 0.002%
+    paid.set(NEXT_HOUR, 0.00002);
+    now = NEXT_HOUR + 5_000;
+    await src.read();
+    expect(book(h).funding).toEqual([{ at: new Date(NEXT_HOUR).toISOString(), symbol: "BTC-PERP", usd: 0.1202, side: "long", qty: 0.1, price: 60100, rate: 0.00002 }]);
+    expect(asked).toEqual([[NEXT_HOUR, NEXT_HOUR + 5_000]]);
+    // the next hour, half a minute on, not in the history yet: waited for — nothing settled
+    now = NEXT_HOUR + HOUR_MS + 30_000;
+    await src.read();
+    expect(book(h).funding).toHaveLength(1);
+    expect(book(h).positions["BTC-PERP"]!.fundedAt).toBe(NEXT_HOUR);
+    // a minute past it, still not said: at the rate the quote carries (0.01%), written down as the quote's
+    now = NEXT_HOUR + HOUR_MS + 61_000;
+    await src.read();
+    expect(book(h).funding!.at(-1)).toEqual({ at: new Date(NEXT_HOUR + HOUR_MS).toISOString(), symbol: "BTC-PERP", usd: 0.601, side: "long", qty: 0.1, price: 60100, rate: 0.0001, quoted: true });
+    expect(book(h).positions["BTC-PERP"]).toMatchObject({ fundingUsd: 0.7212, fundedAt: NEXT_HOUR + HOUR_MS });
+    // the history asked again at most every ten seconds while it does not say an hour
+    expect(asked.length).toBeLessThanOrEqual(3);
+    // what the page's Funding history reads (LiveTrader.funding): the hours newest first, each as it was settled; `limit` of them at most,
+    // none from before `since`
+    expect(ok(await t.funding!({ limit: 10 }))).toEqual([
+      { at: new Date(NEXT_HOUR + HOUR_MS).toISOString(), symbol: "BTC-PERP", usd: 0.601, side: "long", qty: 0.1, price: 60100, rate: 0.0001, quoted: true },
+      { at: new Date(NEXT_HOUR).toISOString(), symbol: "BTC-PERP", usd: 0.1202, side: "long", qty: 0.1, price: 60100, rate: 0.00002 },
+    ]);
+    expect(ok(await t.funding!({ limit: 1 })).map((f) => f.at)).toEqual([new Date(NEXT_HOUR + HOUR_MS).toISOString()]);
+    expect(ok(await t.funding!({ limit: 10, since: NEXT_HOUR + 1 })).map((f) => f.at)).toEqual([new Date(NEXT_HOUR + HOUR_MS).toISOString()]);
   });
 });
 

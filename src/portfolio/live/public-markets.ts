@@ -221,6 +221,7 @@ import { usStocksPublic } from "./public-stocks.ts";
 import { STOCK_TOKEN_ISSUER, STOCK_TOKEN_TERMS, stockTokens } from "./robinhood.ts";
 import type { MarketHub } from "./stream-hub.ts";
 import { COINBASE_EXCHANGE_NAME, coinbaseHistory, coinbaseOnline, coinbaseProduct, hyperliquidHistory, libraryHistory, libraryNative, MONDAY_WEEKS, okxHistory, okxInstrument, PAGE_MS, type HistoryHttp } from "./history-crypto.ts";
+import { hlPerpSteps } from "./hl-rules.ts";
 import { badWindow, barStart, foldBars, historyKeep, hostLane, INTERVAL_WORDS, keepMsOf, limitOf, pageWeight, windowKey, type HistoryHost, type Pace } from "./history.ts";
 import { INTERVAL_MS, inDollars, type Candle, type CandleInterval, type CandlePage, type CandleWindow, type Market, type MarketStats, type OrderBook, type PublicTrade, type SessionClock } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeWords, isStable, notTheApi, notTheApiWords, rateLimitedNo, realHttp, redirectedNo, REGION, unreachable, type Http, type HttpReply } from "./types.ts";
@@ -300,6 +301,10 @@ export interface PublicSource {
   historyApart?: true | undefined;
   /** an event market's settlement, asked of the venue keyless (see the top of this file): `symbol` as its listing names it */
   settlement?(symbol: string): Promise<Settlement | Refusal>;
+  /** A PERPETUAL'S PAST FUNDING, hour by hour, where the source publishes it (Hyperliquid's fundingHistory, keyless): each hour paid (the
+   * top of the hour, ms) and its rate, for the hours from `from` to `to` (ms), oldest first — an hour not paid yet is not in it. A paper
+   * account settles a position's hours at these rates (live/paper.ts); a source without it, at the rate its quote carries */
+  fundingHistory?(symbol: string, from: number, to: number): Promise<Array<{ at: number; rate: number }> | Refusal>;
   /** let go of the refusals it holds (its place rule, its edge's page, a wait), so the next ask asks the venue: called when a forced re-check
    * found the venue answering this network (service.ts) */
   reset?(): void;
@@ -1773,7 +1778,10 @@ type HyperliquidAsk =
   /** one coin's book, {coin, time, levels: [bids, asks]}, twenty a side of {px, sz, n}, best first; and its last trades, [{side, px, sz,
    * time, …}] newest first (see the top of this file) */
   | { type: "l2Book"; coin: string }
-  | { type: "recentTrades"; coin: string };
+  | { type: "recentTrades"; coin: string }
+  /** one coin's funding, hour by hour, [{coin, fundingRate, premium, time}] oldest first, 500 an answer at most (live 2026-10-20: BTC's
+   * paid at 16:00:00.127 UTC, the top of each hour) */
+  | { type: "fundingHistory"; coin: string; startTime: number; endTime: number };
 
 /** a HIP-3 dex's name as Hyperliquid writes it (xyz, io, vntl, para, mkts): letters and digits */
 const HL_DEX = /^[A-Za-z][A-Za-z0-9]{0,15}$/;
@@ -1787,6 +1795,9 @@ export function hyperliquidInfo(http: Http, timeoutMs: number): (ask: Hyperliqui
     else if (ask.type === "metaAndAssetCtxs") {
       if (ask.dex !== undefined && !HL_DEX.test(ask.dex)) throw new Error(`the dex "${String(ask.dex).slice(0, 20)}" is not asked: a HIP-3 dex is named in letters and digits`);
       body = ask.dex === undefined ? { type: "metaAndAssetCtxs" } : { type: "metaAndAssetCtxs", dex: ask.dex };
+    } else if (ask.type === "fundingHistory") {
+      if (!HL_COIN.test(ask.coin)) throw new Error(`the coin "${String(ask.coin).slice(0, 20)}" is not asked: a coin is named in letters, digits and a dex's prefix`);
+      body = { type: "fundingHistory", coin: ask.coin, startTime: Math.floor(ask.startTime), endTime: Math.floor(ask.endTime) };
     } else if (ask.type === "l2Book" || ask.type === "recentTrades") {
       if (!HL_COIN.test(ask.coin)) throw new Error(`the coin "${String(ask.coin).slice(0, 20)}" is not asked: a coin is named in letters, digits and a dex's prefix`);
       body = { type: ask.type === "l2Book" ? "l2Book" : "recentTrades", coin: ask.coin };
@@ -1799,6 +1810,26 @@ export function hyperliquidInfo(http: Http, timeoutMs: number): (ask: Hyperliqui
 const HL_COIN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,30}$/;
 /** Hyperliquid pays funding every hour, on the hour */
 const hlNextFunding = (now: number): string => new Date((Math.floor(now / 3_600_000) + 1) * 3_600_000).toISOString();
+/** dollars to the cent */
+const cents = (x: number): number => Math.round(x * 100) / 100;
+/** A HYPERLIQUID PERPETUAL'S OWN FIGURES beside its price, from its meta (`u`: szDecimals) and its context (`c`, metaAndAssetCtxs): its mark,
+ * its oracle, its premium, its open interest in coins and in dollars at the mark, the hourly funding's period, and its order rules at the
+ * price (live/hl-rules.ts hlPerpSteps: its lot, its tick, $10 at least) — each only where Hyperliquid said it */
+function hlPerpFigures(u: Record<string, unknown>, c: Record<string, unknown>, price: number | undefined): Partial<Listing> {
+  const mark = pos(c.markPx);
+  const oracle = pos(c.oraclePx);
+  const premium = fin(c.premium);
+  const oi = nonNeg(c.openInterest);
+  const sz = nonNeg(u.szDecimals);
+  return {
+    ...(mark !== undefined ? { markPrice: mark } : {}),
+    ...(oracle !== undefined ? { oraclePrice: oracle } : {}),
+    ...(premium !== undefined ? { premium } : {}),
+    ...(oi !== undefined ? { openInterest: oi, ...(mark !== undefined ? { openInterestUsd: cents(oi * mark) } : {}) } : {}),
+    ...(fin(c.funding) !== undefined ? { fundingEveryH: 1 } : {}),
+    ...(sz !== undefined && Number.isInteger(sz) && sz <= 8 && price !== undefined ? hlPerpSteps(sz, price) : {}),
+  };
+}
 /** Hyperliquid's connection to trade: an API wallet that places orders and cannot withdraw (the connector live:hyperliquid-trade). Both
  * Hyperliquid listings name it: its perpetuals and its HIP-3 deployers' pre-IPO ones trade there */
 const HL_TRADE = { connectTo: "hyperliquid-trade", connector: "live:hyperliquid-trade" } as const;
@@ -1902,6 +1933,51 @@ function hyperliquidDepth(info: ReturnType<typeof hyperliquidInfo>, id: string, 
   };
 }
 
+/** the hours of past funding kept for every Hyperliquid perpetual together (an hour paid never changes), and how many 500-hour answers one
+ * window is asked in at most */
+const FUNDING_HOURS_KEPT = 50_000;
+const FUNDING_PAGES = 10;
+/** one Hyperliquid perpetual's past funding, hour by hour (fundingHistory), as a paper account settles its hours by it: its listing's
+ * `<COIN>-PERP` (a HIP-3 market's coin carries its dex). Each hour read is kept — in memory only, FUNDING_HOURS_KEPT of them at most, the
+ * oldest let go first — so a window asked again asks only for the hours not kept; a long one is asked 500 hours an answer, FUNDING_PAGES of
+ * them at most. Every ask waits its turn in Hyperliquid's one line (live/history.ts hostLane) */
+function hyperliquidFunding(info: ReturnType<typeof hyperliquidInfo>, id: string, name: string, form: { test: (coin: string) => boolean; example: string }, pace: Pace): { history: NonNullable<PublicSource["fundingHistory"]>; clear(): void } {
+  const kept = new Map<string, number>();
+  const history = async (symbol: string, from: number, to: number): Promise<Array<{ at: number; rate: number }> | Refusal> => {
+    const coin = /^(.+)-PERP$/i.exec(symbol.trim())?.[1];
+    if (!coin || !HL_COIN.test(coin) || !form.test(coin)) return no("E_ACCOUNT_BAD_ACTION", { venue: id, message: `a ${name} perpetual here is ${form.example}, not "${symbol.slice(0, 40)}"` });
+    const hours: number[] = [];
+    for (let h = Math.ceil(from / HOUR_MS) * HOUR_MS; h <= to && hours.length <= FUNDING_PAGES * 500; h += HOUR_MS) hours.push(h);
+    const missing = hours.filter((h) => !kept.has(`${coin}|${h}`));
+    if (missing.length) {
+      // each answer's times are the payments', a moment after the hour: asked to the end of the last hour wanted
+      let start = missing[0]!;
+      const end = missing[missing.length - 1]! + HOUR_MS - 1;
+      for (let page = 0; page < FUNDING_PAGES && start <= end; page++) {
+        await pace("hyperliquid", 20);
+        const body = await hlAsk(info, id, name, { type: "fundingHistory", coin, startTime: start, endTime: end });
+        if (isRefusal(body)) return body;
+        const rows = list(body).filter(isRec);
+        let last = -1;
+        for (const r of rows) {
+          const t = fin(r.time);
+          const rate = fin(r.fundingRate);
+          if (t === undefined || rate === undefined) continue;
+          kept.delete(`${coin}|${Math.floor(t / HOUR_MS) * HOUR_MS}`);
+          kept.set(`${coin}|${Math.floor(t / HOUR_MS) * HOUR_MS}`, rate);
+          last = Math.max(last, t);
+        }
+        if (rows.length < 500 || last < 0) break;
+        start = last + 1;
+      }
+      while (kept.size > FUNDING_HOURS_KEPT) kept.delete(kept.keys().next().value!);
+    }
+    return hours.filter((h) => kept.has(`${coin}|${h}`)).map((h) => ({ at: h, rate: kept.get(`${coin}|${h}`)! }));
+  };
+  return { history, clear: () => kept.clear() };
+}
+const HOUR_MS = 3_600_000;
+
 /** Hyperliquid's perpetuals (its first dex), keyless, busiest first: each `<COIN>-PERP`, placed through Hyperliquid's connection to trade
  * (HL_TRADE) once it is connected — so the Perps tab shows real prices marked "Connect to trade". The price is Hyperliquid's mid (its mark
  * when there is none), the change is from its prevDayPx, the volume its dayNtlVlm, the funding its hourly rate. Hyperliquid's own rule for
@@ -1948,12 +2024,14 @@ export function hyperliquidPublic(deps: PublicDeps = {}): PublicSource {
           ...(volume !== undefined ? { volumeUsd24h: volume } : {}),
           ...(funding !== undefined ? { fundingRate: funding, nextFundingAt } : {}),
           ...(maxLeverage !== undefined ? { maxLeverage } : {}),
+          ...hlPerpFigures(u, c, price),
         });
       });
       return out.sort((a, b) => (b.volumeUsd24h ?? -1) - (a.volumeUsd24h ?? -1));
     });
   const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" }, deps.pace ?? hostLane);
   const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" });
+  const funding = hyperliquidFunding(info, id, name, { test: (coin) => !coin.includes(":"), example: "<COIN>-PERP (BTC-PERP)" }, deps.pace ?? hostLane);
   return {
     id,
     name,
@@ -1961,9 +2039,11 @@ export function hyperliquidPublic(deps: PublicDeps = {}): PublicSource {
       keep.clear();
       bars.clear();
       depth.clear();
+      funding.clear();
     },
     book: depth.book,
     trades: depth.trades,
+    fundingHistory: funding.history,
     kind: "exchange",
     ...HL_TRADE,
     async listings(o) {
@@ -2590,6 +2670,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
   let shown: string[] | undefined;
   const bars = hyperliquidBars(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" }, deps.pace ?? hostLane);
   const depth = hyperliquidDepth(info, id, name, clock, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" });
+  const funding = hyperliquidFunding(info, id, name, { test: (coin) => coin.includes(":"), example: "<dex>:<COIN>-PERP (io:ANTH-PERP)" }, deps.pace ?? hostLane);
   return {
     id,
     name,
@@ -2598,9 +2679,11 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
       finds.clear();
       bars.clear();
       depth.clear();
+      funding.clear();
     },
     book: depth.book,
     trades: depth.trades,
+    fundingHistory: funding.history,
     kind: "exchange",
     ...HL_TRADE,
     async listings(o) {
@@ -2631,7 +2714,7 @@ export function hyperliquidPreIpoPublic(deps: PublicDeps = {}): PublicSource {
         const day = since(price, pos(c.prevDayPx));
         const venueName = `${name} · ${m.dex}`;
         const listing = preIpoListing({ symbol: `${m.coin}-PERP`, base: m.base, quote: m.quote, open: true, maxLeverage: pos(universe[at]!.maxLeverage), mark: m.mark }, { price, changePct24h: day.changePct, change24h: day.change, volumeUsd24h: volume, fundingRate: fin(c.funding), nextFundingAt }, venueName);
-        if (listing) out.push(readLike({ ...listing, venueName }, c));
+        if (listing) out.push(readLike({ ...listing, venueName, ...hlPerpFigures(universe[at]!, c, price) }, c));
       }
       if (!out.length && refused) return refused;
       const pool = out.sort(busierFirst).slice(0, Math.max(1, o.limit));

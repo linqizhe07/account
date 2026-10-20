@@ -56,6 +56,10 @@
  *                                                        order would take there (a read)
  *   GET  /api/account/positions?venue=okx                what is held there: perpetuals, shares, event contracts (a read); no venue: at
  *                                                        every venue that lists positions, and the ones that could not be read
+ *   GET  /api/account/funding?venue=&limit=              what the perpetuals paid and received in funding, hour by hour, newest first —
+ *                                                        at one venue, or at every venue that lists it (a paper account's book;
+ *                                                        Hyperliquid's userFunding for the account's address), `limit` lines (1 to 500)
+ *                                                        at most, and the venues that could not be read (a read)
  *   GET  /api/account/explore?tab=&q=&key=&sort=&limit=  Markets: what the connected venues list and what the venues not connected
  *                                                        publish without a key ("Connect to trade"), as one list with tabs, movers,
  *                                                        what closes soon and what trades most; `key`, a row's own exactly as `items`
@@ -678,6 +682,15 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
   // ---- the wallet's reads: Portfolio · Markets · Trade, and the agents one by one. None of them orders, moves or signs anything ----
   const mounted = (res: express.Response) => (svc.account ? true : void res.status(404).json({ ok: false, error: "the account layer is not mounted (--classic)" }));
   const answerOf = <T extends object>(res: express.Response, r: T | Refusal, key?: string) => void res.status(isRefusal(r) ? 409 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : key ? { ok: true, [key]: r } : { ok: true, ...r });
+
+  // FUNDING: what the perpetuals paid and received, hour by hour, newest first (a read). A limit is a plain count of lines, 1 to 500
+  app.get("/api/account/funding", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { venue: 40, limit: 4 });
+    if (!q) return;
+    if (q.limit !== "" && !(/^\d{1,3}$/.test(q.limit) && Number(q.limit) >= 1 && Number(q.limit) <= 500)) return void bad(res, "a limit is a count of lines, 1 to 500");
+    answerOf(res, await svc.allFunding({ ...(q.venue ? { venue: q.venue } : {}), ...(q.limit ? { limit: Number(q.limit) } : {}) }));
+  }));
 
   // MARKETS: what there is to trade, at the connected venues and (keyless, "Connect to trade") at the venues not connected. A limit is a
   // plain count of markets (digits), nothing a number parser would also take. A key is one row's own, given once: read past the 200

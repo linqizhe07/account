@@ -48,7 +48,7 @@
    (tick), and what waits to be drawn in the next frame (due) */
 const TT = { item: null, row: null, kind: "", at: null, mk: null, readAt: 0, said: "", fails: 0, posN: 0, tab: "positions", m: "chart", mounted: "", started: false, timer: 0, pollAt: 0, seq: 0, followKey: "", posKeys: [], tick: null, due: { bar: false, pos: false, lag: null, frame: false } };
 /* the tabs under the panels, as HL names its own: what is held, what rests on a book, what filled, and every order with what became of it */
-const TT_TABS = [["positions", "Positions"], ["open", "Open orders"], ["history", "Trade history"], ["orders", "Order history"]];
+const TT_TABS = [["positions", "Positions"], ["open", "Open orders"], ["history", "Trade history"], ["funding", "Funding history"], ["orders", "Order history"]];
 /* the three tabs a narrow terminal shows the chart and the book behind (one panel), so the order panel follows the chart directly */
 const TT_MTABS = [["chart", "Chart"], ["book", "Order book"], ["trades", "Trades"]];
 const TT_READ_MS = 5_000;
@@ -83,11 +83,12 @@ function ttFrame() {
       <section class="tt-book" data-tt-book aria-label="Order book and trades"></section>
       <aside class="tt-order tk-panel" id="tk-panel" aria-label="Order"></aside>
     </div>
-    <section class="tt-low" aria-label="Positions, open orders, trade history and order history">
+    <section class="tt-low" aria-label="Positions, open orders, trade history, funding history and order history">
       <div class="tt-tabs" role="tablist" data-tt-tabs></div>
       <div class="tt-tab" data-tt-tab="positions"></div>
       <section class="tt-tab" data-tt-tab="open" data-tp-open aria-labelledby="tp-open-h" hidden></section>
       <div class="tt-tab" data-tt-tab="history" hidden></div>
+      <div class="tt-tab" data-tt-tab="funding" hidden></div>
       <div class="tt-tab" data-tt-tab="orders" hidden></div>
     </section>
     <div class="tt-foot"><span class="tt-live" data-st-dot></span><span class="tt-clock" data-tt-clock title="Every time on this screen — the chart's axis, the trades beside the book, the tables under the panels — is on this one clock, yours"></span><span class="tp-state" data-tp-state></span><p class="tt-said" data-tt-said role="status"></p></div>
@@ -494,10 +495,46 @@ function ttWhyNot(b, fallback) {
    all fit (TT_DROP, ttFitStats); none, it always stays */
 const ttStat = (name, value, cls = "", title = "", drop = 0) => (value === undefined || value === null || value === "" ? "" : `<div class="tt-st" data-k="st:${esc(name)}"${drop ? ` data-tt-drop="${drop}"` : ""}><span class="tt-st-n"${title ? ` title="${esc(title)}"` : ""}>${esc(name)}</span><span class="tt-st-v${cls ? ` ${cls}` : ""}">${value}</span></div>`);
 /* which of the bar's figures go first when they do not all fit (the higher, the sooner): bid · ask (the book beside the chart says them),
-   then the volume, an event's close, the funding, the session, where the price is from, the change. The price never goes */
-const TT_DROP = { bidask: 8, volume: 7, closes: 6, funding: 5, session: 4, from: 3, change: 2 };
+   then the volume, an event's close, the funding, the session, where the price is from, the change. The price never goes. A perpetual's
+   "Price from" goes right after bid · ask (fromPerp): its venue is the chart's caption and its age the feed's, while its mark, oracle,
+   open interest and funding are said nowhere else */
+const TT_DROP = { bidask: 11, fromPerp: 10, oracle: 9, volume: 8, oi: 7, mark: 6, closes: 6, funding: 5, session: 4, from: 3, change: 2 };
 /* what a perpetual's funding is, on its label: the venue's rate for each funding period, and who pays whom by its sign */
 const TT_FUNDING_SAYS = "The venue's funding rate for each period: when it is above zero, longs pay shorts; below zero, shorts pay longs.";
+/* what a perpetual's mark, oracle and open interest are, on their labels */
+const TT_MARK_SAYS = "The venue's mark: the price your position is valued, and liquidated, at — not the middle of the book.";
+const TT_ORACLE_SAYS = "The venue's oracle: the index price its funding measures the mark against.";
+const TT_OI_SAYS = "Open interest: the contracts open now, worth this at the mark.";
+/* WHEN A PERPETUAL'S FUNDING IS NEXT PAID, ms: the venue's own time for it — or, once that has passed, the next one after it a period on
+   (Hyperliquid pays every hour) — undefined where the venue says neither */
+function ttNextFunding(m, now = Date.now()) {
+  const at = m && m.nextFundingAt ? Date.parse(m.nextFundingAt) : NaN;
+  if (!Number.isFinite(at)) return undefined;
+  if (at > now) return at;
+  const every = m && Number(m.fundingEveryH) > 0 ? Number(m.fundingEveryH) * 3_600_000 : 0;
+  return every ? at + (Math.floor((now - at) / every) + 1) * every : undefined;
+}
+/* the time left until then, as a countdown: 35:12 — 7:35:12 past an hour */
+function ttCountdown(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const two = (n) => String(n).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}` : `${two(Math.floor(s / 60))}:${two(s % 60)}`;
+}
+/* the bar's funding countdowns follow the clock (ttFeedTicks): each [data-tt-count] says when it ends (ms) and the funding's period (ms), and
+   rolls on to the next payment once it is reached */
+function ttCountdowns(el) {
+  if (!el || typeof el.querySelectorAll !== "function") return;
+  const now = Date.now();
+  for (const x of el.querySelectorAll("[data-tt-count]")) {
+    let at = Number(x.dataset.ttCount);
+    const every = Number(x.dataset.ttEvery) || 0;
+    if (at <= now && every > 0) {
+      at += (Math.floor((now - at) / every) + 1) * every;
+      x.dataset.ttCount = String(at);
+    }
+    setText(x, ttCountdown(at - now));
+  }
+}
 /* dollars traded, short: $1.9B · $120M · $880k (Markets' own formatter where it is) */
 const ttVol = (n) => (typeof mkVol === "function" ? mkVol(n) : money(n));
 
@@ -548,10 +585,16 @@ function ttStats(el) {
   const moved = live ? ttChangeAt(live.price, base === m ? read : base.price, base.change24h, base.changePct24h) : null;
   const pct = moved ? moved.pct : m && m.changePct24h !== undefined ? m.changePct24h : x.changePct24h;
   const abs = moved ? moved.abs : m && m.change24h !== undefined ? m.change24h : x.change24h;
-  const vol = m && m.volumeUsd24h !== undefined ? m.volumeUsd24h : x.volumeUsd24h;
+  const vol = live && live.volumeUsd24h !== undefined ? live.volumeUsd24h : m && m.volumeUsd24h !== undefined ? m.volumeUsd24h : x.volumeUsd24h;
   const bid = live && live.bid !== undefined ? live.bid : m ? m.bid : undefined;
   const ask = live && live.ask !== undefined ? live.ask : m ? m.ask : undefined;
   const funding = live && live.funding !== undefined ? live.funding : m ? m.fundingRate : undefined;
+  // a perpetual's own figures (the stream's where it is live, else the market read's): its mark, its oracle, its open interest in dollars
+  // at the mark, and the day's dollars traded
+  const mark = perp ? (live && live.mark !== undefined ? live.mark : m ? m.markPrice : undefined) : undefined;
+  const oracle = perp ? (live && live.oracle !== undefined ? live.oracle : m ? m.oraclePrice : undefined) : undefined;
+  const oiCoins = perp ? (live && live.openInterest !== undefined ? live.openInterest : m ? m.openInterest : undefined) : undefined;
+  const oiUsd = oiCoins !== undefined && mark !== undefined ? oiCoins * mark : m ? m.openInterestUsd : undefined;
   const quoteAt = live ? live.seenAt : m ? m.quoteAt : undefined;
   const quoteFrom = live ? live.from : m ? m.quoteFrom : undefined;
   const fmt = (n) => (ev ? tkCents(n) : px(n));
@@ -567,14 +610,25 @@ function ttStats(el) {
     ttStat(stock ? "Day change" : "24h change", change, dir, "", TT_DROP.change),
     ttStat("24h volume", vol !== undefined ? esc(ttVol(vol)) : x.contracts24h !== undefined ? `${esc(String(x.contracts24h))} contracts` : "", "", "", TT_DROP.volume),
   ];
+  // a perpetual as Hyperliquid's bar says it: its mark, its oracle, its open interest
+  if (mark !== undefined) parts.push(ttStat("Mark", esc(fmt(mark)), "", TT_MARK_SAYS, TT_DROP.mark));
+  if (oracle !== undefined) parts.push(ttStat("Oracle", esc(fmt(oracle)), "", TT_ORACLE_SAYS, TT_DROP.oracle));
+  if (oiUsd !== undefined) parts.push(ttStat("Open interest", `<span${oiCoins !== undefined ? ` title="${esc(`${qtyOf(oiCoins)} ${x.base || ""}`.trim())}"` : ""}>${esc(ttVol(oiUsd))}</span>`, "", TT_OI_SAYS, TT_DROP.oi));
   if (bid !== undefined && ask !== undefined && !ev) parts.push(ttStat("Bid · Ask", `${esc(px(bid))} · ${esc(px(ask))}`, "", "", TT_DROP.bidask));
-  // funding as HL colours it: a positive rate in the accent, a negative one in the down colour, the next payment's time in the text colour
-  if (perp && (m || live) && funding !== undefined) parts.push(ttStat("Funding", `<span class="${funding > 0 ? "acc" : funding < 0 ? "down" : ""}">${(funding * 100).toFixed(4)}%</span>${m && m.nextFundingAt ? ` <span class="tt-next">· next ${esc(nyTime(m.nextFundingAt))}</span>` : ""}`, "", TT_FUNDING_SAYS, TT_DROP.funding));
+  // funding as HL colours it — a positive rate in the accent, a negative one in the down colour — and, beside it, the time left until it is
+  // next paid, counting down each second (ttCountdowns); when that is, and what the rate comes to over a year, on hover
+  if (perp && (m || live) && funding !== undefined) {
+    const next = ttNextFunding(m);
+    const everyH = m && Number(m.fundingEveryH) > 0 ? Number(m.fundingEveryH) : 0;
+    const year = everyH ? ` At this rate a year comes to ${(funding * (8760 / everyH) * 100).toFixed(2)}%.` : "";
+    const when = next !== undefined ? ` Next paid at ${nyTime(new Date(next).toISOString())} New York${everyH ? `, then every ${everyH === 1 ? "hour" : `${everyH} hours`}` : ""}.` : "";
+    parts.push(ttStat(next !== undefined ? "Funding / Countdown" : "Funding", `<span class="${funding > 0 ? "acc" : funding < 0 ? "down" : ""}">${(funding * 100).toFixed(4)}%</span>${next !== undefined ? ` <span class="tt-count" data-tt-count="${next}" data-tt-every="${everyH * 3_600_000}">${esc(ttCountdown(next - Date.now()))}</span>` : ""}`, "", `${TT_FUNDING_SAYS}${when}${year}`, TT_DROP.funding));
+  }
   if (m && m.session) parts.push(ttStat("Session", esc(ttSessionWord(m.session)), "", "", TT_DROP.session));
   if (ev && x.closeTime) parts.push(ttStat("Closes", esc(`${nyDay(x.closeTime)} ${nyTime(x.closeTime)} New York`), "", "", TT_DROP.closes));
   // where the price is from, and — once it is not the last minute or two's — when it is from, as Markets says it (ui/markets.js
   // mkQuoteWords): "real time" is the source, not the price's age, and a real-time source's last trade in pre-market can be yesterday's
-  if (quoteFrom) parts.push(ttStat("Price from", esc(typeof mkQuoteWords === "function" ? mkQuoteWords(quoteFrom, quoteAt) : quoteFrom), "", "", TT_DROP.from));
+  if (quoteFrom) parts.push(ttStat("Price from", esc(typeof mkQuoteWords === "function" ? mkQuoteWords(quoteFrom, quoteAt) : quoteFrom), "", "", perp ? TT_DROP.fromPerp : TT_DROP.from));
   paint(box, parts.join(""));
   // set aside as many figures as do not fit — measured again only when what is shown changed shape (a figure more or less, a word longer
   // or shorter): a pushed price that moved by a tick is the same shape, and its figures are set aside as they were, with nothing measured
@@ -589,7 +643,7 @@ function ttStats(el) {
   // where the order goes, and how far a perpetual may be levered there. Who trades — the owner here, or the account's desk on a paper
   // account — is the topbar's Regular · Superagent switch (account.html #trade-mode), never a control of this bar
   const v = TT.at ? A.venues.find((y) => y.id === TT.at.venue) : null;
-  paint(tags, `${m && m.maxLeverage && m.maxLeverage > 1 ? `<span class="tag tt-lev" title="The most leverage ${esc(v ? (v.paper ? tkPaperless(v.name) : v.name) : "the venue")} takes in this market">max ${esc(String(m.maxLeverage))}x</span>` : ""}${v ? `<span class="tt-where">${esc(v.paper ? tkPaperless(v.name) : v.name)}${v.paper ? ' <span class="tag paper">Paper</span>' : ""}</span>` : ""}`);
+  paint(tags, `${m && m.maxLeverage && m.maxLeverage > 1 ? `<span class="tag tt-lev" title="The most leverage ${esc(v ? (v.paper ? tkPaperless(v.name) : v.name) : "the venue")} takes in this market">${esc(String(m.maxLeverage))}x</span>` : ""}${v ? `<span class="tt-where">${esc(v.paper ? tkPaperless(v.name) : v.name)}${v.paper ? ' <span class="tag paper">Paper</span>' : ""}</span>` : ""}`);
 }
 /* how old a position's mark is, beside it, once it is not the last few seconds' (core ageWords): a paper account's mark is its market's
    public quote as its venue last answered (Position.native.markAt) — never an old mark passed off as now. "" where none says */
@@ -744,7 +798,9 @@ function ttLiveFor(m, perp) {
   const own = m ? Date.parse(String(m.quoteAt || "")) : NaN;
   if (Number.isFinite(own) && Number.isFinite(seen) && seen < own) return null;
   const pos = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
-  return { q, price, bid: pos(q.bid), ask: pos(q.ask), ...(typeof q.funding === "number" && Number.isFinite(q.funding) ? { funding: q.funding } : {}), seenAt: Number.isFinite(seen) ? new Date(seen).toISOString() : undefined, from: typeof q.from === "string" ? q.from : "" };
+  const nonNeg = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const figures = { mark: pos(q.mark), oracle: pos(q.oracle), openInterest: nonNeg(q.openInterest), volumeUsd24h: nonNeg(q.volumeUsd24h) };
+  return { q, price, bid: pos(q.bid), ask: pos(q.ask), ...(typeof q.funding === "number" && Number.isFinite(q.funding) ? { funding: q.funding } : {}), ...Object.fromEntries(Object.entries(figures).filter(([, v]) => v !== undefined)), seenAt: Number.isFinite(seen) ? new Date(seen).toISOString() : undefined, from: typeof q.from === "string" ? q.from : "" };
 }
 /** THE CHANGE AT A PRICE THE STREAM SAYS NOW, from the venue's own reference — its price 24 hours ago, a share's last regular close — as the
  * figures read last give it: their price less their change (or, with no change in their currency, their price over one and their percent).
@@ -837,7 +893,7 @@ function ttFeed(el) {
 let ttFeedClock = null;
 function ttFeedTicks() {
   if (ttFeedClock || typeof everySecond !== "function" || (typeof requestAnimationFrame !== "function" && typeof setInterval !== "function")) return;
-  ttFeedClock = everySecond(() => (ROUTE.tab === "trade" && TT.item && !document.hidden ? () => ttFeed($("pane-trade")) : undefined));
+  ttFeedClock = everySecond(() => (ROUTE.tab === "trade" && TT.item && !document.hidden ? () => (ttFeed($("pane-trade")), ttCountdowns($("pane-trade"))) : undefined));
 }
 
 /** A QUOTE THE STREAM PUSHED (ui/stream.js; kept there as the market's latest): the bar's market's moves the bar — its figures, the feed —
@@ -906,6 +962,7 @@ function ttLow(el, owner) {
   if (TT.tab === "positions") ttPositions(el.querySelector('[data-tt-tab="positions"]'), owner);
   else if (TT.tab === "open") tkDrawOpen(el.querySelector('[data-tt-tab="open"]'), owner);
   else if (TT.tab === "orders") ttOrders(el.querySelector('[data-tt-tab="orders"]'));
+  else if (TT.tab === "funding") ttFunding(el.querySelector('[data-tt-tab="funding"]'));
   else ttHistory(el.querySelector('[data-tt-tab="history"]'));
 }
 /* the tab bar under the panels: each tab with how many it holds where that is known — the orders open in the lens, and the positions as
@@ -1207,6 +1264,34 @@ function ttHistory(box) {
       return `<tr>${ttWhen(l)}${ttMarketCell(l, r)}${ttSideCell(r)}<td class="r">${ttPx(r, r.avg)}</td><td class="r">${r.filled ? esc(qtyOf(r.filled)) : "—"}</td><td class="r">${money(Math.abs(Number(l.amountUsd) || 0))}</td><td class="r">${l.feeUsd !== undefined ? fine(l.feeUsd) : "—"}</td><td class="r tt-c-pnl">${closed}</td>${ttByCell(l)}</tr>`;
     }).join("");
     paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr>${ttTimeTh()}<th>Market</th><th>Direction</th><th class="r">Price</th><th class="r">Size</th><th class="r">Trade value</th><th class="r">Fee</th><th class="r">Closed PNL</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>${ttMoreHtml(lines.length, all.length)}`);
+  });
+}
+
+/* Funding history: what the perpetuals paid and received, hour by hour, newest first (GET /api/account/funding — a paper account's book,
+   Hyperliquid's userFunding for the account's address), in HL's columns: Time · Market · Direction · Size · Price · Payment · Rate. The
+   payment is the money's way for the owner — paid, below zero in the down colour; received, above zero in the up colour; the price is the
+   one it was settled at (the oracle at Hyperliquid) where the venue says it; a rate the quote carried, the venue's own history not having
+   said that hour's, is marked so on hover. The venues that could not be read are said under the rows, in their own words */
+function ttFunding(box) {
+  if (!box) return;
+  if (!box.ttDrawn) paint(box, ttLoadingHtml("funding"));
+  ttMoreHeard(box, ttFunding);
+  api("/api/account/funding", { ttl: 30_000 }).then((b) => {
+    if (!box.isConnected || TT.tab !== "funding") return;
+    box.ttDrawn = true;
+    if (!b || b.ok === false) return void paint(box, `<p class="msg no">${esc(ttSentence(b, "the funding could not be read"))}</p>`);
+    const all = (b.lines || []).filter((l) => inLens(l.venue));
+    const lines = all.slice(0, box.ttShow || TT_PAGE);
+    const missed = (b.missing || []).filter((m) => inLens(m.venue)).map((m) => `${m.venueName}: ${String(m.why || "").replace(/[.\s]+$/, "")}`);
+    const notRead = missed.length ? `<p class="dim small tt-missed">${esc(`Not read: ${missed.join(" · ")}.`)}</p>` : "";
+    if (!lines.length) return void paint(box, `<p class="empty">No funding paid or received yet: an open perpetual pays or receives it every hour.</p>${notRead}`);
+    const rows = lines.map((l) => {
+      const [way, word] = l.side === "short" ? ["down", "Short"] : l.side === "long" ? ["up", "Long"] : ["", "—"];
+      const rate = typeof l.rate === "number" && Number.isFinite(l.rate) ? `${(l.rate * 100).toFixed(4)}%` : "—";
+      const quoted = l.quoted ? ' class="r tt-quoted" title="The rate the quote carried: the venue\'s own history had not said this hour\'s when it was settled"' : ' class="r"';
+      return `<tr>${ttWhen(l)}<td class="tt-c-mkt" title="${esc(`${l.symbol} · ${l.venueName}`)}"><b>${esc(l.symbol)}</b>${l.paper ? ' <span class="tag paper">Paper</span>' : ""}<span class="why">${esc(l.paper ? tkPaperless(l.venueName) : l.venueName)}</span></td><td class="${way}">${word}</td><td class="r">${l.qty !== undefined ? esc(qtyOf(l.qty)) : "—"}</td><td class="r">${l.price !== undefined ? esc(px(l.price)) : "—"}</td><td class="r">${chg(-Number(l.usd), "$")}</td><td${quoted}>${esc(rate)}</td></tr>`;
+    }).join("");
+    paint(box, `<div class="t-wrap"><table class="t tt-t"><thead><tr>${ttTimeTh()}<th>Market</th><th>Direction</th><th class="r">Size</th><th class="r" title="The price the hour was settled at: the oracle at Hyperliquid">Price</th><th class="r" title="Paid out of the position below zero, received above">Payment</th><th class="r" title="The hour's funding rate">Rate</th></tr></thead><tbody>${rows}</tbody></table></div>${ttMoreHtml(lines.length, all.length)}${notRead}`);
   });
 }
 

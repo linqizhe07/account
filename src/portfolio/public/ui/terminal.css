@@ -76,8 +76,10 @@
 }
 @container tt (min-width: 1080px) {
   /* the grid as tall as the window leaves it once the tables have their least height: 520 at the least (a shorter window scrolls the page,
-     as HL's does), 760 at the most (the tables take the rest of a taller one) */
-  .tt-grid { --tt-side: clamp(270px, 22.5cqi, 356px); grid-template-columns: minmax(0, 1fr) var(--tt-side) var(--tt-side); grid-template-rows: var(--tt-bar-h) minmax(0, 1fr); grid-template-areas: "bar book order" "chart book order"; height: var(--tt-grid-h); }
+     as HL's does), 760 at the most (the tables take the rest of a taller one). The bar runs over the chart and the book: HL's sits over its
+     chart alone, but HL has no rail beside it — here the rail takes that room, and a bar over the chart alone was left its price and
+     nothing else at 1440 pixels (a perpetual's mark, oracle, open interest and funding all set aside) */
+  .tt-grid { --tt-side: clamp(270px, 22.5cqi, 356px); grid-template-columns: minmax(0, 1fr) var(--tt-side) var(--tt-side); grid-template-rows: var(--tt-bar-h) minmax(0, 1fr); grid-template-areas: "bar bar order" "chart book order"; height: var(--tt-grid-h); }
   .tt-chart, .tt-book { min-height: 0; }
   .tt-order { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
   /* the action button stays in view at the panel's foot while what is above it scrolls; a ring of the panel's own colour masks what passes
@@ -126,7 +128,11 @@
 .tt-st-v.up, .tt-st-v .up { color: var(--hl-up); font-weight: 400; }
 .tt-st-v.down, .tt-st-v .down { color: var(--hl-down); font-weight: 400; }
 .tt-st-v .acc { color: var(--hl-accent-soft); }
-.tt-st-v .tt-next { color: var(--hl-text); }
+/* the time left until funding is next paid (terminal.js ttCountdowns): in the text colour, in tabular figures so the second ticking over
+   never moves what stands beside it */
+.tt-st-v .tt-count { color: var(--hl-text); font-variant-numeric: tabular-nums; }
+/* a funding rate the quote carried, the venue's own history not having said the hour's (terminal.js ttFunding): said on hover */
+.tt-t td.tt-quoted { text-decoration: underline dotted; text-underline-offset: 2.4px; cursor: help; }
 /* how old the price is, once it is not the last few seconds' (core ageWords): the area's word for caution, small, beside the price (the
    bar's, a position's mark) */
 .tt-st-v .tt-age, .tt-pos .tt-age { color: var(--hl-warn); font-size: 11px; margin-left: 4px; }

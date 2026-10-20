@@ -739,6 +739,29 @@ describe("the markets a page shows, on its stream (feat/paper-live p2a)", () => 
     }
   });
 
+  it("A HYPERLIQUID PERPETUAL a page follows at a paper account is pushed what Hyperliquid's own bar shows — its mark, its oracle, its funding, its open interest, its day's dollars traded, the price 24 hours ago and its premium — as Hyperliquid's stream says them", async () => {
+    VenueWs.all = [];
+    const hub = new StreamHub({ WebSocket: VenueWs });
+    const perp: Listing = { symbol: "BTC-PERP", name: "BTC perpetual on Hyperliquid", kind: "perp", base: "BTC", quote: "USDC", price: 82383.5, open: true, types: [], maxLeverage: 40 };
+    const hl: PublicSource = { id: "hyperliquid", name: "Hyperliquid", kind: "exchange", connectTo: "hyperliquid-trade", connector: "live:hyperliquid-trade", listings: async (q) => [perp].filter((m) => !q.q || m.base.includes(q.q.toUpperCase())) };
+    try {
+      const { srv } = await boot({ streams: hub, sources: [hl] });
+      const page = await listen(srv.url, { path: `/api/account/stream?client=page-test-0007&markets=${encodeURIComponent("paper-1:BTC-PERP")}` });
+      expect(page.status).toBe(200);
+      await until(() => VenueWs.all.some((w) => w.url === HUB_URLS.hyperliquid));
+      const ws = VenueWs.all.find((w) => w.url === HUB_URLS.hyperliquid)!;
+      ws.open();
+      await until(() => ws.sent.some((m) => m.includes('"activeAssetCtx"')));
+      ws.say({ channel: "bbo", data: { coin: "BTC", time: Date.now(), bbo: [{ px: "82383.0", sz: "5.2", n: 20 }, { px: "82384.0", sz: "1.1", n: 3 }] } });
+      ws.say({ channel: "activeAssetCtx", data: { coin: "BTC", ctx: { funding: "0.0000125", openInterest: "40687.01858", prevDayPx: "82033.0", dayNtlVlm: "2599518859.45", premium: "-0.0003749322", oraclePx: "82414.9", markPx: "82384.0", midPx: "82383.5" } } });
+      const got = await page.until((f) => named(f, "quote").some((q) => (q.data as { oracle?: number }).oracle !== undefined));
+      expect(named(got, "quote").at(-1)!.data).toMatchObject({ key: "paper-1:BTC-PERP", venue: "paper-1", symbol: "BTC-PERP", source: "hyperliquid", bid: 82383, ask: 82384, mark: 82384, oracle: 82414.9, funding: 0.0000125, openInterest: 40687.01858, volumeUsd24h: 2599518859.45, prevDayPx: 82033, premium: -0.0003749322, from: "Hyperliquid · live", live: true });
+      page.close();
+    } finally {
+      hub.close();
+    }
+  });
+
   it("a tab that comes back on a new stream before its old one was let go is sent its markets again at once — with no word from the venue and nothing asked — and a telling that arrives after a later one is let be (feat/paper-live p2b)", async () => {
     VenueWs.all = [];
     const hub = new StreamHub({ WebSocket: VenueWs });

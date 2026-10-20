@@ -137,6 +137,12 @@ const HOUR = 3_600_000;
  * (a market may settle early) */
 const SETTLE_AFTER_CLOSE_MS = 60_000;
 const SETTLE_BEFORE_CLOSE_MS = 600_000;
+/** an hour of funding is settled at the rate its source's history says (Hyperliquid's fundingHistory), waited for this long after the hour
+ * — the venue writes it a moment after — before it is settled at the rate the quote carries instead; the history asked again at most this
+ * often while it does not say it; and each market's last this many hours of rates kept in memory */
+const RATE_WAIT_MS = 60_000;
+const RATES_AGAIN_MS = 10_000;
+const RATES_KEPT = 2_000;
 /** the sources whose funding rate is hourly (Hyperliquid's); another perpetual venue's rate is for an eight-hour interval */
 const HOURLY_FUNDING = /^hyperliquid/;
 /** how much older than its source's own delay a stock's quote may be and still fill: a quote that stopped moving (a halt, a feed gone
@@ -333,6 +339,21 @@ export interface PaperFill {
   /** a settlement or a liquidation: what happened, in words */
   note?: string | undefined;
 }
+/** ONE HOUR OF A PERPETUAL'S FUNDING as the book settled it (payFunding): when (the top of the hour), the market, what was paid out of the
+ * margin (above zero) or received (below), and — from 2026-10-20 — the position's side and size then, the price it was settled at (the
+ * oracle, else the mark), the hour's rate, and `quoted` where that rate was the quote's and not the source's history's. An older book's
+ * lines carry the first three alone, and may stand for several hours */
+export interface PaperFunding {
+  at: string;
+  symbol: string;
+  usd: number;
+  side?: "long" | "short" | undefined;
+  qty?: number | undefined;
+  price?: number | undefined;
+  rate?: number | undefined;
+  quoted?: true | undefined;
+}
+
 export interface PaperBook {
   version: 1;
   id: string;
@@ -351,7 +372,7 @@ export interface PaperBook {
   leverage?: Record<string, number> | undefined;
   /** the funding each perpetual paid (above zero) or received (below) out of its margin, hour by hour as it was settled — the last
    * FUNDING_KEPT — so the book's past can be told again exactly (paper-history.ts). A book from before it has none */
-  funding?: Array<{ at: string; symbol: string; usd: number }> | undefined;
+  funding?: Array<PaperFunding> | undefined;
   /** the paper money the owner added since the book started (topUpPaper): each when, and how much — money put in, never a gain, so the
    * book's past adds it at its moment (paper-history.ts) and what it made or lost since it started counts it as put in. A book from before
    * it has none */
@@ -1035,7 +1056,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     const event = m.kind === "event";
     const stock = m.kind === "stock";
     const ownNote = typeof m.note === "string" && m.note ? ` · ${m.note}` : "";
-    const { symbol, name: mname, kind, base, quote, price, bid, ask, open, changePct24h, change24h, volumeUsd24h, contracts24h, closeTime, category, group, outcome, fundingRate, nextFundingAt, implied, issuer, eligibility, session, quoteAt, delayMs, quoteFrom, pastEnd: _p, ...rest } = m as Listing & { pastEnd?: unknown };
+    const { symbol, name: mname, kind, base, quote, price, bid, ask, open, changePct24h, change24h, volumeUsd24h, contracts24h, closeTime, category, group, outcome, fundingRate, nextFundingAt, fundingEveryH, markPrice, oraclePrice, premium, openInterest, openInterestUsd, implied, issuer, eligibility, session, quoteAt, delayMs, quoteFrom, pastEnd: _p, ...rest } = m as Listing & { pastEnd?: unknown };
     void rest;
     const at = req.clock();
     const stockSession = stock ? (session ?? usSession(at)) : undefined;
@@ -1073,7 +1094,8 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       minQty: event ? 1 : (pos(m.minQty) ?? step),
       qtyStep: step,
       ...(event ? { priceStep: 0.01 } : pos(m.priceStep) !== undefined ? { priceStep: m.priceStep } : {}),
-      minNotional: 1,
+      // the smallest order its venue takes, where its source says one (Hyperliquid's $10: public-markets.ts hlSteps), else a dollar
+      minNotional: pos(m.minNotional) ?? 1,
       open: open !== false,
       // what is said of this market now — its source's own words, its session — apart from the account's fill rule (`rule`), which the
       // ticket folds under "How it fills here": a list's line of it (the Where box) is a line, never the whole rule
@@ -1096,6 +1118,12 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       ...(outcome ? { outcome } : {}),
       ...(fundingRate !== undefined ? { fundingRate } : {}),
       ...(nextFundingAt ? { nextFundingAt } : {}),
+      ...(fundingEveryH !== undefined ? { fundingEveryH } : {}),
+      ...(markPrice !== undefined ? { markPrice } : {}),
+      ...(oraclePrice !== undefined ? { oraclePrice } : {}),
+      ...(premium !== undefined ? { premium } : {}),
+      ...(openInterest !== undefined ? { openInterest } : {}),
+      ...(openInterestUsd !== undefined ? { openInterestUsd } : {}),
       ...(implied ? { implied } : {}),
       ...(issuer ? { issuer } : {}),
       ...(eligibility ? { eligibility } : {}),
@@ -1141,7 +1169,12 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     const perp = q.m.kind === "perp";
     const mid = st.bid !== undefined && st.ask !== undefined && st.ask >= st.bid ? round((st.bid + st.ask) / 2, 10) : undefined;
     const price = perp ? (mid ?? st.mark ?? st.last) : (st.last ?? mid);
-    const m: Listing = { ...q.m, ...(price !== undefined ? { price } : {}), bid: st.bid, ask: st.ask, quoteAt: iso(st.seenAt), quoteFrom: `${st.src} · live`, ...(perp && st.funding !== undefined ? { fundingRate: st.funding } : {}) };
+    // a perpetual's own figures as its stream says them now (Hyperliquid's activeAssetCtx): its mark, oracle, premium and open interest
+    // (in dollars at that mark), the day's dollars traded, and the day's change at this price from the price 24 hours ago
+    const mark = perp ? (st.mark ?? q.m.markPrice) : undefined;
+    const day = perp && price !== undefined && st.prevDayPx !== undefined ? { change24h: round(price - st.prevDayPx, 10), changePct24h: round((price / st.prevDayPx - 1) * 100, 10) } : {};
+    const own: Partial<Listing> = perp ? { ...(st.mark !== undefined ? { markPrice: st.mark } : {}), ...(st.oracle !== undefined ? { oraclePrice: st.oracle } : {}), ...(st.premium !== undefined ? { premium: st.premium } : {}), ...(st.openInterest !== undefined ? { openInterest: st.openInterest, ...(mark !== undefined ? { openInterestUsd: round(st.openInterest * mark, 2) } : {}) } : {}), ...(st.volumeUsd24h !== undefined ? { volumeUsd24h: st.volumeUsd24h } : {}), ...day } : {};
+    const m: Listing = { ...q.m, ...(price !== undefined ? { price } : {}), bid: st.bid, ask: st.ask, quoteAt: iso(st.seenAt), quoteFrom: `${st.src} · live`, ...(perp && st.funding !== undefined ? { fundingRate: st.funding } : {}), ...own };
     return { source: q.source, m, at: st.seenAt, from: "stream", ...(st.mark !== undefined ? { mark: st.mark } : {}), ...(st.bidSz !== undefined ? { bidSz: st.bidSz } : {}), ...(st.askSz !== undefined ? { askSz: st.askSz } : {}), seq: st.seq };
   };
   /** the market's live stream over `k` (its listing as its source gave it) while the stream is live — its book too, where a page holds
@@ -1880,30 +1913,68 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     if (typeof r !== "number" || !Number.isFinite(r)) return undefined;
     return HOURLY_FUNDING.test(source.id) ? r : r / FUNDING_INTERVAL_HOURS;
   };
-  /** A POSITION'S FUNDING settled: each whole hour since it was last settled, the notional at the mark times the source's hourly rate, paid
-   * out of the margin. Only at a quote that is the source's answer (`q`) — a source that did not answer in time has said no rate, and the
-   * hours wait for a quote that has it. Every look settles it (markPerps), and so does every fill on the position before it moves it (fill):
-   * a close by hand, or an exit judged at a quote the look's own did not have, never takes the position off with hours unpaid. True when the
-   * book changed */
+  /** each perpetual's hourly funding rates as its source's history says them (PublicSource.fundingHistory: Hyperliquid's), by the hour
+   * paid, ms — read once each, kept in memory only — and when each market's history was last asked */
+  const hourRates = new Map<string, Map<number, number>>();
+  const ratesAskedAt = new Map<string, number>();
+  /** THE RATES OF THE HOURS A POSITION IS DUE TO SETTLE (`from` its last settlement, to `to`), read from its source's history where the
+   * source publishes one, before they are settled (payFunding): asked only for hours not read yet, and while an hour just paid is not in
+   * the answer yet (the venue writes it a moment after the hour), again at most every RATES_AGAIN_MS */
+  const readRates = async (symbol: string, source: PublicSource | undefined, from: number, to: number): Promise<void> => {
+    if (!source?.fundingHistory) return;
+    const first = (Math.floor(from / HOUR) + 1) * HOUR;
+    if (first > to) return;
+    const known = hourRates.get(symbol);
+    let missing = false;
+    for (let h = first; h <= to; h += HOUR) if (!known?.has(h)) missing = true;
+    if (!missing || req.clock() - (ratesAskedAt.get(symbol) ?? Number.NEGATIVE_INFINITY) < RATES_AGAIN_MS) return;
+    ratesAskedAt.set(symbol, req.clock());
+    const got = await inTime(source.fundingHistory(symbol, first, to), SOURCE_MS);
+    if (!got || isRefusal(got)) return;
+    const into = hourRates.get(symbol) ?? new Map<number, number>();
+    for (const x of got) into.set(x.at, x.rate);
+    // the last RATES_KEPT hours of each market
+    while (into.size > RATES_KEPT) into.delete(into.keys().next().value!);
+    hourRates.set(symbol, into);
+  };
+  /** A POSITION'S FUNDING settled AS HYPERLIQUID SETTLES IT: at each hour ON THE CLOCK (the top of the hour, UTC) it stood across since it
+   * was last settled, its size times the ORACLE price times that hour's rate — Hyperliquid's docs: "the funding payment at the end of the
+   * interval is position_size * oracle_price * funding_rate", the oracle and not the mark — paid out of the margin, the long paying when the
+   * rate is above zero. The hour's rate is the one its source's history says it was paid at (readRates); a source with no history, or one
+   * that has not answered a minute after the hour (RATE_WAIT_MS — the venue writes it a moment after), at the rate the quote carries. The
+   * price: the quote's oracle, else its mark, else its price (a bar's close, while the account slept: catchUp). Only at a quote that is
+   * the source's answer (`q`) — a source that did not answer in time has said no rate, and the hours wait for a quote that has it. Every look
+   * settles it (markPerps), and so does every fill on the position before it moves it (fill): a close by hand, or an exit judged at a quote
+   * the look's own did not have, never takes the position off with hours unpaid. Each hour written down as it is settled — when, the size,
+   * the price, the rate and what was paid — so the book's past can be told again exactly (paper-history.ts) and listed hour by hour. True
+   * when the book changed */
   const payFunding = (symbol: string, p: PaperPosition, q: Quoted | undefined, at: number): boolean => {
     if (!q) return false;
-    const mark = q.mark ?? pos(q.m.price) ?? b.markets[symbol]?.last?.price;
-    if (mark === undefined) return false;
     const fundedAt = p.fundedAt ?? at;
-    const hours = Math.floor((at - fundedAt) / HOUR);
-    if (hours <= 0) return false;
-    const rate = hourlyFunding(q.source, q.m);
-    if (rate !== undefined && rate !== 0) {
-      // the long pays when the rate is above zero, the short receives; the other way round below zero
-      const notional = mark * p.qty;
-      const paid = round(notional * rate * hours * (p.side === "long" ? 1 : -1), 6);
-      p.marginUsd = round(p.marginUsd - paid, 6);
-      p.fundingUsd = round((p.fundingUsd ?? 0) + paid, 6);
-      // written down as it is settled, so the book's past can be told again exactly (paper-history.ts)
-      (b.funding ??= []).push({ at: iso(fundedAt + hours * HOUR), symbol, usd: paid });
-      if (b.funding.length > FUNDING_KEPT) b.funding.splice(0, b.funding.length - FUNDING_KEPT);
+    const first = (Math.floor(fundedAt / HOUR) + 1) * HOUR;
+    if (first > at) return false;
+    const price = pos(q.m.oraclePrice) ?? q.mark ?? pos(q.m.price) ?? b.markets[symbol]?.last?.price;
+    if (price === undefined) return false;
+    const now = hourlyFunding(q.source, q.m);
+    const known = hourRates.get(symbol);
+    let settled = fundedAt;
+    for (let h = first; h <= at; h += HOUR) {
+      const read = known?.get(h);
+      // an hour its source's history will say, not said yet: waited for, a minute at most
+      if (read === undefined && q.source.fundingHistory && req.clock() - h < RATE_WAIT_MS) break;
+      const rate = read ?? now;
+      if (rate !== undefined && rate !== 0) {
+        // the long pays when the rate is above zero, the short receives; the other way round below zero
+        const paid = round(p.qty * price * rate * (p.side === "long" ? 1 : -1), 6);
+        p.marginUsd = round(p.marginUsd - paid, 6);
+        p.fundingUsd = round((p.fundingUsd ?? 0) + paid, 6);
+        (b.funding ??= []).push({ at: iso(h), symbol, usd: paid, side: p.side, qty: p.qty, price, rate, ...(read === undefined ? { quoted: true as const } : {}) });
+        if (b.funding.length > FUNDING_KEPT) b.funding.splice(0, b.funding.length - FUNDING_KEPT);
+      }
+      settled = h;
     }
-    p.fundedAt = fundedAt + hours * HOUR;
+    if (settled === fundedAt) return false;
+    p.fundedAt = settled;
     return true;
   };
   /** A PERPETUAL LIQUIDATED at `mark`: closed at it, what is left of its margin after the fee back to cash, the fill saying so — and its
@@ -1975,6 +2046,9 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     for (const [symbol, p] of Object.entries(b.positions)) {
       if (owed.has(symbol)) continue;
       let q = await quote(symbol);
+      if (b.positions[symbol] !== p) continue;
+      // the rates of the hours it is due to settle, from its source's history, before markOne settles them (payFunding)
+      await readRates(symbol, q?.source, p.fundedAt ?? req.clock(), req.clock());
       if (b.positions[symbol] !== p) continue;
       const stale = q?.mark ?? pos(q?.m.price);
       if (q && !liqPrice(q) && stale !== undefined && liqAt(symbol, p, stale, q).due) {
@@ -2100,12 +2174,17 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
         continue;
       }
       unowe(symbol);
+      // the funding of the hours slept through is settled at each hour's own rate, read once for the whole gap from its source's history
+      const held = b.positions[symbol];
+      if (held) await readRates(symbol, k.source, held.fundedAt ?? from, to);
+      if (gen !== generation) return false;
       const step = INTERVAL_MS[size];
       const inGap = bars.filter((x) => x && x.t >= from && x.t + step <= to).sort((x, y) => x.t - y.t);
       for (const bar of inGap) {
         const end = bar.t + step;
         const note = `while the account slept: ${source.name}'s ${size} bar from ${iso(bar.t).slice(11, 16)} UTC (${fig(bar.l)}–${fig(bar.h)}) reached it`;
-        const q: Quoted = { source: k.source, m: { ...k.m, price: bar.c, bid: undefined, ask: undefined, quoteAt: iso(end), quoteFrom: `${source.name} · ${size} bar` }, at: end };
+        // the bar's own price — never today's mark or oracle — for what the bar judges, its hours' funding among it
+        const q: Quoted = { source: k.source, m: { ...k.m, price: bar.c, bid: undefined, ask: undefined, markPrice: undefined, oraclePrice: undefined, quoteAt: iso(end), quoteFrom: `${source.name} · ${size} bar` }, at: end };
         // a position is judged against the bars from when it was opened only: a bar that began before it existed (a perpetual opened after
         // the last look, the owner's order on waking) never funds or liquidates it — a book from before openedAt, from its last funding
         const p = b.positions[symbol];
@@ -2545,8 +2624,10 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     return out;
   };
 
-  /** an order as the request says it, checked against the market as the paper account takes it: a refusal, or nothing */
-  const checkOrder = (o: OrderRequest, m: Market): Refusal | undefined => {
+  /** an order as the request says it, checked against the market as the paper account takes it: a refusal, or nothing. `whole`: a
+   * reduce-only order of the whole position's size — a close, taken at the position's own size whatever the market's step now (one opened
+   * under another step is never stranded) */
+  const checkOrder = (o: OrderRequest, m: Market, whole = false): Refusal | undefined => {
     if (!m.types.includes(o.type)) return badOrder(venue, b.name, `${m.name} takes ${m.types.join(", ").replace(/_/g, "-")} orders here, not ${String(o.type).replace(/_/g, "-")} orders`);
     if (o.postOnly) return badOrder(venue, b.name, "post-only is not offered: a paper account has no book to rest on");
     if (o.tif !== undefined) {
@@ -2566,7 +2647,7 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
     } else if (trail) return badOrder(venue, b.name, "a trail belongs to a trailing stop");
     if (o.extendedHours && !(o.type === "limit" && m.kind === "stock" && m.session?.extendedHours)) return badOrder(venue, b.name, o.type !== "limit" ? "extended hours take a limit order only" : `${m.name} takes no extended-hours order now`);
     if (o.extendedHours && o.tif !== undefined && o.tif !== "day" && o.tif !== "gtc") return badOrder(venue, b.name, "an extended-hours order is good for the day or till canceled");
-    if (!onStep(o.qty, m.qtyStep)) return badOrder(venue, b.name, `a size in ${m.name} moves in steps of ${fig(m.qtyStep ?? 1)}`, { qty: o.qty, qtyStep: m.qtyStep });
+    if (!whole && !onStep(o.qty, m.qtyStep)) return badOrder(venue, b.name, `a size in ${m.name} moves in steps of ${fig(m.qtyStep ?? 1)}`, { qty: o.qty, qtyStep: m.qtyStep });
     for (const [what, p] of [["limit", o.limitPrice], ["stop", o.stopPrice], ["take-profit", o.takeProfit], ["stop-loss", o.stopLoss]] as const) {
       if (p !== undefined && !onStep(p, m.priceStep)) return badOrder(venue, b.name, `${m.name} moves in steps of ${fig(m.priceStep!)}: a ${what} price of ${fig(p)} is between steps`, { price: p, priceStep: m.priceStep });
     }
@@ -2633,7 +2714,8 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       if (!q0) return no("E_VENUE_REJECTED", { venue, message: `${b.name}: no public source prices ${o.symbol.slice(0, 60)} just now, so nothing is filled` });
       const m = marketOf(q0.source, q0.m);
       if (!m.open) return no("E_VENUE_MARKET_CLOSED", { venue, message: `${b.name}: ${m.name} takes no orders now${q0.m.note ? ` (${q0.m.note})` : ""}` });
-      const bad = checkOrder(o, m);
+      const held = b.positions[o.symbol];
+      const bad = checkOrder(o, m, o.reduceOnly === true && held !== undefined && Math.abs(o.qty - held.qty) <= 1e-12);
       if (bad) return bad;
       // A COIN'S OR A PERPETUAL'S order judged at once is judged at a price FILL_FRESH_MS old at most (freshFor): a market order with none
       // is refused saying why; a limit order with none goes on the book unjudged, and the next fresh price judges it (it has not rested).
@@ -2864,6 +2946,18 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       await judged;
       save();
       return stateOf(o);
+    },
+
+    /** the funding its perpetuals paid and received, hour by hour as the book settled it (payFunding), newest first — the hours due now
+     * settled first — `limit` lines at most, none from before `since` */
+    async funding(o) {
+      await settle();
+      const since = o.since ?? Number.NEGATIVE_INFINITY;
+      return (b.funding ?? [])
+        .filter((f) => Date.parse(f.at) >= since)
+        .slice(-Math.max(1, Math.floor(o.limit)))
+        .reverse()
+        .map((f) => ({ at: f.at, symbol: f.symbol, usd: f.usd, ...(f.side ? { side: f.side } : {}), ...(f.qty !== undefined ? { qty: f.qty } : {}), ...(f.price !== undefined ? { price: f.price } : {}), ...(f.rate !== undefined ? { rate: f.rate } : {}), ...(f.quoted ? { quoted: true as const } : {}) }));
     },
 
     async positions() {

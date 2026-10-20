@@ -85,7 +85,8 @@ import { heldTo, HYPERLIQUID_RULE, type Locator } from "./location.ts";
 import { impliedUsd, PRE_IPO_CATEGORY, preIpoOf } from "./preipo.ts";
 import { hyperliquidHistory } from "./history-crypto.ts";
 import { hostLane } from "./history.ts";
-import { badOrder, CANDLE_INTERVALS, ceilTo, DONE, floorTo, inDollars, onStep, pick, plain, type CandleInterval, type LiveTrader, type Market, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
+import { hlDecimals, hlPriceInside, hlPriceOk, hlPriceStep } from "./hl-rules.ts";
+import { badOrder, CANDLE_INTERVALS, ceilTo, DONE, floorTo, inDollars, onStep, pick, plain, type CandleInterval, type FundingLine, type LiveTrader, type Market, type MarketStats, type OrderRequest, type OrderState, type OrderStatus, type Position, type TimeInForce } from "./trade.ts";
 import { bannedNo, bannedUntil, edgeRefused, edgeTitle, edgeWords, freePart, isStable, notTheApiWords, redact, REGION, type LiveBalance, type LiveSource, type MarginMode } from "./types.ts";
 
 type Dict = Record<string, unknown>;
@@ -200,44 +201,24 @@ const short = (a: string): string => (a.length > 14 ? `${a.slice(0, 6)}…${a.sl
 const iso = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const round = (x: number, places: number): number => Number(x.toFixed(places));
 
-// ---- Hyperliquid's price rule ----------------------------------------------------------------------------
+// ---- Hyperliquid's price rule (live/hl-rules.ts, shared with the public listing a paper account trades by) ------------------------------
 
-/** the most decimals a price has here: MAX_DECIMALS (6 for perps, 8 for spot) less the asset's szDecimals */
-const decimalsFor = (kind: "spot" | "perp", szDecimals: number): number => Math.max(0, (kind === "spot" ? 8 : 6) - szDecimals);
+const decimalsFor = hlDecimals;
+export { hlPriceInside, hlPriceOk, hlPriceStep };
 
-/** Does Hyperliquid take this price (Tick and lot size): at most five significant figures and at most `decimals` decimal places — a whole
- * number always passes */
-export function hlPriceOk(px: number, decimals: number): boolean {
-  if (!(Number.isFinite(px) && px > 0)) return false;
-  if (Number.isInteger(px)) return true;
-  const [int = "", frac = ""] = plain(px, 12).split(".");
-  if (frac.length > decimals) return false;
-  return `${int === "0" ? "" : int}${frac}`.replace(/^0+/, "").length <= 5;
-}
-
-/** the power of ten of a price: 81359 → 4, 0.11 → −1 */
-function magnitude(px: number): number {
-  let e = Math.floor(Math.log10(px));
-  if (10 ** (e + 1) <= px) e += 1;
-  if (10 ** e > px) e -= 1;
-  return e;
-}
-
-/** the grid of prices Hyperliquid takes around `px`: the fifth significant figure, never finer than the decimals allowed; a whole number
- * from 100,000 up */
-export function hlPriceStep(px: number, decimals: number): number {
-  if (!(px > 0)) return 10 ** -decimals;
-  if (px >= 100_000) return 1;
-  return Number(Math.max(10 ** (magnitude(px) - 4), 10 ** -decimals).toPrecision(1));
-}
-
-/** the nearest price Hyperliquid takes at or inside `px`: down for a buy's worst price, up for a sell's — never looser than asked. NaN when
- * there is none (a price under the smallest step) */
-export function hlPriceInside(px: number, decimals: number, dir: "down" | "up"): number {
-  if (!(Number.isFinite(px) && px > 0)) return NaN;
-  const step = hlPriceStep(px, decimals);
-  const out = dir === "down" ? floorTo(px, step) : ceilTo(px, step);
-  return out > 0 && hlPriceOk(out, decimals) ? out : NaN;
+/** a perpetual's own figures in its asset context (metaAndAssetCtxs): its mark (markPx — not its mid), its oracle (oraclePx), its premium,
+ * and its open interest in coins and in dollars at the mark — each only where Hyperliquid said it */
+function perpFigures(ctx: Dict): Pick<Market, "markPrice" | "oraclePrice" | "premium" | "openInterest" | "openInterestUsd"> {
+  const mark = pos(ctx.markPx);
+  const oracle = pos(ctx.oraclePx);
+  const premium = fin(ctx.premium);
+  const oi = fin(ctx.openInterest);
+  return {
+    ...(mark !== undefined ? { markPrice: mark } : {}),
+    ...(oracle !== undefined ? { oraclePrice: oracle } : {}),
+    ...(premium !== undefined ? { premium } : {}),
+    ...(oi !== undefined && oi >= 0 ? { openInterest: oi, ...(mark !== undefined ? { openInterestUsd: Math.round(oi * mark * 100) / 100 } : {}) } : {}),
+  };
 }
 
 // ---- Hyperliquid's refusals, in its words ------------------------------------------------------------------
@@ -942,7 +923,9 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
         ...(top.ask !== undefined ? { ask: top.ask } : {}),
         ...(day.changePct24h !== undefined ? { changePct24h: day.changePct24h, change24h: day.change24h } : {}),
         ...(day.volumeUsd24h !== undefined ? { volumeUsd24h: day.volumeUsd24h } : {}),
-        ...(funding !== undefined ? { fundingRate: funding, nextFundingAt: nextHour(c.clock()) } : {}),
+        ...(funding !== undefined ? { fundingRate: funding, nextFundingAt: nextHour(c.clock()), fundingEveryH: 1 } : {}),
+        // a perpetual's own figures from the same context: its mark, its oracle, its premium, and its open interest — in dollars at the mark
+        ...(e.kind === "perp" ? perpFigures(ctx) : {}),
         // a pre-IPO perpetual: the valuation the price implies now, in the venue's unit
         ...(m.implied && price !== undefined ? { implied: { ...m.implied, usd: impliedUsd(price, m.implied.perPoint) } } : {}),
       };
@@ -1105,6 +1088,32 @@ function hyperliquidTrader(c: { venue: string; name: string; b: Book; client: Hy
     },
 
     status,
+
+    /** THE FUNDING ITS PERPETUALS PAID AND RECEIVED, as Hyperliquid lists it for the account's address (userFunding — keyless: the address
+     * alone), newest first: each payment's moment, its market, the position's side and size then (szi), the rate, and the dollars.
+     * Hyperliquid writes `usdc` below zero for a payment — its own examples: a long at a rate above zero has usdc below zero, a short has it
+     * above — so `usd`, paid above zero, is its negative. From `since`, else the last week; `limit` lines at most */
+    async funding(o) {
+      const failed = await b.load();
+      if (failed) return failed;
+      let rows: unknown;
+      try {
+        rows = await b.info({ type: "userFunding", user: b.user, startTime: Math.floor(o.since ?? c.clock() - 7 * 86_400_000) });
+      } catch (err) {
+        return b.fail(err);
+      }
+      const out: FundingLine[] = [];
+      for (const r of arr(rows)) {
+        const d = obj(obj(r).delta);
+        const usdc = fin(d.usdc);
+        const t = fin(obj(r).time);
+        if (d.type !== "funding" || usdc === undefined || t === undefined) continue;
+        const szi = fin(d.szi);
+        const rate = fin(d.fundingRate);
+        out.push({ at: new Date(t).toISOString(), symbol: b.byCoin(String(d.coin ?? ""))?.symbol ?? String(d.coin ?? ""), usd: round(-usdc, 6), ...(szi !== undefined && szi !== 0 ? { side: szi < 0 ? ("short" as const) : ("long" as const), qty: Math.abs(szi) } : {}), ...(rate !== undefined ? { rate } : {}) });
+      }
+      return out.sort((x, y) => Date.parse(y.at) - Date.parse(x.at)).slice(0, Math.max(1, Math.floor(o.limit)));
+    },
 
     async positions() {
       const failed = await b.load();
