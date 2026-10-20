@@ -1,19 +1,20 @@
-/* Markets (ui/markets.js), in the Clean cards look (M2): category tabs over a hairline, one table of markets inside a card with pill
-   buttons, the Predictions as white cards of radius 20 with Yes and No tinted in the up and down colours, one folded footer line, and one
-   market in the drawer (the one drawer: a Portfolio holding opens it too). The connect picker and its one short form (ui/connect.js) are
-   drawn in the sheet with the .pick rules at the foot. Colours, radii, shadows and fonts only from ui/tokens.css, so Cream and Black alike
-   (Black drops the shadows and keeps the hairlines). Manrope throughout: numbers in its 800 with tabular figures, no mono here but a key
-   file's path. Motion is transform and opacity only. */
+/* Markets (ui/markets.js), in the ocean look: category tabs over a hairline on a strip of glass, one table of markets inside a glass card,
+   the Predictions as glass cards with Yes and No tinted in the up and down colours, one folded footer line on the water (its words keep a
+   halo), and one market in the drawer (the one drawer: a Portfolio holding opens it too). The connect picker and its one short form
+   (ui/connect.js) are drawn in the sheet with the .pick rules at the foot. Colours, radii, shadows and fonts only from ui/tokens.css, so
+   Light and Black alike (Black drops the shadows and keeps the hairlines). Manrope throughout: numbers with tabular figures, no mono here
+   but a key file's path. Motion is transform and opacity only. */
 
 .mk { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
 .mk-block { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .mk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: -10px; }
 .mk-q { font-size: 14px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
-/* what did not answer, quietly, in the venue's own words: a soft note on the second surface */
-.mk-missing { font-size: 12px; line-height: 1.5; color: var(--dim); background: var(--surface-2); border-radius: var(--radius-s); padding: 8px 12px; margin: 0; }
+/* what did not answer, quietly, in the venue's own words: a soft note on glass */
+.mk-missing { font-size: 12px; line-height: 1.5; color: var(--dim); background: var(--surface); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); border-radius: var(--radius-s); padding: 8px 12px; margin: 0; }
 .mk-missing b { font-weight: 600; color: var(--text); }
-/* what the account says of a list itself (how it was chosen, where the rest is; a read-only server): one quiet line a sentence */
-.mk-note { font-size: 12px; line-height: 1.5; color: var(--dim); margin: -14px 0 0; }
+/* what the account says of a list itself (how it was chosen, where the rest is; a read-only server): one quiet line a sentence, on the
+   water with a halo */
+.mk-note { font-size: 12px; line-height: 1.5; color: var(--dim); margin: -14px 0 0; text-shadow: var(--halo); }
 .mk-note + .mk-note { margin-top: -8px; }
 /* a market the venue has closed: its words where the buttons would be */
 .mk-shut { margin: 0; line-height: 1.45; }
@@ -23,6 +24,7 @@
 
 /* the one footer line: why these rows and what is not shown, folded (details). Its words are the account's own notes, the venues that did
    not answer and a read-only server; nothing stands open, nothing is lost. Opening slides the words in — transform and opacity only */
+.mk-foot, .mk-credit { text-shadow: var(--halo); }
 .mk-foot { font-size: 12px; color: var(--dim); margin-top: -10px; }
 .mk-foot summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: var(--dim); text-decoration: underline; text-underline-offset: 3px; }
 .mk-foot summary::-webkit-details-marker { display: none; }

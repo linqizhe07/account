@@ -1,8 +1,10 @@
-/* The Account's desktop shell, in the Clean cards look (M2): a white rail on the left (the brand, Portfolio · Markets · Trade, and at its
-   foot the mode — Guard | Beast and "What changes ›" — Agents, Settings and the status), a main column under a top bar (the lens, a search
-   pill, the Statement), and the shared pieces every pane draws with: pill buttons, pill toggles, white cards with
-   a hairline and a soft shadow, tables inside cards, chips, avatars, ups and downs, the one sheet, the drawer, the small asking dialog,
-   toasts, skeletons. Colours only from ui/tokens.css, so Cream and Black alike (Black drops the shadows and keeps the hairlines). */
+/* The Account's desktop shell, in the ocean look: the page's ground is ui/ocean.js's field of character cells (sharks hunting schools of
+   fish, drawn in type), and everything floats over it as frosted glass — a translucent fill, a hairline, and what swims under it blurred.
+   A glass rail on the left (the brand, Markets · Trade, Agents, and at its foot the status and the Account), a main column under a top bar
+   (the lens, a search, the Statement), and the shared pieces every pane draws with: buttons and toggles with 8 px corners, glass cards
+   with a hairline, tables inside cards, small labels in Geist Mono, the large figures in Manrope's thinnest weight, chips, avatars, ups
+   and downs, the one sheet, the drawer, the small asking dialog, toasts, skeletons. Colours only from ui/tokens.css, so Light and Black
+   alike (Black drops the shadows and keeps the hairlines). */
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -13,7 +15,7 @@ body { min-height: 100vh; -webkit-font-smoothing: antialiased; -moz-osx-font-smo
 body.busy, body.busy :is(a, button, input, select, textarea, label, summary, tr.click) { cursor: progress !important; }
 a { color: inherit; text-underline-offset: 3px; }
 a:hover { color: var(--warn-text); }
-h1, h2, h3 { font-family: var(--font-sans); font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+h1, h2, h3 { font-family: var(--font-sans); font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 p { margin: 0; }
 table { width: 100%; border-collapse: collapse; }
 input, select, textarea { font: inherit; color: var(--text); }
@@ -23,16 +25,17 @@ svg.ico.sm { width: 16px; height: 16px; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 ::selection { background: var(--warn-fill); }
 
-/* words and numbers: labels in sentence case, numbers in Manrope 800 with tabular figures, mono only for hashes and addresses */
-.mono { font-family: var(--font-mono); font-size: 13px; }
+/* words and numbers: labels in sentence case and Geist Mono, small, as a terminal labels its fields; the large figures in Manrope's
+   thinnest weights with tabular figures, as the reference draws its headline; mono for hashes and addresses too */
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
 .dim { color: var(--dim); }
 .small { font-size: 12px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.label { font-family: var(--font-sans); font-size: 12px; font-weight: 600; color: var(--dim); letter-spacing: 0; text-transform: none; }
-.num { font-family: var(--font-num); font-size: 52px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
-.num-m { font-family: var(--font-num); font-size: 28px; font-weight: 800; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.label { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--dim); letter-spacing: 0; text-transform: none; }
+.num { font-family: var(--font-num); font-size: 58px; font-weight: 200; letter-spacing: -0.045em; line-height: 1.04; font-variant-numeric: tabular-nums; }
+.num-m { font-family: var(--font-num); font-size: 30px; font-weight: 300; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 .tab-nums { font-variant-numeric: tabular-nums; }
-.h2 { font-family: var(--font-sans); font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+.h2 { font-family: var(--font-sans); font-size: 20px; font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 /* a price the poll moved (markets.js mkPrices): a tint behind its figures, up or down, for 160 ms — on, then off, nothing animated frame
    by frame; the figures, in tabular digits, keep their place */
 [data-q][data-fmt] { position: relative; z-index: 0; }
@@ -45,13 +48,14 @@ svg.ico.sm { width: 16px; height: 16px; }
 .flat { color: var(--dim); }
 .warn-t { color: var(--warn-text); }
 
-/* buttons: pills. Filled in the text colour (primary), on the second surface (the rest), never an outline; an icon on its own is 44 by 44 */
-button { font: inherit; cursor: pointer; background: var(--surface-2); color: var(--text); border: 0; border-radius: var(--radius-pill); padding: 6px 14px; }
+/* buttons: 8 px corners, as the reference's send key. Filled in the text colour (primary), on the second surface (the rest), never an
+   outline; an icon on its own is 44 by 44 */
+button { font: inherit; cursor: pointer; background: var(--surface-2); color: var(--text); border: 0; border-radius: var(--radius-s); padding: 6px 14px; }
 button:disabled { opacity: 0.5; cursor: default; }
 /* a button drawn with no class of its own (an earlier dialog's Cancel): a pill like any other */
 #modal-form button:not([class]) { font-weight: 600; min-height: 44px; padding: 0 18px; }
 button.ink { background: var(--primary); color: var(--on-primary); }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 18px; border: 0; border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 600; white-space: nowrap; text-decoration: none; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 18px; border: 0; border-radius: var(--radius-s); background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 600; white-space: nowrap; text-decoration: none; }
 /* pointed at: a fill or a word changes colour over 120 ms (paint only, a small area), never a size or a place — and at once while the page
    scrolls under a resting pointer (core.js html.scrolling) */
 .btn, .icon-btn, .seg button, .tabs button, .rail-nav a, .rail-links button, .lens, .menu button, .picks button, .link, .t tr.click td, .tk-list button, .quick-card, .choice { transition: background-color 120ms ease-out, color 120ms ease-out, opacity 120ms ease-out; }
@@ -66,7 +70,7 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 .btn-danger:hover:not(:disabled) { background: var(--down-fill); filter: brightness(0.97); }
 .btn-sm { min-height: 36px; padding: 0 14px; font-size: 13px; }
 .btn-block { width: 100%; }
-.icon-btn { width: 44px; height: 44px; border: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-pill); background: transparent; color: var(--text); flex: none; position: relative; }
+.icon-btn { width: 44px; height: 44px; border: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-s); background: transparent; color: var(--text); flex: none; position: relative; }
 .icon-btn:hover:not(:disabled) { background: var(--hover); }
 /* a word that does something: underlined, in the text's own size. Its target is 44 high all the same — a hit area drawn around it, not
    room taken in the line, so a row of words stays a row */
@@ -77,17 +81,19 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 /* a count beside a word: cards waiting, agents asking */
 .count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--warn); color: var(--on-warn); font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; margin-left: auto; }
 
-/* a toggle: a pill track on the second surface, the pressed one a white pill lifted by the card's shadow (Background, Mode, 1D/1W/1M/All,
+/* a toggle: a track on the second surface, the pressed one a glass key lifted by the card's shadow (Background, Mode, 1D/1W/1M/All,
    Assets/Positions/Accounts, Buy/Sell) */
-.seg { display: inline-flex; gap: 2px; flex-wrap: wrap; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-2); max-width: 100%; }
-.seg button { min-height: 38px; padding: 0 14px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--dim); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+.seg { display: inline-flex; gap: 2px; flex-wrap: wrap; padding: 3px; border-radius: calc(var(--radius-s) + 3px); background: var(--surface-2); max-width: 100%; }
+.seg button { min-height: 38px; padding: 0 14px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--dim); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 700; box-shadow: var(--shadow-card); }
 .seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
-/* category tabs across the top of a pane (Markets: Now · Crypto · Stocks …): words over a hairline, the chosen one underlined. The row
-   scrolls sideways, which would cut a focus ring drawn outside a button: so each button has 8 of room either side of its word (the row
-   reaches 8 past the pane each side to keep the words where they were), the ring is drawn just inside it, and the underline and the
-   hairline are drawn at the words' width */
-.tabs { display: flex; gap: 12px; margin: 0 -8px; background: linear-gradient(var(--border), var(--border)) center bottom / calc(100% - 16px) 1px no-repeat; overflow-x: auto; scrollbar-width: none; }
+/* a toggle that stands on the water rather than in a card — the Account's tabs, Markets' order, the net worth's book and range — has glass
+   under its track, so what swims under it blurs as under any control the reference floats */
+:is(.acct-tabs, .mk-bar, .pf-worth) .seg { background: linear-gradient(var(--surface-2), var(--surface-2)), var(--surface); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); box-shadow: inset 0 0 0 1px var(--card-border); }
+/* category tabs across the top of a pane (Markets: Now · Crypto · Stocks …): words over a hairline, the chosen one underlined, on a strip
+   of glass (the row stands on the water). The row scrolls sideways, which would cut a focus ring drawn outside a button: so each button has
+   8 of room either side of its word, the ring is drawn just inside it, and the underline and the hairline are drawn at the words' width */
+.tabs { display: flex; gap: 12px; padding: 0 8px; border-radius: var(--radius-m); background: linear-gradient(var(--border), var(--border)) center bottom / calc(100% - 32px) 1px no-repeat, var(--surface); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); overflow-x: auto; scrollbar-width: none; }
 .tabs button { position: relative; min-height: 44px; padding: 10px 8px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--dim); font-size: 15px; font-weight: 500; white-space: nowrap; }
 .tabs button::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: transparent; }
 .tabs button:hover { color: var(--text); }
@@ -96,13 +102,20 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 .tabs button:focus-visible { outline-offset: -2px; }
 
 /* ---- the shell ------------------------------------------------------------------------------------------------------------------- */
-.skip { position: absolute; left: 12px; top: -48px; z-index: 60; background: var(--primary); color: var(--on-primary); padding: 10px 16px; border-radius: var(--radius-pill); }
+.skip { position: absolute; left: 12px; top: -48px; z-index: 60; background: var(--primary); color: var(--on-primary); padding: 10px 16px; border-radius: var(--radius-s); }
 .skip:focus { top: 12px; }
-.app { display: flex; align-items: stretch; min-height: 100vh; }
-.rail { flex: 0 0 var(--rail); position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; padding: 24px 16px; background: var(--rail-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 22px; }
-/* round 7 (the Demo v2 canvas, F1 and F5): the name with a round mark, the rail's items, and the Account at its foot */
-.brand { font-family: var(--font-sans); font-size: 22px; font-weight: 800; padding: 0 12px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
-.brand-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--radius-pill); background: var(--primary); color: var(--on-primary); font-size: 14px; font-weight: 800; letter-spacing: 0; }
+/* the ocean (ui/ocean.js): one canvas fixed under the whole page, as tall as the largest viewport (a phone's bar coming and going never
+   resizes it), taking no pointer; the app over it */
+#ocean { position: fixed; left: 0; top: 0; width: 100%; height: 100lvh; display: block; z-index: 0; pointer-events: none; }
+.app { display: flex; align-items: stretch; min-height: 100vh; position: relative; z-index: 1; }
+/* GLASS: every surface that floats over the ocean blurs what swims under it, at the strength the background gives (ui/tokens.css --glass).
+   A blur repaints with the water every frame, so it is given to the surfaces themselves and never to what is inside them (a part of a
+   card is no surface of its own: .card .sec and its kin set it back). Under :where(), so any rule for a part outweighs it */
+:where(.rail, .topbar, .card, .pane .sec, .box, .panel, .banner, .callout, .choice, .quick-card, .search, .menu, .toast, .mk-peek, #modal, #drawer, #ask) { -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
+.rail { flex: 0 0 var(--rail); position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; padding: 24px 16px; background: var(--rail-bg); border-right: 1px solid var(--card-border); display: flex; flex-direction: column; gap: 22px; }
+/* the name with its mark — a single block of the ocean's, a glyph on it — the rail's items, and the Account at its foot */
+.brand { font-family: var(--font-sans); font-size: 21px; font-weight: 600; padding: 0 12px; letter-spacing: -0.03em; display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
+.brand-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 30px; border-radius: 5px; background: var(--primary); color: var(--on-primary); font: 600 15px/1 var(--font-mono); letter-spacing: 0; }
 .rail-nav { display: flex; flex-direction: column; gap: 4px; position: relative; }
 .rail-nav a { position: relative; min-height: 44px; padding: 0 12px; border-radius: var(--radius-s); color: var(--dim); display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 500; text-decoration: none; }
 .rail-nav a .ico { width: 22px; height: 22px; }
@@ -143,7 +156,9 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 button.pill-btn { cursor: pointer; border: 0; line-height: inherit; }
 button.pill-btn:hover { filter: brightness(0.96); }
 
-.main { flex: 999 1 560px; min-width: 0; padding: 24px 36px 48px; display: flex; flex-direction: column; gap: 24px; outline: none; }
+/* the main column clips sideways (clip, not hidden: nothing in it becomes a scroller, so what sticks still sticks): a fog laid round
+   something on open water may reach past the column's edge, never past the window's */
+.main { flex: 999 1 560px; min-width: 0; padding: 24px 36px 48px; display: flex; flex-direction: column; gap: 24px; outline: none; overflow-x: clip; }
 /* the top bar is the Account's header on its three tabs (F5: its name, the mode, trading on, Settings) and Markets' and Trade's search on theirs */
 .main[data-at="account"] [data-only="trading"], .main[data-at="trading"] [data-only="account"] { display: none !important; }
 .acct-h { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin-right: 4px; }
@@ -151,7 +166,7 @@ button.pill-btn:hover { filter: brightness(0.96); }
 .acct-tools .icon-btn { width: 36px; height: 36px; color: var(--dim); }
 .acct-tools .icon-btn:hover:not(:disabled) { color: var(--text); }
 .acct-tabs { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin-top: -8px; }
-.acct-tabs .note-s { margin-left: auto; }
+.acct-tabs .note-s { margin-left: auto; text-shadow: var(--halo); }
 /* a seg of links (the Account's tabs): the same pills as a seg of buttons, the one shown pressed */
 .seg a { min-height: 38px; padding: 0 14px; border-radius: var(--radius-pill); color: var(--dim); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none; transition: background-color 120ms ease-out, color 120ms ease-out; }
 .seg a:hover:not([aria-current="page"]) { color: var(--text); }
@@ -163,17 +178,18 @@ button.pill-btn:hover { filter: brightness(0.96); }
 .rkey:hover:not(:disabled) { background: var(--border); }
 .rkey.yes-k { background: var(--accent); color: var(--on-accent); }
 .rkey.yes-k:hover:not(:disabled) { background: var(--accent); opacity: 0.88; }
-.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; }
+/* the top bar: a glass bar over the water, as the reference floats its controls */
+.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; min-height: 60px; padding: 8px 10px 8px 18px; border: 1px solid var(--card-border); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-card); }
 .lens { font-size: 16px; font-weight: 700; border: 0; border-radius: var(--radius-s); background: transparent; height: 44px; padding: 0 6px; margin-left: -6px; display: inline-flex; align-items: center; gap: 6px; max-width: 320px; }
 .lens:hover { background: var(--hover); }
 .lens span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.search { display: flex; align-items: center; gap: 10px; height: 44px; width: 420px; max-width: 100%; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--surface); color: var(--dim); margin: 0; }
+.search { display: flex; align-items: center; gap: 10px; height: 44px; width: 420px; max-width: 100%; padding: 0 14px; border-radius: calc(var(--radius-s) + 4px); border: 1px solid var(--card-border); background: var(--surface); color: var(--dim); margin: 0; }
 .search:focus-within { outline: 2px solid var(--text); outline-offset: 2px; }
 .search input { border: 0; background: transparent; font-size: 14px; flex: 1; width: 0; outline: none; min-width: 0; }
 .search input::placeholder { color: var(--dim); }
 .search input::-webkit-search-cancel-button { cursor: pointer; }
-kbd { font-family: var(--font-sans); font-size: 11px; font-weight: 600; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--dim); }
+kbd { font-family: var(--font-mono); font-size: 11px; font-weight: 500; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--dim); }
 /* the lens's menu, under its button: a floating card */
 .menu { position: absolute; top: 50px; left: 0; z-index: 20; min-width: 280px; max-height: 70vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius-m); box-shadow: var(--shadow); padding: 6px; }
 .menu .menu-h { font-size: 12px; font-weight: 600; color: var(--dim); padding: 10px 12px 4px; }
@@ -186,7 +202,7 @@ kbd { font-family: var(--font-sans); font-size: 11px; font-weight: 600; border: 
 .menu button .dim { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
 .banner { border: 1px solid var(--card-border); border-radius: var(--radius-m); padding: 14px 18px; background: var(--surface); box-shadow: var(--shadow-card); font-size: 14px; }
 .codeform { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.codeform input { font-family: var(--font-mono); font-size: 14px; height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--bg); width: 150px; text-transform: uppercase; }
+.codeform input { font-family: var(--font-mono); font-size: 14px; height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--bg); width: 150px; text-transform: uppercase; }
 .codeform input:focus { border-color: var(--rule); outline: none; box-shadow: 0 0 0 1px var(--rule); }
 .notice { font-size: 13px; color: var(--dim); background: var(--surface-2); border-radius: var(--radius-s); padding: 8px 14px; }
 .notice details.inl[open] { margin-left: 0; }
@@ -211,7 +227,7 @@ kbd { font-family: var(--font-sans); font-size: 11px; font-weight: 600; border: 
 .pane .sec:has(> .t-wrap:last-child), .card:has(> .t-wrap:last-child) { padding-bottom: 8px; }
 .pane .sec:has(> .t-wrap:last-child):not(:is(.card, .box, .panel, .callout, .sec) .sec), .card:has(> .t-wrap:last-child) { padding-left: 18px; padding-right: 18px; }
 .sec { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.card .sec, .box .sec, .panel .sec, .callout .sec, dialog .sec, .sec .sec { background: none; border: 0; border-radius: 0; box-shadow: none; padding: 14px 0 0; border-top: 1px solid var(--border); }
+.card .sec, .box .sec, .panel .sec, .callout .sec, dialog .sec, .sec .sec { background: none; border: 0; border-radius: 0; box-shadow: none; padding: 14px 0 0; border-top: 1px solid var(--border); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .card-head, .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .card-head .tools, .sec-head .tools { display: flex; gap: 12px; align-items: center; font-size: 13px; flex-wrap: wrap; }
 /* something waiting on the owner: a warm card with a soft orange edge */
@@ -362,7 +378,7 @@ details.inl[open] { display: block; margin: 6px 0 0 24px; color: var(--dim); fon
 dialog { color: var(--text); }
 #modal { border: 1px solid var(--card-border); border-radius: var(--radius-l); background: var(--surface); padding: 0; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); box-shadow: var(--shadow); }
 #modal.wide { width: min(1080px, calc(100vw - 48px)); }
-#modal::backdrop, #ask::backdrop { background: var(--scrim); }
+#modal::backdrop, #ask::backdrop { background: var(--scrim); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 /* opening and closing: the sheet, the drawer and the asking dialog move in transform and opacity only, the backdrop fading beside them —
    a sheet and a question rise 12 px and grow from 98% as they come in (180 ms) and go in 120; the drawer slides in from the right edge
    (220 ms) and out (160). What a sheet showed stays until the fade is over (shell.js); the drawer's reads are drawn once it rests (core.js
@@ -488,19 +504,19 @@ dialog { color: var(--text); }
   dialog .row, .row2 { grid-template-columns: 1fr; }
 }
 
-/* ---- THE TRADING AREA: Trade, Regular and Superagent, in Hyperliquid's trade-app look (html[data-area="trade"]; the tokens in
-   ui/tokens.css, every value measured from app.hyperliquid.xyz/trade: scratchpad hl-reference.md §5–§8). The column beside the rail becomes
-   HL's screen: 3 px of ground between flat panels (radius 5, no edge, no shadow), one face at 12 on 15 and one weight (400), controls 33
-   high with 8 px corners, colour changing over 0.2 s, no shadow anywhere. The chrome the shell draws is styled here — the top bar as HL's
-   nav, the switch, the lens and its menu, the search, the banners, the sheets and the toasts; the shared classes the panes draw with (.btn
-   .seg .tabs .t .fld .link) get HL's grammar under :where(), at the specificity they already have, so a pane's own rule for its own part
-   (the terminal's order panel, its book) still decides there. Every such rule is scoped to the area's containers (the main column, the
-   sheet, the drawer, the asking dialog, the toasts), never to the whole page, so nothing of the area's grammar — its one weight above
-   all — reaches the rail. Where HL has no keyboard ring, the area keeps one: 2 px of the soft accent.
-   THE RAIL takes the area's colours while it shows (tokens.css gives them to html itself): HL's own nav is a panel of the same green, so the
-   rail is one with the screen beside it instead of a cream strip from another app. Only its colours change — its shape, its face and its
-   weights stay the Account's, so nothing on it moves — and they change over 0.2 s, at once under reduced motion. Leaving the area brings the
-   Account's look back. Its current item and the item under the pointer are HL's nav link in the bright accent.
+/* ---- THE TRADING AREA: Trade, Regular and Superagent, in Hyperliquid's trade-app grammar on the Black ocean (html[data-area="trade"]; the
+   tokens in ui/tokens.css). The column beside the rail becomes a trading screen: dark glass panels 6 px apart with the water showing
+   between them (radius 10, a hairline, no shadow), one face at 12 on 15 and one weight (400), controls 33 high with 8 px corners, colour
+   changing over 0.2 s. The chrome the shell draws is styled here — the top bar, the switch, the lens and its menu, the search, the
+   banners, the sheets and the toasts; the shared classes the panes draw with (.btn .seg .tabs .t .fld .link) get the area's grammar
+   under :where(), at the specificity they already have, so a pane's own rule for its own part (the terminal's order panel, its book)
+   still decides there. Every such rule is scoped to the area's containers (the main column, the sheet, the drawer, the asking dialog,
+   the toasts), never to the whole page, so nothing of the area's grammar — its one weight above all — reaches the rail. The keyboard's
+   ring is 2 px of the soft accent.
+   THE RAIL takes the area's colours while it shows (tokens.css gives them to html itself), so it is one with the screen beside it. Only
+   its colours change — its shape, its face and its weights stay the Account's, so nothing on it moves — and they change over 0.2 s, at
+   once under reduced motion. Leaving the area brings the Account's look back. Its current item and the item under the pointer are in the
+   bright accent.
    Hover colours sit inside (hover: hover), so a touch screen never keeps one stuck; outside it only resets, which set back the Account's
    own hover rules to the rest look ---------------------------------------------------------------------------------------------------- */
 /* the rail beside the area, and the page behind it: their colours fade between the Account's and the area's. The page's own text colour
@@ -512,14 +528,14 @@ html, body { transition: background-color 0.2s ease-in-out; }
 .rail, .rail-wallet, .rail-pill, .brand, .brand-mark, .rail .count, .rail .stamp, .rw-sub { transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out, border-color 0.2s ease-in-out; }
 .rail-nav.moves .rail-pill { transition: transform 220ms cubic-bezier(.2, .8, .2, 1), background-color 0.2s ease-in-out; }
 .rail-nav a, .rail-links button { transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out; }
-/* HL's nav has no edge: the 3 px of ground beside the main column does the separating */
+/* no edge beside the main column: the water in the gutter does the separating */
 :root[data-area="trade"] .rail { border-right-color: transparent; }
 :root[data-area="trade"] .rail-nav a[aria-current="page"] { color: var(--hl-accent); }
 @media (hover: hover) { :root[data-area="trade"] :is(.rail-nav a, .rail-links button):hover { color: var(--hl-accent); } }
 :root[data-area="trade"] .main { padding: var(--hl-gap); gap: var(--hl-gap); }
 :root[data-area="trade"] .pane, :root[data-area="trade"] .pane > div { gap: var(--hl-gap); }
 /* the top bar as HL's nav: a panel 56 high, its parts 22 apart; the switch first, the lens, then the search and the Statement at its end */
-:root[data-area="trade"] .topbar { min-height: var(--hl-h-nav); padding: 0 12px; gap: 22px; background: var(--hl-panel); border-radius: var(--hl-r-panel); }
+:root[data-area="trade"] .topbar { min-height: var(--hl-h-nav); padding: 0 12px; gap: 22px; background: var(--hl-glass); border-color: var(--card-border); border-radius: var(--hl-r-panel); box-shadow: none; }
 :root[data-area="trade"] .lens { font: 400 12px/15px var(--font-sans); height: var(--hl-h-control); margin-left: 0; padding: 0 4px; color: var(--hl-text); background: transparent; border-radius: var(--hl-r); transition: color var(--hl-ease); }
 :root[data-area="trade"] .lens:hover { background: transparent; }
 @media (hover: hover) { :root[data-area="trade"] .lens:hover { color: var(--hl-accent); } }
@@ -535,10 +551,10 @@ html, body { transition: background-color 0.2s ease-in-out; }
 :root[data-area="trade"] #open-statement .ico { width: 18px; height: 18px; }
 @media (hover: hover) { :root[data-area="trade"] #open-statement:hover:not(:disabled) { background: var(--hl-ground); } }
 /* pairing, a restart's notice: panels like any other */
-:root[data-area="trade"] :is(.banner, .notice) { background: var(--hl-panel); border: 0; border-radius: var(--hl-r-panel); box-shadow: none; padding: 10px 12px; font-size: 12px; line-height: 15px; }
+:root[data-area="trade"] :is(.banner, .notice) { background: var(--hl-glass); border: 0; border-radius: var(--hl-r-panel); box-shadow: inset 0 0 0 1px var(--card-border); padding: 10px 12px; font-size: 12px; line-height: 15px; -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
 :root[data-area="trade"] .codeform input { height: var(--hl-h-control); border-color: var(--hl-inset); border-radius: var(--hl-r); background: transparent; font-size: 12px; }
 :root[data-area="trade"] .codeform input:focus { border-color: var(--hl-muted); box-shadow: none; }
-:root[data-area="trade"] .pane-error { background: var(--hl-panel); border: 0; border-radius: var(--hl-r-panel); padding: 10px 12px; font-size: 12px; }
+:root[data-area="trade"] .pane-error { background: var(--hl-glass); border: 0; border-radius: var(--hl-r-panel); padding: 10px 12px; font-size: 12px; }
 
 /* REGULAR · SUPERAGENT: HL's toggle (its Buy | Sell and Strict | All), a 33-high track of the inset colour, the mode showing on the soft
    accent with the deep ink on it (#02231e on #50d2c1). Drawn once in the top bar for both panes (account.html), so it stands in the same
@@ -638,15 +654,15 @@ html, body { transition: background-color 0.2s ease-in-out; }
 @media (pointer: coarse) { :root[data-area="trade"] .menu button { min-height: 44px; } }
 
 /* the sheet, the drawer, the question: HL's modal — a panel with an inset edge, radius 16, no shadow, over a blurred scrim */
-:root[data-area="trade"] :is(#modal, #ask) { border: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal); background: var(--hl-panel); box-shadow: none; }
-:root[data-area="trade"] #drawer { border: 0; border-left: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal) 0 0 var(--hl-r-modal); background: var(--hl-panel); box-shadow: none; }
+:root[data-area="trade"] :is(#modal, #ask) { border: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal); background: var(--hl-glass); box-shadow: none; }
+:root[data-area="trade"] #drawer { border: 0; border-left: 1px solid var(--hl-inset); border-radius: var(--hl-r-modal) 0 0 var(--hl-r-modal); background: var(--hl-glass); box-shadow: none; }
 :root[data-area="trade"] :is(#modal, #ask)::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
 :root[data-area="trade"] .sheet-h { border-bottom-color: var(--hl-inset); background: var(--hl-panel); }
 :root[data-area="trade"] :is(.sheet-h h2, #modal-form h2, .ask-f h2) { font-size: 20px; line-height: 27px; color: var(--hl-title); }
 :root[data-area="trade"] :is(.sheet-b, #modal-form, .ask-f) { font-size: 12px; line-height: 15px; color: var(--hl-modal-body); }
 :root[data-area="trade"] .ask-f p { font-size: 12px; line-height: 17px; }
 /* toasts: HL's, a panel with an inset edge and radius 12 */
-:root[data-area="trade"] .toast { background: var(--hl-panel); border: 1px solid var(--hl-inset); border-radius: var(--hl-r-toast); box-shadow: none; font-size: 12px; line-height: 16px; }
+:root[data-area="trade"] .toast { background: var(--hl-glass); border: 1px solid var(--hl-inset); border-radius: var(--hl-r-toast); box-shadow: none; font-size: 12px; line-height: 16px; }
 :root[data-area="trade"] .toast.no { border-color: var(--hl-down); }
 
 @media (max-width: 900px) {
@@ -668,6 +684,7 @@ html, body { transition: background-color 0.2s ease-in-out; }
 
 /* ---- print: only the statement ---------------------------------------------------------------------------------------------------- */
 @media print {
+  #ocean { display: none !important; }
   body[data-print="statement"] { background: #fff; color: #000; }
   body[data-print="statement"] > :not(#modal) { display: none !important; }
   body[data-print="statement"] #modal { position: static; display: block; width: auto; max-height: none; overflow: visible; border: 0; border-radius: 0; box-shadow: none; background: #fff; color: #000; }

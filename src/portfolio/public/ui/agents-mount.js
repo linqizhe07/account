@@ -64,7 +64,8 @@ function drawSettings() {
   // the cap: the owner's to change by signature (setPolicy cap), up or down; a restart brings the signed figure back
   $("set-cap").innerHTML = writesOn() && owner ? '<button type="button" class="btn btn-sm" id="cap-change">Change the cap</button>' : "";
   if ($("cap-change")) $("cap-change").addEventListener("click", openCap);
-  $("set-theme").innerHTML = seg([["cream", "Cream"], ["black", "Black"]], document.documentElement.dataset.theme || "cream", setTheme, { label: "Background" });
+  // the light ocean keeps the name it was stored under ("cream"), so every browser keeps its choice
+  $("set-theme").innerHTML = seg([["cream", "Light"], ["black", "Black"]], document.documentElement.dataset.theme || "cream", setTheme, { label: "Background" });
   renderDial(connected(), owner);
   renderDevices(owner);
 }

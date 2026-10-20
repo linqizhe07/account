@@ -13,7 +13,7 @@
    The live layer (the newest candle, the price axis's figures, the last price) lies over the picture, and the hint (older bars loading,
    where the history ends) at the plot's foot, both out of the flow too. A drag moves the chart sideways only: up and down is the page's. */
 
-.ch { display: flex; flex-direction: column; flex: 1 1 auto; gap: 4px; height: 100%; min-height: 280px; min-width: 0; padding: 0 0 6px; background: var(--hl-panel); container-type: inline-size; }
+.ch { display: flex; flex-direction: column; flex: 1 1 auto; gap: 4px; height: 100%; min-height: 280px; min-width: 0; padding: 0 0 6px; background: transparent; container-type: inline-size; }
 
 /* ---- the head: the ranges, the bar sizes' menu, the log switch — one row of fixed height (a narrow chart scrolls it sideways) ------------ */
 .ch-head { display: flex; align-items: center; flex: none; flex-wrap: nowrap; gap: 4px; height: 38px; padding: 0 8px; border-bottom: 1px solid var(--hl-grid); min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
