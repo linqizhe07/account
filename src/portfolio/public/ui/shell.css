@@ -1,10 +1,11 @@
-/* The Account's desktop shell, in the ocean look: the page's ground is ui/ocean.js's field of character cells (sharks hunting schools of
-   fish, drawn in type), and everything floats over it as frosted glass — a translucent fill, a hairline, and what swims under it blurred.
-   A glass rail on the left (the brand, Markets · Trade, Agents, and at its foot the status and the Account), a main column under a top bar
-   (the lens, a search, the Statement), and the shared pieces every pane draws with: buttons and toggles with 8 px corners, glass cards
-   with a hairline, tables inside cards, small labels in Geist Mono, the large figures in Manrope's thinnest weight, chips, avatars, ups
-   and downs, the one sheet, the drawer, the small asking dialog, toasts, skeletons. Colours only from ui/tokens.css, so Light and Black
-   alike (Black drops the shadows and keeps the hairlines). */
+/* The Account's desktop shell, in the ocean look with Swiss typography: the page's ground is ui/ocean.js's field of character cells
+   (sharks hunting schools of fish, drawn in type), and everything floats over it as frosted glass — a translucent fill, a hairline, and
+   what swims under it blurred — set like a Swiss page: one neo-grotesque (Inter) in a few sizes and weights, the large figures bold and
+   tight, flush left, nearly square corners, a heavy rule over each card, no shadows, black and white with the red for what is chosen.
+   A glass rail on the left (the Account's red mark, Markets · Trade, Agents, and at its foot the status and the Account), a main column
+   under a top bar (the lens, a search, the Statement), and the shared pieces every pane draws with: buttons and toggles (pressed in ink),
+   glass cards, tables inside cards, small labels, chips, avatars, ups and downs, the one sheet, the drawer, the small asking dialog,
+   toasts, skeletons. Colours only from ui/tokens.css, so Light and Black alike. */
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -15,7 +16,7 @@ body { min-height: 100vh; -webkit-font-smoothing: antialiased; -moz-osx-font-smo
 body.busy, body.busy :is(a, button, input, select, textarea, label, summary, tr.click) { cursor: progress !important; }
 a { color: inherit; text-underline-offset: 3px; }
 a:hover { color: var(--warn-text); }
-h1, h2, h3 { font-family: var(--font-sans); font-weight: 600; letter-spacing: -0.015em; margin: 0; }
+h1, h2, h3 { font-family: var(--font-sans); font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 p { margin: 0; }
 table { width: 100%; border-collapse: collapse; }
 input, select, textarea { font: inherit; color: var(--text); }
@@ -25,17 +26,18 @@ svg.ico.sm { width: 16px; height: 16px; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 ::selection { background: var(--warn-fill); }
 
-/* words and numbers: labels in sentence case and Geist Mono, small, as a terminal labels its fields; the large figures in Manrope's
-   thinnest weights with tabular figures, as the reference draws its headline; mono for hashes and addresses too */
+/* words and numbers, as a Swiss page sets them: labels small and bold in sentence case, dimmed; the large figures bold, tight and
+   tabular, in Inter's Display cut (its optical size comes on by itself at those sizes); mono only for hashes, addresses and what is
+   signed */
 .mono { font-family: var(--font-mono); font-size: 12.5px; }
 .dim { color: var(--dim); }
 .small { font-size: 12px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.label { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--dim); letter-spacing: 0; text-transform: none; }
-.num { font-family: var(--font-num); font-size: 58px; font-weight: 200; letter-spacing: -0.045em; line-height: 1.04; font-variant-numeric: tabular-nums; }
-.num-m { font-family: var(--font-num); font-size: 30px; font-weight: 300; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.label { font-family: var(--font-sans); font-size: 12px; font-weight: 600; color: var(--dim); letter-spacing: 0; text-transform: none; }
+.num { font-family: var(--font-num); font-size: 60px; font-weight: 600; letter-spacing: -0.045em; line-height: 1.02; font-variant-numeric: tabular-nums; }
+.num-m { font-family: var(--font-num); font-size: 30px; font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 .tab-nums { font-variant-numeric: tabular-nums; }
-.h2 { font-family: var(--font-sans); font-size: 20px; font-weight: 600; letter-spacing: -0.015em; margin: 0; }
+.h2 { font-family: var(--font-sans); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 /* a price the poll moved (markets.js mkPrices): a tint behind its figures, up or down, for 160 ms — on, then off, nothing animated frame
    by frame; the figures, in tabular digits, keep their place */
 [data-q][data-fmt] { position: relative; z-index: 0; }
@@ -81,11 +83,11 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 /* a count beside a word: cards waiting, agents asking */
 .count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--warn); color: var(--on-warn); font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; margin-left: auto; }
 
-/* a toggle: a track on the second surface, the pressed one a glass key lifted by the card's shadow (Background, Mode, 1D/1W/1M/All,
+/* a toggle: a track on the second surface, the pressed one in ink with the paper's colour on it (Background, Mode, 1D/1W/1M/All,
    Assets/Positions/Accounts, Buy/Sell) */
 .seg { display: inline-flex; gap: 2px; flex-wrap: wrap; padding: 3px; border-radius: calc(var(--radius-s) + 3px); background: var(--surface-2); max-width: 100%; }
 .seg button { min-height: 38px; padding: 0 14px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--dim); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
-.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 700; box-shadow: var(--shadow-card); }
+.seg button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); font-weight: 600; box-shadow: none; }
 .seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
 /* a toggle that stands on the water rather than in a card — the Account's tabs, Markets' order, the net worth's book and range — has glass
    under its track, so what swims under it blurs as under any control the reference floats */
@@ -98,7 +100,7 @@ button.ink { background: var(--primary); color: var(--on-primary); }
 .tabs button::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: transparent; }
 .tabs button:hover { color: var(--text); }
 .tabs button[aria-pressed="true"] { color: var(--text); font-weight: 700; }
-.tabs button[aria-pressed="true"]::after { background: var(--text); }
+.tabs button[aria-pressed="true"]::after { background: var(--mark); }
 .tabs button:focus-visible { outline-offset: -2px; }
 
 /* ---- the shell ------------------------------------------------------------------------------------------------------------------- */
@@ -113,17 +115,17 @@ button.ink { background: var(--primary); color: var(--on-primary); }
    card is no surface of its own: .card .sec and its kin set it back). Under :where(), so any rule for a part outweighs it */
 :where(.rail, .topbar, .card, .pane .sec, .box, .panel, .banner, .callout, .choice, .quick-card, .search, .menu, .toast, .mk-peek, #modal, #drawer, #ask) { -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
 .rail { flex: 0 0 var(--rail); position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; padding: 24px 16px; background: var(--rail-bg); border-right: 1px solid var(--card-border); display: flex; flex-direction: column; gap: 22px; }
-/* the name with its mark — a single block of the ocean's, a glyph on it — the rail's items, and the Account at its foot */
-.brand { font-family: var(--font-sans); font-size: 21px; font-weight: 600; padding: 0 12px; letter-spacing: -0.03em; display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
-.brand-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 30px; border-radius: 5px; background: var(--primary); color: var(--on-primary); font: 600 15px/1 var(--font-mono); letter-spacing: 0; }
+/* the name with its mark — a red square with the letter on it, as a Swiss page signs itself — the rail's items, and the Account at its foot */
+.brand { font-family: var(--font-sans); font-size: 21px; font-weight: 700; padding: 0 12px; letter-spacing: -0.035em; display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
+.brand-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 0; background: var(--mark); color: #ffffff; font: 700 16px/1 var(--font-sans); letter-spacing: 0; }
 .rail-nav { display: flex; flex-direction: column; gap: 4px; position: relative; }
 .rail-nav a { position: relative; min-height: 44px; padding: 0 12px; border-radius: var(--radius-s); color: var(--dim); display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 500; text-decoration: none; }
 .rail-nav a .ico { width: 22px; height: 22px; }
 .rail-nav a:hover { color: var(--text); background: var(--hover); }
-.rail-nav a[aria-current="page"] { background: var(--surface-2); color: var(--text); font-weight: 700; }
+.rail-nav a[aria-current="page"] { background: var(--surface-2); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--mark); }
 /* the tab that is shown sits on a pill of its own, which slides to the next tab (transform, 220 ms) when the pane changes; until it is placed
    (shell.js railPill) the tab carries the fill itself */
-.rail-pill { position: absolute; left: 0; right: 0; top: 0; height: 44px; border-radius: var(--radius-s); background: var(--surface-2); pointer-events: none; }
+.rail-pill { position: absolute; left: 0; right: 0; top: 0; height: 44px; border-radius: var(--radius-s); background: var(--surface-2); box-shadow: inset 2px 0 0 var(--mark); pointer-events: none; }
 .rail-nav.moves .rail-pill { transition: transform 220ms cubic-bezier(.2, .8, .2, 1); }
 @media (min-width: 901px) { .rail-nav:has(> .rail-pill:not([hidden])) a[aria-current="page"] { background: transparent; } }
 .rail-nav a[aria-current="page"] .ico { stroke-width: 2.1; }
@@ -170,7 +172,7 @@ button.pill-btn:hover { filter: brightness(0.96); }
 /* a seg of links (the Account's tabs): the same pills as a seg of buttons, the one shown pressed */
 .seg a { min-height: 38px; padding: 0 14px; border-radius: var(--radius-pill); color: var(--dim); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none; transition: background-color 120ms ease-out, color 120ms ease-out; }
 .seg a:hover:not([aria-current="page"]) { color: var(--text); }
-.seg a[aria-current="page"] { background: var(--surface); color: var(--text); font-weight: 700; box-shadow: var(--shadow-card); }
+.seg a[aria-current="page"] { background: var(--primary); color: var(--on-primary); font-weight: 600; box-shadow: none; }
 /* round 7's round keys: what the owner answers, a 32 round icon (the yes in the accent, the no on the second surface), its word for the
    screen reader and on hover */
 .rkey { width: 32px; height: 32px; border: 0; padding: 0; border-radius: var(--radius-pill); display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text); flex: none; transition: background-color 120ms ease-out, opacity 120ms ease-out; }
@@ -220,9 +222,9 @@ kbd { font-family: var(--font-mono); font-size: 11px; font-weight: 500; border: 
 .cols { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
 .col-main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 .col-side { flex: 1 1 340px; max-width: 380px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
-/* a card: white, a hairline of its own, radius 16, a shadow you barely see. A .sec drawn in a pane is a card too; inside a card, a sheet
-   or the drawer it is a plain part under a hairline */
-.card, .pane .sec { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius-m); box-shadow: var(--shadow-card); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* a card: glass, a hairline of its own and a heavy rule across its top (a Swiss page's column rule), nearly square, no shadow. A .sec
+   drawn in a pane is a card too; inside a card, a sheet or the drawer it is a plain part under a hairline */
+.card, .pane .sec { background: var(--surface); border: 1px solid var(--card-border); border-top: 2px solid var(--rule); border-radius: var(--radius-m); box-shadow: var(--shadow-card); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 /* a card that is mostly a table: 18 at its sides as on the board (every pane alike), the table running nearly to its foot */
 .pane .sec:has(> .t-wrap:last-child), .card:has(> .t-wrap:last-child) { padding-bottom: 8px; }
 .pane .sec:has(> .t-wrap:last-child):not(:is(.card, .box, .panel, .callout, .sec) .sec), .card:has(> .t-wrap:last-child) { padding-left: 18px; padding-right: 18px; }
@@ -610,7 +612,7 @@ html, body { transition: background-color 0.2s ease-in-out; }
 :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button::after { height: 1px; left: 12px; right: 12px; }
 :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button:hover { color: var(--hl-dim); }
 :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button[aria-pressed="true"] { color: var(--hl-text); }
-:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button[aria-pressed="true"]::after { background: var(--hl-accent-soft); }
+:where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .tabs button[aria-pressed="true"]::after { background: var(--hl-mark); }
 /* tables: HL's rows, 24 high, no rules between them, the heads dim */
 :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) table.t { font-size: 12px; }
 :where(:root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack)) .t th { font-size: 12px; line-height: var(--hl-h-row); padding: 0 8px; color: var(--hl-dim); border-bottom: 1px solid var(--hl-tabline); }

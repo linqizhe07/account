@@ -6,18 +6,23 @@
    the sharks swim round, so the figure is seldom crossed.
 
    Back to front, on one canvas fixed behind the app (account.html #ocean):
-     the ground   a fill and a faint grid of cells, in the background's own colours (ui/tokens.css --oc-*: Light after the reference's
-                  video, Black after its source; the trading area is always Black)
+     the ground   a fill and a faint grid of cells — about a 170th of the window's width, 7 to 10 px — in the background's own colours
+                  (ui/tokens.css --oc-*: Light after the reference's video, Black after its source; the trading area wears the same)
      the wake     a field over the cells that the tails and the fish stir, spreading out and fading: a small dot wherever it is strong
      the burst    where a fish was eaten, a few sparks for a moment
      the fish     schools: each fish keeps its room, lines up with the school and closes on its middle, one dash each, brighter the
                   nearer it swims and glinting while it turns hard. They bolt from a shark's head and flanks and from the pointer, and the alarm
                   runs fish to fish through a school, so a whole school breaks when only its edge saw the shark
-     the sharks   a spine of joints the head pulls along (each joint bending only so far), a wave running down it. The body is laid on
-                  the cells against a top-down outline (snout, pectoral fins, dorsal, tail; a hammerhead's head): a cell it covers is a
-                  block of grey shaded by the light with a glyph on it — denser glyphs in shadow, a few glinting in colour — and a cell it
-                  half covers, at the edge, is a light glyph alone. Each glyph is tied to a place on the skin, so it rides along with it.
-                  They patrol, grow hungry, and hunt the stragglers of a school; the smaller ones swim deeper, under the bigger
+     the sharks   two to five a visit, of nine kinds drawn at random (OC_SPECIES: blacktip reef, scalloped and great hammerheads, tiger,
+                  mako, thresher, nurse, leopard, and one visit in three a whale shark, the biggest), none twice. Each is a spine of joints
+                  the head pulls along (each joint bending only so far), a wave running down it, laid on the cells against its kind's
+                  top-down outline — its snout, its girth, how its body narrows and how its tail ends (a fork, a ribbon, a thresher's whip),
+                  its pectorals, dorsals and eyes, a hammerhead's head — at some sixty cells for the biggest. A cell it covers is a block of
+                  grey shaded by the light with a glyph on it — denser glyphs in shadow, a few glinting in colour — and a cell it half
+                  covers, at the edge, is a light glyph alone; its markings are blocks of their own (a tiger's bars, a leopard shark's spots
+                  and ridges, a whale shark's pale spots and lines, a blacktip's tips). Each glyph and each spot is tied to a place on the
+                  skin, so it rides along with it. They patrol, grow hungry, and hunt the stragglers of a school, each kind at its own speed
+                  and turn (a mako fast and sharp, a nurse shark slow; a whale shark hunts nothing); the smaller swim deeper, under the bigger
 
    COST. The world moves in fixed steps (1/60 s, at most four a frame). A frame copies the ground, draws the blocks one colour at a time
    and every glyph from an atlas (each glyph in each colour drawn once, then copied); a shark is laid only on the cells near it, and a cell
@@ -26,30 +31,38 @@
    loop: one still frame, drawn again when the size or the background changes.
 
    ocMount(canvas)   the ocean drawn into canvas (it sizes itself to the canvas's box); returns { stats(), release() }: stats() is
-                     { fps, p95ms, engineMs, stepMs, drawMs, lite, still, cells, fish, sharks } — the display's frame rate (the median
+                     { fps, p95ms, engineMs, stepMs, drawMs, lite, still, cells, fish, sharks, kinds } — the display's frame rate (the median
                      interval between frames), the 95th percentile of that interval, of the engine's own part of a frame, of one step of the
                      world and of one drawing (a frame is a drawing and as many steps as the time since the last one asks: one at 60 fps),
-                     whether it draws every second frame, whether it is still — or null where there is no canvas to draw on
+                     whether it draws every second frame, whether it is still, the grid's cells, the fish, the sharks and their kinds (deepest
+                     first) — or null where there is no canvas to draw on
    OCEAN             the page's own, mounted on #ocean as the page loads */
 
 const OC_STEP = 1 / 60;
 const OC_JOINTS = 18;
-/* the glyphs: a body cell's by its shadow (light to dense, so the texture follows the shading), the dorsal ridge's, a fin's, a cell half
-   covered at the edge (the lighter set where less of it is covered), an eye, a burst's two (a fish is a dash: drawn as its bar) */
+/* the glyphs: a body cell's by its shadow (light to dense, so the texture follows the shading), the dorsal ridge's, a fin's, a dark
+   marking's, a pale spot's, a cell half covered at the edge (the lighter set where less of it is covered), an eye, a burst's two (a fish
+   is a dash: drawn as its bar) */
 const OC_RAMP = ":;+tx%SX8#@";
 const OC_RIDGE = "@#8";
 const OC_FIN = "+;t%:";
+const OC_MARKS = "#%@8";
+const OC_SPOTS = "°o·";
 const OC_EDGE_LO = ".',`";
 const OC_EDGE_HI = ":;";
-const OC_GLYPHS = [...new Set(`${OC_RAMP}${OC_RIDGE}${OC_FIN}${OC_EDGE_LO}${OC_EDGE_HI}o*·`)].join("");
+const OC_GLYPHS = [...new Set(`${OC_RAMP}${OC_RIDGE}${OC_FIN}${OC_MARKS}${OC_SPOTS}${OC_EDGE_LO}${OC_EDGE_HI}o*·`)].join("");
 const ocIdx = (s) => Int16Array.from([...s].map((c) => OC_GLYPHS.indexOf(c)));
-const OC_I = { ramp: ocIdx(OC_RAMP), ridge: ocIdx(OC_RIDGE), fin: ocIdx(OC_FIN), lo: ocIdx(OC_EDGE_LO), hi: ocIdx(OC_EDGE_HI), eye: OC_GLYPHS.indexOf("o"), star: OC_GLYPHS.indexOf("*"), dot: OC_GLYPHS.indexOf("·") };
+const OC_I = { ramp: ocIdx(OC_RAMP), ridge: ocIdx(OC_RIDGE), fin: ocIdx(OC_FIN), mark: ocIdx(OC_MARKS), spot: ocIdx(OC_SPOTS), lo: ocIdx(OC_EDGE_LO), hi: ocIdx(OC_EDGE_HI), eye: OC_GLYPHS.indexOf("o"), star: OC_GLYPHS.indexOf("*"), dot: OC_GLYPHS.indexOf("·") };
 /* what a cell holds of a shark */
 const OC_BODY = 1;
 const OC_EDGE = 2;
 const OC_FINS = 3;
 const OC_RIDGE_F = 4;
 const OC_EYE = 5;
+const OC_MARK = 6;
+const OC_SPOT = 7;
+/* a shark's block colours: 32 steps of light, then its dark marking and its pale spot */
+const OC_LEVELS = 34;
 /* where in a cell the four extra samples are taken (as shares of its width and height), for the edges' coverage */
 const OC_SUB = [0.22, 0.28, 0.78, 0.28, 0.22, 0.74, 0.78, 0.74];
 
@@ -115,53 +128,88 @@ function ocFin(u, d, a, b, c, r, falcate) {
   const t = d / r;
   return u >= a + (c - a) * t && u <= b + (c - b) * (falcate ? t * t : t);
 }
-/* a requiem shark's half-width at s (0 the snout, 1 the tail), as a share of its length */
-function ocReefHalf(s) {
-  if (s < 0.12) return 0.088 * Math.pow(Math.sin(((s / 0.12) * Math.PI) / 2), 0.85);
-  if (s < 0.3) return 0.088 + 0.018 * ocSmooth(0.12, 0.3, s);
-  if (s < 0.86) return 0.017 + 0.089 * Math.pow(1 - (s - 0.3) / 0.56, 1.35);
-  const k = (s - 0.86) / 0.14;
-  return 0.017 * (1 - k) + 0.011 * Math.sin(k * Math.PI);
+/* a body's half-width at s (0 the snout, 1 the tail), as a share of its length, from a few figures: the snout's length and how blunt it is
+   (under 1 blunt, over 1 pointed) — or a hammerhead's narrow neck, which its head is laid over — the girth at the shoulders and where they
+   end, where the body has narrowed to the tail stalk and how it narrows, the stalk's half-width, and how the tail ends: a fork's swell, a
+   long ribbon (a nurse shark, a leopard shark), or a thresher's whip as long as the body */
+function ocBody(o) {
+  return (s) => {
+    if (o.neck !== undefined && s < o.shoulder) return o.neck + (o.girth - o.neck) * ocSmooth(0.04, o.shoulder, s);
+    if (s < o.snout) return o.girth * 0.84 * Math.pow(Math.sin(((s / o.snout) * Math.PI) / 2), o.blunt);
+    if (s < o.shoulder) return o.girth * (0.84 + 0.16 * ocSmooth(o.snout, o.shoulder, s));
+    if (s < o.stalk) return o.stalkW + (o.girth - o.stalkW) * Math.pow(1 - (s - o.shoulder) / (o.stalk - o.shoulder), o.taper);
+    const k = (s - o.stalk) / (1 - o.stalk);
+    if (o.end === "whip") return o.stalkW * (1 - k) * 0.85 + 0.0045 * Math.sin(k * Math.PI * 0.92) + 0.0022;
+    if (o.end === "ribbon") return o.stalkW * (1 - k * k) + 0.012 * Math.sin(k * Math.PI);
+    return o.stalkW * (1 - k) + o.fluke * Math.sin(k * Math.PI);
+  };
 }
-/* the sharks' outlines, top down, every figure a share of the length: the half-width, the pectoral fins (root from, root to, tip along,
-   tip out) and whether they are sickles, the pelvic fins (the same four), how far the tail reaches out, the two dorsals (where the back
-   catches the light), the eyes and the gills along the body, a hammerhead's head (half its span, how far its tips sweep back, its depth),
-   and the skin's tint (r, g, b) */
-const OC_PLANS = {
-  reef: {
-    half: ocReefHalf,
-    pec: [0.16, 0.41, 0.53, 0.25],
-    falcate: true,
-    pelvic: [0.58, 0.65, 0.69, 0.08],
-    tail: 0.09,
-    dorsal: [0.33, 0.46],
-    dorsal2: [0.72, 0.76],
-    eye: [0.09, 0.13],
-    gills: [0.19, 0.28],
-    head: null,
-    tint: [0.95, 0.99, 1.06],
-  },
-  hammer: {
-    half: (s) => (s < 0.06 ? 0.044 : s < 0.3 ? 0.044 + 0.062 * ocSmooth(0.06, 0.3, s) : 0.94 * ocReefHalf(s)),
-    pec: [0.17, 0.39, 0.5, 0.23],
-    falcate: true,
-    pelvic: [0.56, 0.63, 0.67, 0.075],
-    tail: 0.115,
-    dorsal: [0.27, 0.44],
-    dorsal2: [0.7, 0.74],
-    eye: null,
-    gills: [0.16, 0.26],
-    head: { span: 0.18, sweep: 0.04, depth: 0.085 },
-    tint: [1.05, 0.99, 0.9],
-  },
+/* the sharks, top down, every figure a share of the length: the body (ocBody), the pectoral fins (root from, root to, tip along, tip out)
+   and whether they are sickles, the pelvic fins (the same four), how far the tail's fork reaches out (0: no fork, a ribbon or a whip), the
+   first dorsal (from, to, and how much of the back it covers) and the second, the eyes (from, to, and how far out they sit) and the gills,
+   a hammerhead's head (half its span, how far its tips sweep back, its depth, the notch in its front edge), the skin's markings, how much
+   less light its back gives (a mako's dark back), its tint (r, g, b); and how it swims — its speed and its turns against the rest, whether
+   it hunts, how big it is against the others */
+const OC_SPECIES = {
+  // blacktip reef shark: the classic outline, its fins' tips dark
+  reef: { half: ocBody({ snout: 0.12, blunt: 0.85, girth: 0.105, shoulder: 0.3, stalk: 0.86, taper: 1.35, stalkW: 0.017, fluke: 0.011 }), pec: [0.16, 0.41, 0.53, 0.25], falcate: true, pelvic: [0.58, 0.65, 0.69, 0.08], tail: 0.09, dorsal: [0.33, 0.46, 0.3], dorsal2: [0.72, 0.76], eye: [0.09, 0.13, 0.62], gills: [0.19, 0.28], head: null, mark: "tips", back: 0, tint: [0.95, 0.99, 1.06], speed: 1, agility: 1, hunts: true, size: 1 },
+  // scalloped hammerhead: a swept wing for a head on a slim neck, the eyes at its tips
+  hammer: { half: ocBody({ neck: 0.044, girth: 0.1, shoulder: 0.3, stalk: 0.86, taper: 1.35, stalkW: 0.016, fluke: 0.011 }), pec: [0.17, 0.39, 0.5, 0.23], falcate: true, pelvic: [0.56, 0.63, 0.67, 0.075], tail: 0.115, dorsal: [0.27, 0.44, 0.3], dorsal2: [0.7, 0.74], eye: null, gills: [0.16, 0.26], head: { span: 0.18, sweep: 0.04, depth: 0.085, notch: 0.006 }, mark: null, back: 0, tint: [1.05, 0.99, 0.9], speed: 1, agility: 1.25, hunts: true, size: 1 },
+  // great hammerhead: a broad, nearly straight head notched in the middle, a towering sickle of a first dorsal
+  greathammer: { half: ocBody({ neck: 0.04, girth: 0.104, shoulder: 0.3, stalk: 0.86, taper: 1.32, stalkW: 0.016, fluke: 0.012 }), pec: [0.16, 0.38, 0.49, 0.24], falcate: true, pelvic: [0.55, 0.62, 0.67, 0.085], tail: 0.13, dorsal: [0.23, 0.46, 0.38], dorsal2: [0.68, 0.74], eye: null, gills: [0.15, 0.25], head: { span: 0.23, sweep: 0.006, depth: 0.075, notch: 0.016 }, mark: null, back: 0, tint: [0.86, 0.93, 1.02], speed: 1.05, agility: 1.2, hunts: true, size: 1 },
+  // tiger shark: a blunt square snout on a heavy body, dark bars across the back
+  tiger: { half: ocBody({ snout: 0.11, blunt: 0.42, girth: 0.116, shoulder: 0.32, stalk: 0.86, taper: 1.2, stalkW: 0.018, fluke: 0.012 }), pec: [0.15, 0.42, 0.53, 0.25], falcate: true, pelvic: [0.57, 0.65, 0.69, 0.085], tail: 0.095, dorsal: [0.33, 0.46, 0.3], dorsal2: [0.71, 0.75], eye: [0.08, 0.12, 0.62], gills: [0.19, 0.28], head: null, mark: "bars", back: 0, tint: [1.04, 0.96, 0.84], speed: 0.9, agility: 0.95, hunts: true, size: 1 },
+  // shortfin mako: a long cone of a snout, a torpedo narrowing hard to its stalk, a tall crescent tail, a dark metallic back
+  mako: { half: ocBody({ snout: 0.16, blunt: 1.7, girth: 0.094, shoulder: 0.33, stalk: 0.87, taper: 1.5, stalkW: 0.012, fluke: 0.016 }), pec: [0.18, 0.4, 0.5, 0.21], falcate: true, pelvic: [0.58, 0.64, 0.68, 0.06], tail: 0.14, dorsal: [0.34, 0.45, 0.3], dorsal2: [0.76, 0.79], eye: [0.11, 0.15, 0.62], gills: [0.2, 0.3], head: null, mark: null, back: -0.16, tint: [0.8, 0.92, 1.24], speed: 1.35, agility: 1.3, hunts: true, size: 1 },
+  // thresher: a short body over the front half, then the upper lobe of its tail as a whip as long again; big eyes, long sickle pectorals
+  thresher: { half: ocBody({ snout: 0.07, blunt: 0.75, girth: 0.09, shoulder: 0.2, stalk: 0.5, taper: 1.3, stalkW: 0.012, end: "whip" }), pec: [0.12, 0.27, 0.36, 0.2], falcate: true, pelvic: [0.37, 0.41, 0.44, 0.045], tail: 0, dorsal: [0.24, 0.32, 0.32], dorsal2: [0.45, 0.47], eye: [0.04, 0.1, 0.48], gills: [0.11, 0.18], head: null, mark: null, back: 0, tint: [1, 0.9, 1.08], speed: 1.1, agility: 1.15, hunts: true, size: 1.12 },
+  // whale shark: a broad flat head, a heavy body, pale spots and lines over a dark back; it cruises slowly and hunts nothing
+  whale: { half: ocBody({ snout: 0.05, blunt: 0.22, girth: 0.13, shoulder: 0.28, stalk: 0.82, taper: 1.15, stalkW: 0.02, fluke: 0.016 }), pec: [0.18, 0.36, 0.46, 0.22], falcate: true, pelvic: [0.55, 0.6, 0.63, 0.06], tail: 0.12, dorsal: [0.42, 0.52, 0.3], dorsal2: [0.7, 0.73], eye: [0.035, 0.055, 0.78], gills: [0.08, 0.16], head: null, mark: "stars", back: -0.1, tint: [0.82, 0.9, 1.06], speed: 0.6, agility: 0.7, hunts: false, size: 1.25 },
+  // nurse shark: a blunt broad head, both dorsals far back, round paddles for pectorals, a long low tail with no fork; tawny
+  nurse: { half: ocBody({ snout: 0.08, blunt: 0.4, girth: 0.106, shoulder: 0.3, stalk: 0.72, taper: 1.1, stalkW: 0.022, end: "ribbon" }), pec: [0.16, 0.34, 0.4, 0.17], falcate: false, pelvic: [0.45, 0.52, 0.55, 0.075], tail: 0, dorsal: [0.5, 0.58, 0.32], dorsal2: [0.63, 0.69], eye: [0.05, 0.075, 0.62], gills: [0.14, 0.22], head: null, mark: null, back: 0, tint: [1.12, 0.96, 0.76], speed: 0.75, agility: 0.9, hunts: true, size: 1 },
+  // leopard (zebra) shark: a short head, the body done by half its length, then a long ribbon of a tail; dark spots on sand, pale ridges
+  leopard: { half: ocBody({ snout: 0.1, blunt: 0.7, girth: 0.1, shoulder: 0.28, stalk: 0.55, taper: 1.1, stalkW: 0.022, end: "ribbon" }), pec: [0.12, 0.3, 0.36, 0.19], falcate: false, pelvic: [0.42, 0.48, 0.51, 0.065], tail: 0, dorsal: [0.36, 0.44, 0.3], dorsal2: [0.49, 0.53], eye: [0.06, 0.09, 0.62], gills: [0.13, 0.2], head: null, mark: "spots", back: 0, tint: [1.08, 0.97, 0.74], speed: 0.85, agility: 0.95, hunts: true, size: 1 },
 };
-/* the roster, biggest first: what kind, and how big against the biggest (the smaller swim deeper) */
-const OC_ROSTER = [
-  { plan: "hammer", size: 1 },
-  { plan: "reef", size: 0.84 },
-  { plan: "reef", size: 0.74 },
-  { plan: "hammer", size: 0.66 },
-];
+const OC_KINDS = Object.keys(OC_SPECIES);
+/* how big each shark of a visit is against the biggest (the smaller swim deeper, under the bigger) */
+const OC_SIZES = [1, 0.86, 0.77, 0.69, 0.63];
+/* the sharks of one visit: n kinds, none twice — a whale shark one visit in three, at the head of the list (the biggest), the rest drawn
+   at random from the others */
+function ocRoster(n) {
+  const pool = OC_KINDS.filter((k) => k !== "whale");
+  const out = Math.random() < 0.34 ? ["whale"] : [];
+  while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  return out;
+}
+/* a marking at a point of a shark's skin — s along, v across (signed, a share of the length), `across` its share of the half-width there:
+   1 darker (a tiger's bars, a leopard shark's spots), 2 paler (a whale shark's spots and lines, a leopard shark's ridges), 0 none. Spots sit
+   on a jittered grid in the skin's own coordinates, so they ride along with it */
+function ocMarkAt(P, s, v, across, id) {
+  const kind = P.mark;
+  if (kind === "bars") {
+    if (s < 0.22 || s > 0.9 || across > 0.86) return 0;
+    const bar = Math.sin(s * Math.PI * 19 + 0.35 * Math.sin(v * 24 + s * 5));
+    return bar > 0.66 - 0.46 * ocSmooth(0.22, 0.44, s) + 0.42 * ocSmooth(0.8, 0.9, s) ? 1 : 0;
+  }
+  if (kind === "spots" && s > 0.1 && s < 0.55 && (across < 0.1 || Math.abs(across - 0.6) < 0.07)) return 2;
+  if (kind === "stars" && s > 0.12 && s < 0.8) {
+    if (Math.abs(across - 0.42) < 0.045 || Math.abs(across - 0.76) < 0.04) return 2;
+    if (s > 0.18 && s < 0.62 && across < 0.9 && Math.sin(s * Math.PI * 26) > 0.94) return 2;
+  }
+  if (kind === "spots" || kind === "stars") {
+    const star = kind === "stars";
+    if (s < (star ? 0.06 : 0.08) || across > 0.94) return 0;
+    const gu = s / (star ? 0.032 : 0.052);
+    const gv = v / (star ? 0.024 : 0.038);
+    const cu = Math.floor(gu);
+    const cv = Math.floor(gv);
+    const jx = 0.25 + 0.5 * ocHash(cu, cv, id);
+    const jy = 0.25 + 0.5 * ocHash(cu, cv, id + 17);
+    const d2 = (gu - cu - jx) * (gu - cu - jx) + (gv - cv - jy) * (gv - cv - jy);
+    return d2 < (star ? 0.075 : 0.09) ? (star ? 2 : 1) : 0;
+  }
+  return 0;
+}
 
 function ocMount(canvas) {
   const none = { stats: () => null, release() {} };
@@ -203,6 +251,9 @@ function ocMount(canvas) {
   let cKey = new Uint32Array(0);
   let cShark = new Uint8Array(0);
   let cFish = new Uint32Array(0);
+  // the cells sampled for the shark being laid (a stamp a shark, so a cell two segments reach is sampled once)
+  let cSeen = new Uint32Array(0);
+  let seenStamp = 0;
   let order = new Int32Array(0);
   // the counts the drawing sorts by: the wake's six strengths, and each shark's 32 steps of light (a shark's slot times 32)
   const wakeCount = new Int32Array(6);
@@ -266,7 +317,8 @@ function ocMount(canvas) {
   const sp = new Float32Array(OC_JOINTS * 2);
   const arc = new Float32Array(OC_JOINTS);
   let arcAll = 1;
-  let plan = OC_PLANS.reef;
+  let plan = OC_SPECIES.reef;
+  let sharkId = 0;
   let Lc = 1;
   let finL = 0;
   let finR = 0;
@@ -301,6 +353,8 @@ function ocMount(canvas) {
       sparkle: v("--oc-sparkle", [255, 255, 255, 1]),
       eye: v("--oc-eye", [154, 160, 173, 1]),
       edge: v("--oc-edge", [150, 150, 150, 1]),
+      mark: v("--oc-mark", [21, 21, 21, 1]),
+      spot: v("--oc-spot", [236, 236, 234, 1]),
       fish: v("--oc-fish", [230, 238, 255, 1]),
       wake: v("--oc-wake", [110, 230, 255, 1]),
       spark: v("--oc-spark", [255, 122, 69, 1]),
@@ -332,18 +386,19 @@ function ocMount(canvas) {
     tileOf = new Int16Array(inks.length * OC_GLYPHS.length).fill(-1);
     tiles = 0;
   }
-  /* each shark's blocks, 32 steps from shadow to light, in its tint, faded toward the ground the deeper it swims; with each, the ink its
-     glyph reads in */
+  /* each shark's blocks — 32 steps from shadow to light in its tint, then its dark marking and its pale spot (each leaning a little to
+     the skin) — faded toward the ground the deeper it swims; with each, the ink its glyph reads in */
   function shadeSharks() {
     for (const sh of sharks) {
-      const t = OC_PLANS[sh.plan].tint;
+      const t = OC_SPECIES[sh.kind].tint;
       const near = 0.72 + 0.28 * sh.depth;
+      const tint = (c) => [Math.min(255, c[0] * t[0]), Math.min(255, c[1] * t[1]), Math.min(255, c[2] * t[2]), 1];
+      const mid = tint(ocMix(pal.shadow, pal.lit, 0.5));
       sh.fills = [];
-      sh.inkOf = new Uint8Array(32);
-      for (let k = 0; k < 32; k++) {
-        const c = ocMix(pal.shadow, pal.lit, k / 31);
-        const tinted = [Math.min(255, c[0] * t[0]), Math.min(255, c[1] * t[1]), Math.min(255, c[2] * t[2]), 1];
-        const fill = ocMix(pal.ground, tinted, near);
+      sh.inkOf = new Uint8Array(OC_LEVELS);
+      for (let k = 0; k < OC_LEVELS; k++) {
+        const c = k < 32 ? tint(ocMix(pal.shadow, pal.lit, k / 31)) : ocMix(k === 32 ? pal.mark : pal.spot, mid, k === 32 ? 0.18 : 0.12);
+        const fill = ocMix(pal.ground, [c[0], c[1], c[2], 1], near);
         sh.fills.push(ocCss(fill, 1));
         sh.inkOf[k] = ocLum(fill) > 0.52 ? 0 : 1;
       }
@@ -419,8 +474,9 @@ function ocMount(canvas) {
     if (!(r.width >= 1 && r.height >= 1)) return false;
     const first = W === 0;
     dpr = Math.min(Math.max(Number(globalThis.devicePixelRatio) || 1, 1), 2);
-    // a cell about a 140th of the width, 8 to 12 px, half again as tall; whole device pixels, so the grid never drifts
-    CW = Math.max(6, Math.round(ocClamp(Math.round(r.width / 140), 8, 12) * dpr));
+    // a cell about a 170th of the width, 7 to 10 px, half again as tall (a big shark is some sixty cells long); whole device pixels, so
+    // the grid never drifts
+    CW = Math.max(6, Math.round(ocClamp(Math.round(r.width / 170), 7, 10) * dpr));
     CH = Math.round(CW * 1.5);
     cw = CW / dpr;
     ch = CH / dpr;
@@ -440,6 +496,7 @@ function ocMount(canvas) {
     cKey = new Uint32Array(n);
     cShark = new Uint8Array(n);
     cFish = new Uint32Array(n);
+    cSeen = new Uint32Array(n);
     order = new Int32Array(n);
     const wasW = W;
     const wasH = H;
@@ -469,11 +526,14 @@ function ocMount(canvas) {
   function seed() {
     const side = Math.min(W, H);
     const base = ocClamp(side * 0.5, 180, 460);
-    const count = W >= 1100 ? 4 : W >= 700 ? 3 : 2;
+    const count = W >= 1600 ? 5 : W >= 1100 ? 4 : W >= 700 ? 3 : 2;
+    // this visit's kinds (ocRoster), the first the biggest
+    const kinds = ocRoster(count);
     sharks = [];
-    for (let i = 0; i < count; i++) {
-      const { plan: p, size } = OC_ROSTER[i];
-      const L = base * size;
+    for (let i = 0; i < kinds.length; i++) {
+      const kind = kinds[i];
+      const size = OC_SIZES[i];
+      const L = base * size * OC_SPECIES[kind].size;
       const orbit = side * ocRand(0.28, 0.4);
       const a = (i / count) * Math.PI * 2 + ocRand(-0.4, 0.4);
       const dir = i % 2 === 0 ? 1 : -1;
@@ -486,7 +546,7 @@ function ocMount(canvas) {
         joints[k * 2] = x - Math.cos(heading) * seg * k;
         joints[k * 2 + 1] = y - Math.sin(heading) * seg * k;
       }
-      sharks.push({ id: i + 1, plan: p, L, joints, heading, speed: 30, phase: ocRand(0, Math.PI * 2), turn: 0, hunger: ocRand(0.25, 0.75), wander: 0, dir, orbit, target: -1, retarget: 0, depth: size, fills: [], inkOf: new Uint8Array(32) });
+      sharks.push({ id: i + 1, kind, L, joints, heading, speed: 30, phase: ocRand(0, Math.PI * 2), turn: 0, hunger: ocRand(0.25, 0.75), wander: 0, dir, orbit, target: -1, retarget: 0, depth: size, fills: [], inkOf: new Uint8Array(OC_LEVELS) });
     }
     // the deeper (smaller) first, so the bigger swim over them
     sharks.sort((a, b) => a.L - b.L);
@@ -764,6 +824,8 @@ function ocMount(canvas) {
       const J = sh.joints;
       const hx = J[0];
       const hy = J[1];
+      // the kind's own way of swimming: its speed, its turns, whether it hunts at all (a whale shark cruises through a school)
+      const S = OC_SPECIES[sh.kind];
       sh.hunger = Math.min(1, sh.hunger + dt * 0.03);
       let dx = Math.cos(sh.heading);
       let dy = Math.sin(sh.heading);
@@ -772,7 +834,7 @@ function ocMount(canvas) {
       dx += Math.cos(sh.heading + sh.wander) * 0.45;
       dy += Math.sin(sh.heading + sh.wander) * 0.45;
       if (time >= sh.retarget) {
-        sh.target = prey(sh);
+        sh.target = S.hunts ? prey(sh) : -1;
         sh.retarget = time + 0.45;
       }
       const t = sh.target;
@@ -835,11 +897,11 @@ function ocMount(canvas) {
         dy += (toY / d) * w;
       }
       // no pivoting on the spot: the turning circle grows with the speed
-      const agility = Math.min(hunting ? 1.7 + closing : 0.8, sh.speed / (L * 0.22));
+      const agility = Math.min(hunting ? 1.7 + closing : 0.8, sh.speed / (L * 0.22)) * S.agility;
       const turned = ocClamp(ocTurn(sh.heading, Math.atan2(dy, dx)), -agility * dt, agility * dt);
       sh.heading += turned;
       sh.turn += (turned / dt - sh.turn) * Math.min(1, dt * 3);
-      const cruise = 30 + L * 0.04;
+      const cruise = (30 + L * 0.04) * S.speed;
       sh.speed += ((hunting ? cruise * (1.45 + closing * 1.5) : cruise) - sh.speed) * Math.min(1, dt * 1.1);
       sh.phase += dt * (2 + sh.speed / 24);
       J[0] += Math.cos(sh.heading) * sh.speed * dt;
@@ -923,9 +985,10 @@ function ocMount(canvas) {
   // ---- the sharks on the cells ---------------------------------------------------------------------------------------------------------
 
   /* where a point falls on the shark being laid (its spine in sp): the nearest point of the spine says how far along (s) and how far out
-     (signed by the side); the outline says the rest. The nearest joint is found first, and only the two segments beside it are measured
-     (the spine bends gently, so the nearest point is on one of them); a point farther from every joint than anything of the shark reaches
-     is off it at once. Its answer is in h* (nothing made per sample) */
+     (signed by the side); the outline says the rest — the head, the body with its ridge, eyes, gills and markings, the fins. The nearest
+     joint is found first, and only the two segments beside it are measured (the spine bends gently, so the nearest point is on one of
+     them); a point farther from every joint than anything of the shark reaches is off it at once. Its answer is in h* (nothing made per
+     sample) */
   function sample(px, py) {
     let near = 0;
     let nearD = Infinity;
@@ -977,10 +1040,11 @@ function ocMount(canvas) {
     hS = s;
     hV = a * sign;
     const P = plan;
-    if (P.head && u < Lc * (P.head.sweep + P.head.depth)) {
-      // a hammerhead's head: a wing across the snout, its tips swept back, the eyes at its ends
+    if (P.head && u < Lc * (P.head.sweep + P.head.depth + P.head.notch)) {
+      // a hammerhead's head: a wing across the snout, its tips swept back, a notch in the middle of its front edge (the great one's), the
+      // eyes at its ends
       const r = a / (Lc * P.head.span);
-      const front = Lc * P.head.sweep * r * r;
+      const front = Lc * (P.head.sweep * r * r + P.head.notch * Math.max(0, 1 - r / 0.15));
       if (r <= 1 && u >= front && u <= front + Lc * P.head.depth * (1 - 0.25 * r * r * r * r)) {
         const eye = r > 0.86;
         hFlag = eye ? OC_EYE : OC_BODY;
@@ -992,16 +1056,17 @@ function ocMount(canvas) {
     hW = w;
     if (a <= w) {
       const across = a / (w || 1);
-      // a rounded back lit from the upper left, the flanks falling away into shadow
+      // a rounded back lit from the upper left, the flanks falling away into shadow; a kind with a darker back gives less light there
       const facing = (nx * -0.6 + ny * -0.8) * across;
-      let shade = 0.6 - across * across * 0.44 + facing * 0.26;
+      let shade = 0.6 - across * across * 0.44 + facing * 0.26 + P.back * (1 - across);
       let flag = OC_BODY;
-      if (s > P.dorsal[0] && s < P.dorsal[1] && across < 0.3) {
-        flag = OC_RIDGE_F;
+      if (s > P.dorsal[0] && s < P.dorsal[1] && across < P.dorsal[2]) {
+        // the first dorsal, catching the light — a blacktip's dark at its rear
+        flag = P.mark === "tips" && s > P.dorsal[1] - (P.dorsal[1] - P.dorsal[0]) * 0.28 ? OC_MARK : OC_RIDGE_F;
         shade = 1;
       } else if (s > P.dorsal2[0] && s < P.dorsal2[1] && across < 0.4) {
         shade = Math.max(shade, 0.84);
-      } else if (P.eye && s > P.eye[0] && s < P.eye[1] && across > 0.62) {
+      } else if (P.eye && s > P.eye[0] && s < P.eye[1] && across > P.eye[2]) {
         flag = OC_EYE;
         shade = 0;
       } else if (s > P.gills[0] && s < P.gills[1] && across > 0.6) {
@@ -1009,21 +1074,29 @@ function ocMount(canvas) {
         if (((((s - P.gills[0]) / (P.gills[1] - P.gills[0])) * 5) | 0) % 2 === 0) shade *= 0.45;
       } else if (s < 0.05) {
         shade = Math.max(shade, 0.72);
+      } else if (P.mark && P.mark !== "tips") {
+        const m = ocMarkAt(P, s, (a * sign) / Lc, across, sharkId);
+        if (m) flag = m === 1 ? OC_MARK : OC_SPOT;
       }
       hFlag = flag;
-      hShade = shade;
+      hShade = ocClamp(shade, 0, 1);
       return true;
     }
     const tip = sign > 0 ? finR : finL;
     const pf = P.pec;
     if (ocFin(u, a, Lc * pf[0], Lc * pf[1], Lc * pf[2], tip, P.falcate)) {
-      hFlag = OC_FINS;
+      hFlag = P.mark === "tips" && a > tip * 0.7 ? OC_MARK : OC_FINS;
       hShade = 0.38 + 0.24 * (1 - Math.min(1, a / tip));
       return true;
     }
     const pv = P.pelvic;
-    if (ocFin(u, a, Lc * pv[0], Lc * pv[1], Lc * pv[2], Lc * pv[3], false) || ocFin(u, a, Lc * 0.86, Lc * 0.95, Lc, Lc * P.tail, false)) {
+    if (ocFin(u, a, Lc * pv[0], Lc * pv[1], Lc * pv[2], Lc * pv[3], false)) {
       hFlag = OC_FINS;
+      hShade = 0.36;
+      return true;
+    }
+    if (P.tail > 0 && ocFin(u, a, Lc * 0.86, Lc * 0.95, Lc, Lc * P.tail, false)) {
+      hFlag = P.mark === "tips" && a > Lc * P.tail * 0.72 ? OC_MARK : OC_FINS;
       hShade = 0.36;
       return true;
     }
@@ -1037,17 +1110,19 @@ function ocMount(canvas) {
     let r = P.half(s) * Lc;
     if (s >= P.pec[0] && s <= P.pec[2] + 0.02) r = Math.max(r, finL, finR);
     if (s >= P.pelvic[0] && s <= P.pelvic[2] + 0.02) r = Math.max(r, Lc * P.pelvic[3]);
-    if (s >= 0.85) r = Math.max(r, Lc * P.tail);
-    if (P.head && s <= P.head.sweep + P.head.depth + 0.02) r = Math.max(r, Lc * P.head.span);
+    if (P.tail > 0 && s >= 0.85) r = Math.max(r, Lc * P.tail);
+    if (P.head && s <= P.head.sweep + P.head.depth + P.head.notch + 0.02) r = Math.max(r, Lc * P.head.span);
     return r;
   }
-  /* each shark's spine drawn with the wave in it, then every cell near it sampled against the outline: a cell well covered takes the
-     shark's block, one only partly covered an edge glyph */
+  /* each shark's spine drawn with the wave in it, then the cells near it sampled against the outline — segment by segment, each cell
+     once (a diagonal shark's whole box would be mostly water): a cell well covered takes the shark's block, one only partly covered an
+     edge glyph */
   function layShark(sh, slot, t) {
     const L = sh.L;
     const J = sh.joints;
     const swim = ocClamp(sh.speed / 60, 0.4, 1.4);
-    plan = OC_PLANS[sh.plan];
+    plan = OC_SPECIES[sh.kind];
+    sharkId = sh.id;
     Lc = L;
     for (let k = 0; k < OC_JOINTS; k++) {
       const s = k / (OC_JOINTS - 1);
@@ -1071,51 +1146,51 @@ function ocMount(canvas) {
     const flex = 1 + 0.06 * Math.sin(sh.phase * 0.5);
     finR = L * plan.pec[3] * flex * (1 - bank);
     finL = L * plan.pec[3] * flex * (1 + bank);
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (let k = 0; k < OC_JOINTS; k++) {
-      x0 = Math.min(x0, sp[k * 2]);
-      x1 = Math.max(x1, sp[k * 2]);
-      y0 = Math.min(y0, sp[k * 2 + 1]);
-      y1 = Math.max(y1, sp[k * 2 + 1]);
-    }
-    reachMax = Math.max(finL, finR, L * plan.pelvic[3], L * plan.tail, plan.head ? L * plan.head.span : 0, L * 0.11);
+    reachMax = Math.max(finL, finR, L * plan.pelvic[3], L * plan.tail, plan.head ? L * plan.head.span : 0, L * 0.14);
     segLen = arcAll / (OC_JOINTS - 1);
     const half = Math.hypot(cw, ch) / 2;
-    const out = reachMax + half;
-    const c0 = Math.max(0, Math.floor((x0 - out) / cw));
-    const c1 = Math.min(cols - 1, Math.floor((x1 + out) / cw));
-    const r0 = Math.max(0, Math.floor((y0 - out) / ch));
-    const r1 = Math.min(rows - 1, Math.floor((y1 + out) / ch));
-    if (c0 > c1 || r0 > r1) return;
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const x = c * cw;
-        const y = r * ch;
-        const centre = sample(x + cw / 2, y + ch / 2);
-        // well clear of everything it reaches (anywhere, or at that point along it): nothing to sample
-        if (!centre && (hDist > reachMax + half || hDist > reachAt(hS) + half)) continue;
-        const flag = hFlag;
-        const shade = hShade;
-        const s = hS;
-        const v = hV;
-        let hits = centre ? 1 : 0;
-        // deep in the body the cell is covered whole; near the outline (or a fin, or the head) its corners say how much
-        if (centre && (flag === OC_BODY || flag === OC_RIDGE_F) && hW - Math.abs(v) > half && !(plan.head && s < plan.head.sweep + plan.head.depth)) hits = 5;
-        else for (let k = 0; k < OC_SUB.length; k += 2) if (sample(x + OC_SUB[k] * cw, y + OC_SUB[k + 1] * ch)) hits++;
-        if (!hits) continue;
-        const i = r * cols + c;
-        // tied to a place on the skin, so the glyph rides along with the body
-        cKey[i] = (ocHash(Math.round(s * 56), Math.round(v / (cw * 0.9)), sh.id) * 4294967295) >>> 0;
-        cShark[i] = slot;
-        if (centre && hits >= 3) {
-          cFlag[i] = flag;
-          cShade[i] = ocClamp(shade + (ocHash(c, r, Math.floor(t * 6)) - 0.5) * 0.06, 0, 1);
-        } else {
-          cFlag[i] = OC_EDGE;
-          cShade[i] = hits / 5;
+    seenStamp = (seenStamp + 1) >>> 0;
+    for (let k = 0; k < OC_JOINTS - 1; k++) {
+      const s0 = arc[k] / arcAll;
+      const s1 = arc[k + 1] / arcAll;
+      const out = Math.max(reachAt(s0), reachAt(s1), reachAt((s0 + s1) / 2)) + half;
+      const ax = sp[k * 2];
+      const ay = sp[k * 2 + 1];
+      const bx = sp[k * 2 + 2];
+      const by = sp[k * 2 + 3];
+      const c0 = Math.max(0, Math.floor((Math.min(ax, bx) - out) / cw));
+      const c1 = Math.min(cols - 1, Math.floor((Math.max(ax, bx) + out) / cw));
+      const r0 = Math.max(0, Math.floor((Math.min(ay, by) - out) / ch));
+      const r1 = Math.min(rows - 1, Math.floor((Math.max(ay, by) + out) / ch));
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const i = r * cols + c;
+          if (cSeen[i] === seenStamp) continue;
+          cSeen[i] = seenStamp;
+          const x = c * cw;
+          const y = r * ch;
+          const centre = sample(x + cw / 2, y + ch / 2);
+          // well clear of everything it reaches (anywhere, or at that point along it): nothing to sample
+          if (!centre && (hDist > reachMax + half || hDist > reachAt(hS) + half)) continue;
+          const flag = hFlag;
+          const shade = hShade;
+          const s = hS;
+          const v = hV;
+          let hits = centre ? 1 : 0;
+          // deep in the body the cell is covered whole; near the outline (or a fin, or the head) its corners say how much
+          if (centre && (flag === OC_BODY || flag === OC_RIDGE_F || flag === OC_MARK || flag === OC_SPOT) && hW - Math.abs(v) > half && !(plan.head && s < plan.head.sweep + plan.head.depth + plan.head.notch)) hits = 5;
+          else for (let q = 0; q < OC_SUB.length; q += 2) if (sample(x + OC_SUB[q] * cw, y + OC_SUB[q + 1] * ch)) hits++;
+          if (!hits) continue;
+          // tied to a place on the skin, so the glyph rides along with the body
+          cKey[i] = (ocHash(Math.round(s * 72), Math.round(v / (cw * 0.9)), sh.id) * 4294967295) >>> 0;
+          cShark[i] = slot;
+          if (centre && hits >= 3) {
+            cFlag[i] = flag;
+            cShade[i] = ocClamp(shade + (ocHash(c, r, Math.floor(t * 6)) - 0.5) * 0.06, 0, 1);
+          } else {
+            cFlag[i] = OC_EDGE;
+            cShade[i] = hits / 5;
+          }
         }
       }
     }
@@ -1256,16 +1331,19 @@ function ocMount(canvas) {
     }
 
     // the sharks: their blocks, one colour at a time (counted by shark and light into order), then their glyphs
-    const levels = (sharks.length + 1) * 32;
+    const levels = (sharks.length + 1) * OC_LEVELS;
     if (blockCount.length !== levels + 1) {
       blockCount = new Int32Array(levels + 1);
       blockStart = new Int32Array(levels + 1);
       blockAt = new Int32Array(levels + 1);
     }
+    // a block's colour: its light (32 steps), or its marking's
+    const levelOf = (f, i) => (f === OC_MARK ? 32 : f === OC_SPOT ? 33 : (cShade[i] * 31) | 0);
+    const blocked = (f) => f === OC_BODY || f === OC_FINS || f === OC_RIDGE_F || f === OC_MARK || f === OC_SPOT;
     const bc = blockCount.fill(0);
     for (let i = 0; i < n; i++) {
       const f = cFlag[i];
-      if (f === OC_BODY || f === OC_FINS || f === OC_RIDGE_F) bc[cShark[i] * 32 + ((cShade[i] * 31) | 0)]++;
+      if (blocked(f)) bc[cShark[i] * OC_LEVELS + levelOf(f, i)]++;
     }
     const bs = blockStart;
     for (let b = 1; b <= levels; b++) bs[b] = bs[b - 1] + bc[b - 1];
@@ -1273,13 +1351,13 @@ function ocMount(canvas) {
     bat.set(bs);
     for (let i = 0; i < n; i++) {
       const f = cFlag[i];
-      if (f === OC_BODY || f === OC_FINS || f === OC_RIDGE_F) order[bat[cShark[i] * 32 + ((cShade[i] * 31) | 0)]++] = i;
+      if (blocked(f)) order[bat[cShark[i] * OC_LEVELS + levelOf(f, i)]++] = i;
     }
     for (let b = 0; b < levels; b++) {
       if (!bc[b]) continue;
-      const sh = sharks[((b / 32) | 0) - 1];
+      const sh = sharks[((b / OC_LEVELS) | 0) - 1];
       if (!sh) continue;
-      g.fillStyle = sh.fills[b % 32];
+      g.fillStyle = sh.fills[b % OC_LEVELS];
       for (let k = bs[b]; k < bs[b] + bc[b]; k++) {
         const i = order[k];
         g.fillRect((i % cols) * CW + gap, ((i / cols) | 0) * CH + gap, CW - gap, CH - gap);
@@ -1308,8 +1386,12 @@ function ocMount(canvas) {
       let gl;
       if (f === OC_RIDGE_F) gl = OC_I.ridge[(key >>> 8) % OC_I.ridge.length];
       else if (f === OC_FINS) gl = OC_I.fin[(key >>> 8) % OC_I.fin.length];
+      else if (f === OC_MARK) gl = OC_I.mark[(key >>> 8) % OC_I.mark.length];
+      else if (f === OC_SPOT) gl = OC_I.spot[(key >>> 8) % OC_I.spot.length];
       else gl = OC_I.ramp[ocClamp(Math.floor((1 - shade) * (OC_I.ramp.length - 0.01)) + (((key >>> 4) % 3) - 1), 0, OC_I.ramp.length - 1)];
-      const ink = roll < 0.08 ? inks.glint0 + (key % inks.glints) : roll < 0.11 ? 2 : sh ? sh.inkOf[(shade * 31) | 0] : 0;
+      // a marking keeps its own colour (no glint on it); the rest glint now and then
+      const own = sh ? sh.inkOf[levelOf(f, i)] : 0;
+      const ink = f === OC_MARK || f === OC_SPOT ? own : roll < 0.08 ? inks.glint0 + (key % inks.glints) : roll < 0.11 ? 2 : own;
       glyph(ink, gl, col, row);
     }
   }
@@ -1444,7 +1526,7 @@ function ocMount(canvas) {
   return {
     stats() {
       const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[gaps.length >> 1] : 0;
-      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length };
+      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length, kinds: sharks.map((sh) => sh.kind) };
     },
     release() {
       released = true;

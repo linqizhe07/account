@@ -1,8 +1,9 @@
-The fonts in this folder are subsets of two families, in WOFF2. Manrope is as Google Fonts serves it (v20); Geist Mono is as the
-@fontsource/geist-mono package (5.3.0, from the npm registry) ships it, weights 400, 500 and 600, latin and latin-ext:
+The fonts in this folder are subsets of two families, in WOFF2. Inter is as the @fontsource-variable/inter package (5.3.0, from the npm
+registry) ships it — the variable file with its weights and optical sizes, one a script; Geist Mono is as the @fontsource/geist-mono
+package (5.3.0) ships it, weights 400, 500 and 600, latin and latin-ext:
 
-Manrope (manrope-v20-*.woff2)
-Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)
+Inter (inter-v5-*.woff2)
+Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 Geist Mono (geist-mono-v5-*.woff2)
 Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)

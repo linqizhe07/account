@@ -1,6 +1,6 @@
-/* LIVE POSITIONS (ui/live.js): one thing held, watched as it moves — a card in the Clean cards look: the name and its chips, a ladder
-   (the stop, the entry, the take-profit as marks on one line, the price now as a dot that slides along it), the unrealised result in
-   Manrope 800 with its percent, a sparkline of the prices seen, and what was put in. Colours only from ui/tokens.css; up and down always
+/* LIVE POSITIONS (ui/live.js): one thing held, watched as it moves — a card in the Account's look: the name and its chips, a ladder
+   (the stop, the entry, the take-profit as marks on one line, the price now as a dot that slides along it), the unrealised result in the
+   page's bold figures with its percent, a sparkline of the prices seen, and what was put in. Colours only from ui/tokens.css; up and down always
    with their glyph or word. Motion: the dot's transform (220 ms), the tint on a figure that moved (shell.css .tick-up · .tick-down), the
    sparkline's path rewritten; none of it under reduced motion. */
 .lv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 14px; }

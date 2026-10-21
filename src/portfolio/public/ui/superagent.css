@@ -1,14 +1,15 @@
 /* THE SUPERAGENT (ui/superagent.js): Trade's second mode, the desk on a paper account as a live trading floor. Its chrome is Hyperliquid's
-   trade app's grammar on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]: the ocean's Black), the same as Regular's —
-   so switching modes changes what the screen shows, never how it looks: dark glass panels 6 px apart over the water, radius 10, a hairline
-   inside the edge and no shadow; one face (Manrope) at 12 on 15, one weight; labels in the dim colour over their values; controls 33 high
-   with 8 px corners; the soft accent (the wake's cyan) for what is on, the bright one under the pointer; up, down and the area's amber for
-   waiting. .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, the book,
-   chg(), the toggles) is the area's too.
-   ONLY THE FLOOR keeps a field of its own: a deep-sea room under the panels, declared on its panel (.sg-floor) for ui/floor.js, which reads
-   its colours from there (--sg-deep, --sg-deep-2, --sg-line, --sg-scan; the rest from the area's names). The seats' tints (--sg-r-<role>)
-   are the house's own, in the accent's family: each is a mascot's colour and a room chip's, never alone (the seat's name is always beside
-   it).
+   trade app's grammar on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]), in the background the Account wears, the
+   same as Regular's — so switching modes changes what the screen shows, never how it looks: glass panels 6 px apart over the water, radius
+   4, a hairline inside the edge and no shadow; one face (Inter) at 12 on 15, one weight; labels in the dim colour over their values;
+   controls 33 high with 3 px corners; ink for what is on, the brightest ink under the pointer; up, down and the area's amber for waiting.
+   .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, the book, chg(), the
+   toggles) is the area's too.
+   ONLY THE FLOOR keeps a field of its own: a dark screen in either background (its glows add light, which only a dark room shows),
+   declared on its panel (.sg-floor) for ui/floor.js, which reads its colours from there — its room, lines, scanlines and accent (--sg-*),
+   and its words, ups, downs and amber as Black's, set on the panel too so its caption reads on it. The seats' tints (--sg-r-<role>) are
+   a grey ramp, each seat at a lightness of its own — dark greys on Light, light greys on Black and on the floor: each is a mascot's colour
+   and a room chip's, never alone (the seat's name is always beside it).
    The --sg-* names the floor and the older rules know are kept as aliases of the area's: mint is the accent, coral is down, amber is the
    area's caution.
    MOTION in the chrome is HL's: colour, background and edge over 0.2 s ease-in-out; a card or a room line comes in from 5 px above, fading,
@@ -26,16 +27,15 @@
   --sg-line-2: var(--hl-tabline);
   --sg-ink: var(--hl-on-accent);
   --sg-deep-2: var(--hl-panel);
-  /* the seats' tints: the wake's cyan family at distinct lightness, each light enough for the ink's words on it at 4.5:1 or better (the
-     darkest, Sentiment's, 5.5:1) */
-  --sg-r-head: #8cefff;
-  --sg-r-search: #66d6ee;
-  --sg-r-risk: #b8f3ff;
-  --sg-r-sniper: #4bc2dc;
-  --sg-r-exit: #7fe2f5;
-  --sg-r-watch: #5ab4c9;
-  --sg-r-flow: #4ba3b8;
-  --sg-r-sentiment: #4596aa;
+  /* the seats' tints on Light: dark greys, white words on them at 4.5:1 or better (the lightest, Exit's, 5.3:1) */
+  --sg-r-head: #111111;
+  --sg-r-search: #2e2e2b;
+  --sg-r-risk: #4a4a46;
+  --sg-r-sniper: #5f5f5a;
+  --sg-r-exit: #6c6c66;
+  --sg-r-watch: #3c3c38;
+  --sg-r-flow: #55554f;
+  --sg-r-sentiment: #666660;
   display: flex;
   flex-direction: column;
   gap: var(--hl-gap);
@@ -55,6 +55,30 @@
 .sg-lab { font: 400 12px/15px var(--font-sans); color: var(--hl-dim); white-space: nowrap; }
 /* a chip (Paper): HL's leverage chip */
 .sg-chip { display: inline-flex; align-items: center; padding: 0 4px; border-radius: var(--hl-r-panel); background: var(--hl-badge); color: var(--hl-accent-soft); font: 400 12px/20.4px var(--font-sans); white-space: nowrap; }
+
+/* the seats' tints on Black: light greys, black words on them at 7.4:1 or better (the darkest, Exit's) */
+:root[data-theme="black"] .sg {
+  --sg-r-head: #ffffff;
+  --sg-r-search: #e4e4e0;
+  --sg-r-risk: #c9c9c4;
+  --sg-r-sniper: #b4b4ae;
+  --sg-r-exit: #9f9f99;
+  --sg-r-watch: #d6d6d1;
+  --sg-r-flow: #bdbdb7;
+  --sg-r-sentiment: #a8a8a2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sg {
+    --sg-r-head: #ffffff;
+    --sg-r-search: #e4e4e0;
+    --sg-r-risk: #c9c9c4;
+    --sg-r-sniper: #b4b4ae;
+    --sg-r-exit: #9f9f99;
+    --sg-r-watch: #d6d6d1;
+    --sg-r-flow: #bdbdb7;
+    --sg-r-sentiment: #a8a8a2;
+  }
+}
 
 /* ---- a panel: HL's, flat ------------------------------------------------------------------------------------------------------------ */
 .sg-panel { position: relative; min-width: 0; padding: 10px 12px; border: 0; border-radius: var(--hl-r-panel); background: var(--hl-glass); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
@@ -148,15 +172,39 @@
   .sg-wr-k { grid-column: 1 / -1; }
 }
 
-/* ---- the floor: its own deep green field, the canvas filling the panel, the frame rate in its corner, a caption under it ---------- */
+/* ---- the floor: a dark screen in either background — its own room, the canvas filling the panel, the frame rate in its corner, a
+   caption under it. Its names are set here, whatever the page wears: the room's two near-blacks, its lines and scanlines, white for what
+   is on with black on it, its words, ups, downs and amber as Black's, and the seats in the light greys --------------------------------- */
 .sg-floor {
-  --sg-deep: #05090c;
-  --sg-deep-2: #0c161b;
-  --sg-line: rgba(151, 252, 228, 0.16);
+  --sg-deep: #08090a;
+  --sg-deep-2: #121315;
+  --sg-line: rgba(255, 255, 255, 0.14);
   --sg-scan: rgba(0, 0, 0, 0.16);
+  --sg-mint: #ffffff;
+  --sg-ink: #0a0a0a;
+  --text: #f2f2f0;
+  --dim: #9d9d98;
+  --up: #3bb360;
+  --down: #ff7360;
+  --warn: #f5c46b;
+  --border: rgba(255, 255, 255, 0.1);
+  --primary: #ffffff;
+  --on-primary: #0a0a0a;
+  --hl-text: #f2f2f0;
+  --hl-dim: #9d9d98;
+  --sg-r-head: #ffffff;
+  --sg-r-search: #e4e4e0;
+  --sg-r-risk: #c9c9c4;
+  --sg-r-sniper: #b4b4ae;
+  --sg-r-exit: #9f9f99;
+  --sg-r-watch: #d6d6d1;
+  --sg-r-flow: #bdbdb7;
+  --sg-r-sentiment: #a8a8a2;
   padding: 0;
   overflow: hidden;
   background: var(--sg-deep);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .sg-canvas { display: block; width: 100%; aspect-ratio: 16 / 7; max-height: min(560px, 60vh); border-radius: var(--hl-r-panel) var(--hl-r-panel) 0 0; background: var(--sg-deep); }
 /* tall enough on a tablet that the floor's own scale stays at 0.6 or more (its words never under its smallest size) */

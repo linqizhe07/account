@@ -2,7 +2,7 @@
    the Predictions as glass cards with Yes and No tinted in the up and down colours, one folded footer line on the water (its words keep a
    halo), and one market in the drawer (the one drawer: a Portfolio holding opens it too). The connect picker and its one short form
    (ui/connect.js) are drawn in the sheet with the .pick rules at the foot. Colours, radii, shadows and fonts only from ui/tokens.css, so
-   Light and Black alike (Black drops the shadows and keeps the hairlines). Manrope throughout: numbers with tabular figures, no mono here
+   Light and Black alike (Black drops the shadows and keeps the hairlines). Inter throughout: numbers with tabular figures, no mono here
    but a key file's path. Motion is transform and opacity only. */
 
 .mk { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
@@ -114,7 +114,7 @@
 /* a listing's own valuation and unit, under its venue's name in Across venues */
 .mk-unit { white-space: normal; }
 
-/* one market, in the drawer: the price in Manrope 800, its facts on a soft inset, pills to act, the parts under hairlines; each part is
+/* one market, in the drawer: the price in the page's bold figures, its facts on a soft inset, pills to act, the parts under hairlines; each part is
    painted on its own (data-sec), so a fresh read repaints only what changed */
 .mk-d { display: flex; flex-direction: column; gap: 0; }
 .mk-sec { display: flex; flex-direction: column; gap: 18px; }

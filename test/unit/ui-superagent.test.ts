@@ -1061,12 +1061,13 @@ describe("the page: the pane, the switch, the route, the scripts and styles, the
     expect(sg).toContain("--sg-mint: var(--hl-accent);");
     expect(sg).toContain("--sg-coral: var(--hl-down);");
     const floor = (css.match(/(?:^|\n)\.sg-floor \{([^}]*)\}/) || [])[1] || "";
-    for (const d of ["--sg-deep: #05090c;", "--sg-deep-2: #0c161b;", "--sg-scan: rgba(0, 0, 0, 0.16);"]) expect(floor, d).toContain(d);
+    for (const d of ["--sg-deep: #08090a;", "--sg-deep-2: #121315;", "--sg-scan: rgba(0, 0, 0, 0.16);", "--sg-mint: #ffffff;", "--text: #f2f2f0;", "--up: #3bb360;", "--down: #ff7360;"]) expect(floor, d).toContain(d);
     // the area's tokens are there to inherit: scoped, never under a background's theme
     const tokens = source("ui/tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(tokens).toContain(':root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack) {');
-    // no rule names a background and the area together: the area is the same in Light and in Black
-    expect(tokens.split("}").filter((r) => /data-area/.test(r) && /data-theme/.test(r))).toEqual([]);
+    // the area wears the background the Account wears: its Black values under the chosen Black (and the system's dark where none was chosen)
+    expect(tokens).toContain(':root[data-theme="black"][data-area="trade"],');
+    expect(tokens).toContain(':root:not([data-theme])[data-area="trade"],');
     // no full bleed, no scanlines, no corner brackets, no glow, no uppercase mono labels
     for (const gone of ["sg-power", "sg-unfold", ".sg-c1", "--sg-glow", "text-transform: uppercase", "margin: -24px"]) expect(css, gone).not.toContain(gone);
     // under reduced motion nothing moves

@@ -111,15 +111,16 @@
      "What changes ›" opens the Mode sheet] · openEarn(preset) / openSellMany(preset) [earn.js] · openBrains(ctx) [brains.js: the desk's
      brains, their keys typed once and never kept on the page]. Ask before calling one: typeof
      openTicket === "function". A pane that throws says so in its place.
-   The classes the panes draw with (ui/shell.css; colours, radii, shadows and fonts only from ui/tokens.css, Cream and Black alike). The
-   look is Clean cards (M2): Manrope everywhere, labels in sentence case, numbers in Manrope 800 with tabular figures (.num .num-m), IBM
-   Plex Mono (.mono) only for a hash, an address or a line that is signed; content in white cards on the ground, pills for buttons and toggles.
-     a card         .card — white, a hairline of its own (--card-border), radius 16 (--radius-m), padding 18–20, a soft shadow
-                    (--shadow-card; none in Black), its parts 14 apart; cards sit 20 apart in a column (.col-main .col-side). A .sec drawn
+   The classes the panes draw with (ui/shell.css; colours, radii, shadows and fonts only from ui/tokens.css, Light and Black alike). The
+   look is the ocean with Swiss type: Inter everywhere, labels small and bold in sentence case, numbers bold and tight with tabular figures
+   (.num .num-m), Geist Mono (.mono) only for a hash, an address or a line that is signed; content in glass cards over the ocean, a heavy
+   rule across each card's top, nearly square buttons and toggles (a pressed one in ink), the red for what is chosen.
+     a card         .card — glass, a hairline of its own (--card-border) and a 2 px rule across its top (--rule), radius 4
+                    (--radius-m), padding 18–20, no shadow (--shadow-card), its parts 14 apart; cards sit 20 apart in a column (.col-main .col-side). A .sec drawn
                     in a pane IS a card (the same look), so `class="sec"` and `class="card"` are one; inside a card, a sheet or the drawer a
                     .sec is a plain part under a hairline. A card whose last child is a table() runs the table nearly to its foot by itself
-                    · .callout: waiting on the owner (warn fill, soft orange edge; its first .label in warn-text) · .box: a card with radius
-                    20 (a market card) · .panel: the sticky ticket (a lifted card, --shadow-lift)
+                    · .callout: waiting on the owner (warn fill, soft orange edge; its first .label in warn-text) · .box: a card with the
+                    larger radius (a market card) · .panel: the sticky ticket (a lifted card, --shadow-lift)
      a card header  .card-head (or .sec-head) — one row: .h2 (20px 700) or .label on the left, .tools (links, a seg, a small button) on
                     the right; the first child of the card
      quick actions  .quick holding .quick-card buttons (or .btn): four equal cards, 52 high, an icon (icon()) and a word

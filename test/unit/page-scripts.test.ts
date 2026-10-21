@@ -128,12 +128,12 @@ describe("the account page's scripts", () => {
     }
     // the page's face is its own: preloaded before the first paint, served from here and kept a year (no font is asked of another host)
     const preload = [...html.matchAll(/<link\b[^>]*\brel="preload"[^>]*\bhref="([^"]+)"/g)].map((m) => m[1] ?? "");
-    expect(preload).toEqual(["/fonts/manrope-v20-latin.woff2"]);
+    expect(preload).toEqual(["/fonts/inter-v5-latin.woff2"]);
     const font = await fetch(`${srv.url}${preload[0]}`);
     expect([font.status, font.headers.get("content-type"), font.headers.get("cache-control")]).toEqual([200, "font/woff2", "public, max-age=31536000, immutable"]);
     expect(html).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
-    // the mono face (Geist Mono: the ocean's glyphs, the labels, what is signed) is this account's too, declared in the tokens and not
-    // preloaded: no stylesheet asks another host, and every face the tokens name is served from here
+    // the mono face (Geist Mono: the ocean's glyphs, what is signed) is this account's too, declared in the tokens and not preloaded: no
+    // stylesheet asks another host, and every face the tokens name is served from here
     for (const css of styles()) expect(source(css), css).not.toMatch(/fonts\.(googleapis|gstatic)\.com|@import/);
     expect(source("ui/tokens.css")).toMatch(/@font-face \{ font-family: "Geist Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url\(\/fonts\/geist-mono-v5-latin-400\.woff2\) format\("woff2"\)/);
     for (const m of source("ui/tokens.css").matchAll(/url\((\/fonts\/[a-z0-9-]+\.woff2)\)/g)) {
@@ -261,10 +261,16 @@ describe("the account page's scripts", () => {
     const shell = source("ui/shell.css").replace(/\/\*[\s\S]*?\*\//g, "");
     // the colours on html itself (so the rail and the page's background take them), the shape and face on the area's containers only
     const colours = /:root\[data-area="trade"\],\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
-    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-glass);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-glass);", "--hl-glass: rgba(9, 10, 12, 0.8);", "--hl-panel: #0a0b0d;", "--warn: var(--hl-warn);", "--oc-ground: #000000;", "color-scheme: dark;"]) expect(colours, d).toContain(d);
+    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-glass);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-glass);", "--hl-glass: rgba(255, 255, 255, 0.95);", "--hl-panel: #fdfdfc;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-mark: #da291c;", "--warn: var(--hl-warn);", "color-scheme: light;"]) expect(colours, d).toContain(d);
+    // the area wears the background the Account wears: Black's values for the same names, chosen or the system's dark; the ocean behind it
+    // is the background's own (the area sets none of the ocean's colours)
+    const black = /:root\[data-theme="black"\]\[data-area="trade"\],\s*:root\[data-theme="black"\]\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
+    for (const d of ["--hl-glass: rgba(9, 10, 12, 0.82);", "--hl-panel: #0a0b0d;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-up: #3bb360;", "--hl-down: #ff7360;", "color-scheme: dark;"]) expect(black, d).toContain(d);
+    expect(tokens).toMatch(/@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme\]\)\[data-area="trade"\],/);
+    expect(colours + black).not.toContain("--oc-");
     for (const d of ["--font-sans", "--radius-pill", "font-weight", "font-family"]) expect(colours, d).not.toContain(d);
     const shape = [...tokens.matchAll(/(?:^|\})\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/g)].map((m) => m[1] ?? "").join("");
-    for (const d of ['--font-sans: "Manrope"', "--radius-pill: 8px;", "font-weight: 400;"]) expect(shape, d).toContain(d);
+    for (const d of ['--font-sans: "Inter"', "--radius-pill: 3px;", "font-weight: 400;"]) expect(shape, d).toContain(d);
     // the rail: no edge beside the main column, its current item in HL's bright accent, its colours fading over 0.2 s — and cut under
     // reduced motion
     expect(shell).toContain(':root[data-area="trade"] .rail { border-right-color: transparent; }');

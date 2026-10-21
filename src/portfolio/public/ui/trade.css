@@ -267,12 +267,14 @@
 .tt-order .btn.btn-primary, .tt-order [data-go] { min-height: 33px; padding: 0 16px; border: 0; border-radius: var(--hl-r); background: var(--hl-accent-soft); color: var(--hl-on-accent); font: 400 12px/31px var(--font-sans); box-shadow: none; }
 .tt-order .btn.btn-primary:disabled, .tt-order [data-go]:disabled { background: var(--hl-accent-disabled); color: var(--hl-on-accent); opacity: 1; }
 /* Sell and Short sign in HL's pink, as its own sell button does (ui/trade.js sideButton: data-side on the button); a dark pink while it waits */
-.tt-order [data-go][data-side="sell"] { background: var(--hl-down); color: var(--hl-on-accent); }
-.tt-order [data-go][data-side="sell"]:disabled { background: var(--hl-down-disabled); color: var(--hl-on-accent); }
+.tt-order [data-go][data-side="buy"] { background: var(--hl-buy); color: var(--hl-on-trade); }
+.tt-order [data-go][data-side="sell"] { background: var(--hl-sell); color: var(--hl-on-trade); }
+.tt-order [data-go][data-side="sell"]:disabled { background: var(--hl-down-disabled); color: var(--hl-on-trade); }
 @media (hover: hover) {
   .tt-order .btn:not(.btn-primary):hover:not(:disabled), .tt-order [data-hand]:hover:not(:disabled) { background: var(--hl-inset-hover); }
   .tt-order .btn.btn-primary:hover:not(:disabled), .tt-order [data-go]:hover:not(:disabled) { background: var(--hl-accent); opacity: 1; }
-  .tt-order [data-go][data-side="sell"]:hover:not(:disabled) { background: var(--hl-down); filter: brightness(1.1); }
+  .tt-order [data-go][data-side="buy"]:hover:not(:disabled) { background: var(--hl-buy); filter: brightness(1.1); }
+  .tt-order [data-go][data-side="sell"]:hover:not(:disabled) { background: var(--hl-sell); filter: brightness(1.1); }
   .tt-order .link:hover { color: var(--hl-accent); }
   .tt-order button.tk-at:hover:not(:disabled) { border-color: var(--hl-muted); }
 }
@@ -280,12 +282,12 @@
 /* ---- Market · Limit · Pro: three equal tabs, 34 high (REF §5.5, §5.9) ------------------------------------------------------- */
 .tt-order .tk-otabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--hl-tabline); }
 .tt-order .tk-otabs button { min-height: 0; padding: 0 8px; border: 0; border-radius: 0; margin: 0 0 -1px; border-bottom: 1px solid var(--hl-tabline); background: transparent; color: var(--hl-dim); font: 400 12px/34px var(--font-sans); letter-spacing: normal; box-shadow: none; cursor: pointer; }
-.tt-order .tk-otabs button[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-order .tk-otabs button[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-mark); }
 .tt-order .tk-pro { margin: 0 0 -1px; border-bottom: 1px solid var(--hl-tabline); }
-.tt-order .tk-pro.on { box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-order .tk-pro.on { box-shadow: inset 0 -1px 0 var(--hl-mark); }
 /* the line under the type showing slides to the type pressed (book.js bkSlideUnder, HL's .3 s); until it is measured the type keeps its own */
 .tt-order .tk-otabs { position: relative; }
-.tt-order .tk-otabs.slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
+.tt-order .tk-otabs.slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-mark); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
 .tt-order .tk-otabs.slide-under :is(button[aria-selected="true"], .tk-pro.on) { box-shadow: none; }
 .tt-order .tk-pro select { min-height: 34px; color: var(--hl-dim); font: 400 12px/34px var(--font-sans); }
 .tt-order .tk-pro.on select { color: var(--hl-text); }
@@ -297,13 +299,13 @@
 /* ---- Buy | Sell: HL's toggle (REF §5.10) — a 33 track on the inset, the side pressed filled; the near-black on the pink (7:1, §8) ---- */
 .tt-order .tk-side .seg { position: relative; display: flex; width: 100%; height: 33px; padding: 2px; gap: 0; border-radius: var(--hl-r); background: var(--hl-inset); flex-wrap: nowrap; }
 .tt-order .tk-side .seg button { position: relative; z-index: 1; flex: 1; min-height: 29px; padding: 0 8px; border: 0; border-radius: var(--hl-r-panel); background: transparent; color: var(--hl-text); font: 400 12px/29px var(--font-sans); box-shadow: none; transition: background-color .1s ease-in-out, color .1s ease-in-out; }
-.tt-order .tk-side .seg button[data-v="buy"][aria-pressed="true"] { background: var(--hl-accent-soft); color: var(--hl-on-buy); font-weight: 400; }
-.tt-order .tk-side .seg button[data-v="sell"][aria-pressed="true"] { background: var(--hl-down); color: var(--hl-on-accent); font-weight: 400; }
+.tt-order .tk-side .seg button[data-v="buy"][aria-pressed="true"] { background: var(--hl-buy); color: var(--hl-on-trade); font-weight: 400; }
+.tt-order .tk-side .seg button[data-v="sell"][aria-pressed="true"] { background: var(--hl-sell); color: var(--hl-on-trade); font-weight: 400; }
 .tt-order .tk-side .seg button:focus-visible { outline: 1px solid var(--hl-title); outline-offset: -3px; }
 /* where :has() is known, a thumb slides under the two words instead (HL's own .1 s), the pressed word's fill handed to it */
 @supports selector(:has(*)) {
-  .tt-order .tk-side .seg::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: 29px; border-radius: var(--hl-r-panel); background: var(--hl-accent-soft); transition: transform .1s ease-in-out, background-color .1s ease-in-out; }
-  .tt-order .tk-side .seg:has(button[data-v="sell"][aria-pressed="true"])::before { transform: translateX(100%); background: var(--hl-down); }
+  .tt-order .tk-side .seg::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: 29px; border-radius: var(--hl-r-panel); background: var(--hl-buy); transition: transform .1s ease-in-out, background-color .1s ease-in-out; }
+  .tt-order .tk-side .seg:has(button[data-v="sell"][aria-pressed="true"])::before { transform: translateX(100%); background: var(--hl-sell); }
   .tt-order .tk-side .seg:not(:has(button[aria-pressed="true"]))::before { display: none; }
   .tt-order .tk-side .seg button[aria-pressed="true"] { background: transparent; }
 }
@@ -417,7 +419,7 @@
 /* ---- the picker's popover (REF §5.20): the kinds as tabs kept in view, the search, rows 25 high ------------------------------- */
 .tt-pop .tk-seg { position: sticky; top: -10px; z-index: 1; display: flex; gap: 0; padding: 0; margin: -10px -10px 0; border-radius: var(--hl-r-pop) var(--hl-r-pop) 0 0; border-bottom: 1px solid var(--hl-tabline); background: var(--hl-ground); max-width: none; }
 .tt-pop .tk-seg button { flex: none; min-height: 0; gap: 6px; padding: 0 12px; border: 0; border-radius: 0; margin: 0 0 -1px; background: transparent; color: var(--hl-dim); font: 400 12px/40px var(--font-sans); letter-spacing: normal; box-shadow: none; }
-.tt-pop .tk-seg button[aria-pressed="true"] { color: var(--hl-text); font-weight: 400; background: transparent; box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-pop .tk-seg button[aria-pressed="true"] { color: var(--hl-text); font-weight: 400; background: transparent; box-shadow: inset 0 -1px 0 var(--hl-mark); }
 .tt-pop .tk-seg button .ico { width: 14px; height: 14px; }
 .tt-pop .tk-seg button:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -2px; }
 .tt-pop .tk-pick { gap: 4px; }
