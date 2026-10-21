@@ -32,13 +32,16 @@
  *
  * "Test the key" (test) asks the API for its list of models — a call that bills no token — and says whether the key was taken, in the
  * API's own words scrubbed of anything key-shaped.
+ *
+ * "Connect a key" (probe, asked by brain-detect.ts) asks the same list with a key the owner PASTED and has not saved: a client made for that
+ * key alone, at Anthropic's own address, fifteen seconds and no second try, and never kept — the brain's own client stays the saved key's.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { isRefusal } from "../../core/errors.ts";
 import { loadKeyFile, type KeyShape } from "../live/credentials.ts";
-import { brainKeyRef, emptyField, envFix, exampleFix, fileProblem, hostKeyShaped, keyFileAt, keyRejected, keyShaped, keyTail, noKeyFix, present, rejectedFix, scrubbed, unusableFix } from "./brain-key.ts";
-import { BRAIN_MODELS, DEFAULT_BRAIN, MODEL_ID, type Brain, type BrainAbout, type BrainAnswer, type BrainFix, type BrainRequest, type BrainStatus, type BrainTest } from "./desk.ts";
+import { brainKeyRef, emptyField, envFix, exampleFix, fileProblem, holdsPieceOf, hostKeyShaped, keyFileAt, keyRejected, keyShaped, keyTail, noKeyFix, present, rejectedFix, scrubbed, unusableFix } from "./brain-key.ts";
+import { BRAIN_MODELS, DEFAULT_BRAIN, MODEL_ID, type Brain, type BrainAbout, type BrainAnswer, type BrainFix, type BrainProbe, type BrainRequest, type BrainStatus, type BrainTest } from "./desk.ts";
 
 /** Claude's key file, where the page writes a key and the fix's command makes one */
 export const CLAUDE_KEY_REF = brainKeyRef("claude");
@@ -226,6 +229,30 @@ export function claudeBrain(o: ClaudeBrainOptions): Brain {
         if (err instanceof Anthropic.APIConnectionError) return { ok: false, provider: "claude", words: "the API could not be reached" };
         if (err instanceof Anthropic.APIError) return { ok: false, provider: "claude", status: typeof err.status === "number" ? err.status : undefined, words: apiWords(err, secret(reach)) };
         return { ok: false, provider: "claude", words: scrubbed(String((err as Error)?.message ?? err), secret(reach)).slice(0, 160) };
+      }
+    },
+    async probe(key: string): Promise<BrainProbe> {
+      // a client for this key alone, at Anthropic's own address (whatever ANTHROPIC_BASE_URL says), never kept: the brain's own client stays
+      // the saved key's
+      const c = o.client ?? (o.newClient ?? newClaudeClient)({ apiKey: key, authToken: null, baseURL: CLAUDE_BASE, timeout: CLAUDE_TEST_TIMEOUT_MS, maxRetries: 0 });
+      if (!c.models) return { outcome: "error", words: "this client lists no models: the key could not be checked without a billed call" };
+      try {
+        const page = await c.models.list({ limit: 1000 }, { timeout: CLAUDE_TEST_TIMEOUT_MS, maxRetries: 0 });
+        // each id checked to look like a model's name and to hold no piece of the key before anything else reads it
+        const models = [...new Set((page.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === "string" && MODEL_ID.test(x) && !keyShaped(x) && !holdsPieceOf(x, key)))].slice(0, 1000);
+        return { outcome: "taken", status: 200, words: `Anthropic accepted the key${models.length ? ` and lists ${models.length} model${models.length === 1 ? "" : "s"}` : " and lists no model"}`, models };
+      } catch (err) {
+        // the API's own sentence where its answer carries one ({"error": {"message"}}), else the SDK's; scrubbed of the key either way
+        const said = (e: InstanceType<typeof Anthropic.APIError>) => {
+          const inner = (e.error as { error?: { message?: unknown } } | undefined)?.error?.message;
+          const s = scrubbed(typeof inner === "string" ? inner : String(e.message), key).slice(0, 160);
+          return s ? { said: s } : {};
+        };
+        if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) return { outcome: "refused", status: err.status, words: "Anthropic did not accept the key", ...said(err) };
+        if (err instanceof Anthropic.APIConnectionTimeoutError) return { outcome: "unreachable", words: "no answer from api.anthropic.com in time" };
+        if (err instanceof Anthropic.APIConnectionError) return { outcome: "unreachable", words: "no answer from api.anthropic.com" };
+        if (err instanceof Anthropic.APIError) return { outcome: "error", status: typeof err.status === "number" ? err.status : undefined, words: `Anthropic answered ${err.status ?? "with an error"}`, ...said(err) };
+        return { outcome: "error", words: scrubbed(String((err as Error)?.message ?? err), key).slice(0, 160) };
       }
     },
     async decide<T>(req: BrainRequest<T>): Promise<BrainAnswer<T>> {

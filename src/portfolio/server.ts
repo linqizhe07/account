@@ -102,6 +102,13 @@
  *                                                        file (envWins) or blocks it (envBlocks), if one does. A local server's base URL
  *                                                        and model saved with no key (keyHash "") are answered {keyless: true}. The key
  *                                                        reaches no ledger, room, desk.json, log line or answer
+ *   POST /api/account/brain-detect {apiKey}              CONNECT A KEY (account/brain-detect.ts): whose a key pasted on the Superagent is —
+ *                                                        by its shape, then by that provider's own answer to its list of models (the call
+ *                                                        that bills nothing, at the provider's own address) — and the model the desk would
+ *                                                        think with: {ok, provider, label, model, listed, tail, asked} or {ok: false, code,
+ *                                                        words}, every word scrubbed of the key. Writes nothing, signs nothing (saving is
+ *                                                        /api/account/brain-key's); its own reader, as that route's; unsigned and asking for
+ *                                                        a browser's headers, as brain-test; one key at a time (429)
  *   POST /api/account/brain-test {provider, model?}      "Test the key": the brain's own test (desk.ts Brain.test) — the one call that
  *                                                        bills nothing, to the provider's own base URL — answered in words; one in flight per
  *                                                        provider and model. Unsigned: it changes nothing and spends nothing, and it is
@@ -160,6 +167,7 @@ import { cardHash, type AccountPage } from "./account/exchange.ts";
 import { CLIENT_ID, MAX_FOLLOWS, STREAM_ID } from "./account/stream.ts";
 import { actionHash, type Envelope } from "./account/sign.ts";
 import { BODY_WORDS, BRAIN_KEY_BODY_LIMIT, checkBeforeDoor, fingerprintOf, isBrainKeyPath, KEY_SHAPED_WORDS, keyTail, parseBrainKeyBody } from "./account/brain-keys.ts";
+import { DETECT_BODY_WORDS, isBrainDetectPath, parseDetectBody } from "./account/brain-detect.ts";
 import { MODEL_ID } from "./account/desk.ts";
 import { BRAIN_ID, keyShaped } from "./account/brain-key.ts";
 import { agentCode, PRICES, type AgentId, type Intent } from "./accounts.ts";
@@ -462,13 +470,14 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (!local || foreignOrigin || foreignSite) return void res.status(403).json({ ok: false, error: "this server answers only its own pages on this machine" });
     next();
   });
-  // JSON bodies are read only once the request is known to be this machine's own (above): a foreign page's body is never parsed. The one
-  // route that takes a secret, a brain's key, reads its own body (account/brain-keys.ts): the parser skips it in every spelling express
-  // routes to it (case, a trailing slash), so that a body it could not read never becomes an error that carries the key's own characters.
-  // No body is inflated (inflate: false): the page never compresses one, and a body declared gzip that is not would otherwise end in zlib's
-  // error — an HTML page with a stack, logged — instead of the one fixed sentence below
+  // JSON bodies are read only once the request is known to be this machine's own (above): a foreign page's body is never parsed. The two
+  // routes that take a secret, a brain's key — the one that saves it (account/brain-keys.ts) and the one that says whose it is
+  // (account/brain-detect.ts) — read their own bodies: the parser skips them in every spelling express routes to them (case, a trailing
+  // slash), so that a body it could not read never becomes an error that carries the key's own characters. No body is inflated (inflate:
+  // false): the page never compresses one, and a body declared gzip that is not would otherwise end in zlib's error — an HTML page with a
+  // stack, logged — instead of the one fixed sentence below
   const json = express.json({ inflate: false });
-  app.use((req, res, next) => (isBrainKeyPath(req.path) ? next() : json(req, res, next)));
+  app.use((req, res, next) => (isBrainKeyPath(req.path) || isBrainDetectPath(req.path) ? next() : json(req, res, next)));
 
   /** the owner's routes and the agents' routes are closed to an unsigned caller once the account layer is mounted */
   const layer = () => svc.account !== undefined;
@@ -949,6 +958,40 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const r = await svc.brainTest(provider, typeof model === "string" ? model : "");
     if (!r) return void res.status(404).json({ ok: false, error: "that is not a brain this desk holds: the Brains place lists the ones it does" });
     res.json(r);
+  }));
+
+  // CONNECT A KEY (account/brain-detect.ts): the owner pastes one key on the Superagent and the account says whose it is — by its shape, then
+  // by that provider's own answer to the one call that bills nothing, its list of models, asked at the provider's own address — and which
+  // model the desk would think with. NOTHING IS WRITTEN and nothing is signed here: saving the key is the owner's signed setBrainKey at
+  // /api/account/brain-key, exactly as before, and switching the desk a signed setDesk. Like the key's own route, it reads its own body (at
+  // most 4 KB of application/json; the JSON parser skips this path), answers what it cannot read with a fixed sentence, logs nothing of it
+  // and never says the key back — the answer carries the provider, the model, the key's masked tail and what each provider asked said,
+  // scrubbed. Like "Test the key", it is unsigned (it changes nothing, and the list of models bills nothing) and asks for a browser's own
+  // headers; one key is checked at a time (429 while one is out)
+  app.post("/api/account/brain-detect", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    if (!svc.desk) {
+      req.resume();
+      return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    }
+    if (req.headers["sec-fetch-site"] !== "same-origin" && typeof req.headers.origin !== "string") {
+      req.resume();
+      return void res.status(403).json({ ok: false, error: DETECT_BODY_WORDS.browser });
+    }
+    const type = String(req.headers["content-type"] ?? "").toLowerCase();
+    const encoding = String(req.headers["content-encoding"] ?? "identity").toLowerCase();
+    if (!/^application\/json\s*(;\s*charset="?utf-8"?\s*)?$/.test(type) || encoding !== "identity") {
+      req.resume();
+      return void res.status(415).json({ ok: false, error: DETECT_BODY_WORDS.type });
+    }
+    const raw = await readSmall(req, BRAIN_KEY_BODY_LIMIT);
+    if (raw === "large") return void res.status(413).json({ ok: false, error: DETECT_BODY_WORDS.large });
+    if (raw === "broken") return void res.status(400).json({ ok: false, error: DETECT_BODY_WORDS.malformed });
+    const body = parseDetectBody(raw);
+    if (!body.ok) return void res.status(body.status).json({ ok: false, error: body.error });
+    const r = await svc.brainDetect(body.apiKey);
+    if (!r) return void res.status(404).json({ ok: false, error: "this account keeps no desk" });
+    res.status(!r.ok && r.code === "busy" ? 429 : 200).json(r);
   }));
   app.get("/api/read", wrap(async (req, res) => void res.json({ ok: true, holdings: await svc.read(typeof req.query.account === "string" ? req.query.account : undefined) })));
 

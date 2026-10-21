@@ -18,7 +18,8 @@
  *      machine's own pages only), with its own small reader (parseBrainKeyBody): the server's JSON parser is not used for it, because a
  *      body that is not JSON would otherwise reach the error log with its own words in it, key and all. A body that is not what this route
  *      takes is answered with one fixed sentence and is neither logged nor echoed.
- *   3. Before the door: the key's shape (8 to 512 printable characters, no space); the key nowhere in the model or the base URL the owner
+ *   3. Before the door: the key's shape (8 to 512 printable characters, no space), and not the example from a how-to ("sk-ant-...") or a
+ *      key starred out as a dashboard shows it (exampleKey, brain-key.ts); the key nowhere in the model or the base URL the owner
  *      signed, and neither of those shaped like a key themselves (keyShaped, brain-key.ts; the base URL by its own rule, baseUrlKeyShaped:
  *      its host as typed, label by label, and its path, where an account's 32-hex id passes) — a key pasted into the wrong field would
  *      otherwise be signed, and a signed field is written to the ledger, which is hash-chained and cannot be cleaned afterwards, and sent to
@@ -66,7 +67,7 @@ import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, realpa
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { no } from "../refuse.ts";
-import { BRAIN_ID, BRAIN_KEY_DIR, brainKeyRef, hostKeyShaped, isLoopback, keyShaped, keyTail, pathKeyShaped, prefixedKey, typedHost } from "./brain-key.ts";
+import { BRAIN_ID, BRAIN_KEY_DIR, brainKeyRef, exampleKey, hostKeyShaped, isLoopback, keyShaped, keyTail, pathKeyShaped, prefixedKey, typedHost } from "./brain-key.ts";
 import { MODEL_ID, type BrainAbout, type BrainStatus } from "./desk.ts";
 import { malformed, type Envelope, type OwnerAction } from "./sign.ts";
 
@@ -97,6 +98,7 @@ export const BODY_WORDS = {
   large: `This route takes at most ${BRAIN_KEY_BODY_LIMIT} bytes: what was sent is larger, and it was not kept.`,
   notSetKey: "This route takes a signed setBrainKey and the key beside it; every other instruction goes to POST /api/exchange.",
   keyShape: "A key is 8 to 512 printable characters with no spaces: the one sent is not, and it was not kept.",
+  example: "That is the example from a how-to, or a key starred out the way a dashboard shows it — not a key: nothing was written, and the signature was not spent. Paste the key itself, as the provider gave it.",
   noKey: "A signature that sets a key needs the key beside it: nothing was written.",
   clearWithKey: 'A signature that takes the key away (keyHash "") carries no key: nothing was written.',
   hashShape: "The signed fingerprint is 64 hex characters and its salt 32 (16 bytes), both lower-case: nothing was written.",
@@ -320,6 +322,8 @@ export function checkBeforeDoor(action: SetBrainKey, apiKey: string | undefined)
   }
   if (apiKey === undefined || apiKey === "") return { status: 400, error: BODY_WORDS.noKey };
   if (!KEY.test(apiKey)) return { status: 400, error: BODY_WORDS.keyShape };
+  // the example from a how-to ("sk-ant-..."), or a key starred out as a dashboard shows it: never a key, so never written as one
+  if (exampleKey(apiKey)) return { status: 400, error: BODY_WORDS.example };
   if (typeof action.model === "string" && typeof action.baseUrl === "string" && keyInSignedFields(action, apiKey)) return { status: 400, error: BODY_WORDS.keyInField };
   const shape = setBrainKeyProblem(action);
   if (shape) return { status: 400, error: shape };
@@ -547,7 +551,9 @@ export function applyBrainKey(home: string, brains: ReadonlyArray<KeyedBrain>, a
   }
   if (staged === undefined) return no("E_ACCOUNT_BAD_ACTION", { message: "the key did not arrive with this signature: a key is set from the Brains place, which sends it beside the signature (POST /api/account/brain-key). Nothing was written" });
   // checked before the door already; checked again here, where it is written, so that nothing but the key that was signed is ever written
+  // — and never the example from a how-to
   if (!KEY.test(staged) || !keyMatches(action.salt, staged, action.keyHash)) return no("E_ACCOUNT_BAD_ACTION", { message: BODY_WORDS.mismatch });
+  if (exampleKey(staged)) return no("E_ACCOUNT_BAD_ACTION", { message: BODY_WORDS.example });
   const w = writeBrainKey(home, action.provider, { apiKey: staged, baseUrl: action.baseUrl, model: action.model });
   if (isRefusal(w)) return w;
   const fingerprint = fingerprintOf(action.keyHash);

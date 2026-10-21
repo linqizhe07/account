@@ -22,6 +22,10 @@
  *                      to <home>/credentials/anthropic/api-key.json at the start; change what that file holds (the fix's command opens
  *                      it), or save a key for Claude on the page (credentials/brains/claude.json, which is read before it), and the next
  *                      call is answered, as a replaced key would be
+ *     --providers      the model providers answer their list of models for a stand-in key — one that holds "standin", which no provider
+ *                      ever issued (sk-proj-standin0000000000000000, sk-ant-api03-standin0000000000000000) — and refuse any other with a
+ *                      401, as theirs would: so "Connect a key" (the Superagent's paste row, account/brain-detect.ts) can be clicked through
+ *                      to the end. Nothing else of theirs answers: a desk that thinks with one meets no network, as without the flag
  *
  * THE BRAINS. With a desk (the default, --superagent), the desk thinks with a SCRIPT — never a model — held under Claude's preset id
  * ("claude", labelled "A script (stand-in, as Claude)"), beside every other preset's real brain: so the Brains place shows every provider
@@ -80,9 +84,10 @@ import { no } from "../../src/portfolio/refuse.ts";
 import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts";
 import { BRAIN_MODELS, scriptedBrain, seatName, type Brain, type BrainAnswer, type BrainRequest, type RoleId } from "../../src/portfolio/account/desk.ts";
 import Anthropic from "@anthropic-ai/sdk";
-import { ANTHROPIC_KEY_REF, CLAUDE_KEY_REF, type ClaudeClient } from "../../src/portfolio/account/brain-claude.ts";
+import { ANTHROPIC_KEY_REF, CLAUDE_KEY_REF, type ClaudeClient, type ClaudeClientOptions } from "../../src/portfolio/account/brain-claude.ts";
 import { keyRejected, present, rejectedFix } from "../../src/portfolio/account/brain-key.ts";
-import { brainProviders } from "../../src/portfolio/account/brains.ts";
+import { BRAIN_PRESETS, brainProviders } from "../../src/portfolio/account/brains.ts";
+import type { OpenAIPreset } from "../../src/portfolio/account/brain-openai.ts";
 import { agentWalletKey } from "../../src/portfolio/account/keystore.ts";
 import { NetWorthLog, networthPath } from "../../src/portfolio/account/networth.ts";
 import { isJwk, kidOf, signAgent, signDevice, simKey, type AgentAction, type OwnerAction, type SimKey } from "../../src/portfolio/account/sign.ts";
@@ -129,6 +134,9 @@ export interface StandinOptions {
   brainRefuses?: boolean | undefined;
   /** the paper accounts connected (true unless said): false connects none (`--no-paper`), so Trade offers to open one */
   paper?: boolean | undefined;
+  /** the model providers answer their list of models for a stand-in key (`--providers`: providersFetch, providersClaude), so "Connect a
+   * key" can be clicked through to the end; their models still answer nothing */
+  providers?: boolean | undefined;
 }
 
 /** what was seeded, by id */
@@ -199,7 +207,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     // the desk's brain is a script: Search names the majors in turn, Risk clears $60 with a 1.2% take-profit and a 0.8% stop, Exit holds —
     // held under Claude's preset id beside every other preset's real brain (standinBrains). No desk seeded: the real brains alone stand
     // behind the hire form, each saying honestly that this home holds no key for it
-    desk: { brain: o.desk === false ? realBrains(home) : standinBrains(home, refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home)), tickMs: o.superagent ? 10_000 : 0 },
+    desk: { brain: o.desk === false ? realBrains(home, o.providers === true) : standinBrains(home, refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home), o.providers === true), tickMs: o.superagent ? 10_000 : 0 },
     payHttp: async () => ({ status: 0, headers: {}, body: undefined, error: "the stand-in pays no one: it reaches no network" }),
     liveDeps: {
       http: noNetwork,
@@ -572,18 +580,54 @@ const noNetworkClaude = (): ClaudeClient => {
   return { messages: { parse: down as never }, models: { list: down as never } };
 };
 
-/** every preset's real brain, as the account makes them (brains.ts), reading no variable from the shell and reaching no network */
-function realBrains(home: string): Brain[] {
-  return brainProviders(home, { env: {}, fetch: noNetworkFetch, newClaudeClient: noNetworkClaude });
+/** A stand-in key: one that holds "standin", which no provider ever issued — the only kind the providers answer with `--providers` */
+const standinKey = (key: unknown): boolean => String(key ?? "").includes("standin");
+
+/** What the model providers answer in the stand-in with `--providers`: their list of models — GET <base>/models at each preset's own
+ * address, and OpenRouter's GET /key (its list is public, so the key is asked about there) — for a stand-in key, with the very ids the
+ * preset knows (and an embedding model, which "Connect a key" must pass over), as each lists them (Gemini's "models/<id>"); any other key
+ * refused with a 401, in the words OpenAI's API uses for one; and nothing else: a desk's call to a model meets no network, as without it */
+const providersFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = new URL(String(input instanceof Request ? input.url : input));
+  const preset = BRAIN_PRESETS.find((p) => p.format === "openai" && p.defaultBase && `${url.origin}${url.pathname}`.startsWith(`${p.defaultBase.replace(/\/+$/, "")}/`)) as (OpenAIPreset & { format: "openai" }) | undefined;
+  const asked = url.pathname.replace(/\/+$/, "").split("/").pop();
+  if (!preset || String(init?.method ?? "GET").toUpperCase() !== "GET" || (asked !== "models" && asked !== "key" && asked !== "api-key")) throw new TypeError("the stand-in reaches no network");
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const taken = standinKey(new Headers(init?.headers).get("authorization"));
+  // the key's own endpoints, where the presets ask them first: OpenRouter's GET /key, xAI's GET /api-key (whose bad key is a 400, as xAI's is)
+  if (asked === "key") return taken ? json(200, { data: { label: "stand-in", usage: 0, limit: null, is_free_tier: false, is_management_key: false } }) : json(401, { error: { message: "User not found.", code: 401 } });
+  if (asked === "api-key") return taken ? json(200, { name: "stand-in", acls: ["api-key:endpoint:*", "api-key:model:*"], api_key_blocked: false, api_key_disabled: false, team_blocked: false }) : json(400, { code: "invalid-argument", error: "Incorrect API key provided." });
+  if (!taken && preset.id !== "openrouter") return json(401, { error: { message: "Incorrect API key provided", type: "invalid_request_error", code: "invalid_api_key" } });
+  const ids = [...new Set([...(preset.best ?? []), ...preset.suggestedModels.models, "text-embedding-3-small"])];
+  return json(200, { object: "list", data: ids.map((id) => ({ id: preset.id === "gemini" ? `models/${id}` : id, object: "model" })) });
+}) as unknown as typeof fetch;
+
+/** Claude's client in the stand-in with `--providers`: its list of models — Claude's own, and one more — for a stand-in key, a 401 in the
+ * API's words for any other; a question to a model meets no network */
+const providersClaude = (c: ClaudeClientOptions): ClaudeClient => {
+  const down = async (): Promise<never> => {
+    throw new Anthropic.APIConnectionError({ message: "the stand-in reaches no network" });
+  };
+  const list = async () => {
+    if (!standinKey(c.apiKey)) throw Anthropic.APIError.generate(401, { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, undefined, new Headers());
+    return { data: [...BRAIN_MODELS.map((m) => ({ id: m.id })), { id: "claude-standin-legacy" }], has_more: false };
+  };
+  return { messages: { parse: down as never }, models: { list: list as never } };
+};
+
+/** every preset's real brain, as the account makes them (brains.ts), reading no variable from the shell and reaching no network — but, with
+ * `providers`, the providers answering their list of models for a stand-in key (providersFetch, providersClaude) */
+function realBrains(home: string, providers = false): Brain[] {
+  return brainProviders(home, { env: {}, fetch: providers ? providersFetch : noNetworkFetch, newClaudeClient: providers ? providersClaude : noNetworkClaude });
 }
 
 /** The desk's brains in the stand-in: every preset's real brain, with Claude's place held by the stand-in's script — its id "claude"
  * (so the desk is hired with it as with the default brain, and the Brains place can switch away and back), Claude's listed models, what
  * Claude's real brain says of its place (its base URL, its key file and the key's tail), and a label that says it is a script */
-function standinBrains(home: string, script: Brain): Brain[] {
-  const real = realBrains(home);
+function standinBrains(home: string, script: Brain, providers = false): Brain[] {
+  const real = realBrains(home, providers);
   const claude = real.find((b) => b.id === "claude")!;
-  const asClaude: Brain = { ...script, id: "claude", label: "A script (stand-in, as Claude)", models: BRAIN_MODELS, ...(claude.about ? { about: () => claude.about!() } : {}) };
+  const asClaude: Brain = { ...script, id: "claude", label: "A script (stand-in, as Claude)", models: BRAIN_MODELS, ...(claude.about ? { about: () => claude.about!() } : {}), ...(claude.probe ? { probe: (key: string) => claude.probe!(key) } : {}) };
   return real.map((b) => (b.id === "claude" ? asClaude : b));
 }
 
@@ -623,7 +667,7 @@ if (isMain) {
   if (!(capUsd > 0) || !(tickMs > 0)) throw new Error("--cap is dollars and --tick milliseconds, both more than zero");
   if (args.includes("--cards") && !args.includes("--superagent")) throw new Error("--cards goes with --superagent: it hires the superagent with its autonomy off");
   if (args.includes("--no-paper") && args.includes("--superagent")) throw new Error("--no-paper does not go with --superagent: the superagent trades a paper account");
-  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses"), paper: !args.includes("--no-paper") }).catch((e: NodeJS.ErrnoException) => {
+  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses"), paper: !args.includes("--no-paper"), providers: args.includes("--providers") }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EADDRINUSE") {
       console.error(`port ${port} is already in use: is a stand-in running already? Open http://127.0.0.1:${port}, or pick another with --port`);
       process.exit(1);
@@ -643,6 +687,7 @@ if (isMain) {
       ...(args.includes("--superagent") ? [`  superagent    the desk at paper-momentum (paper money), ${args.includes("--cards") ? "its autonomy off: in Guard each lead it clears waits for you on a card" : "trading on its own on paper"} · ${s.url}/#/trade?mode=superagent`] : []),
       args.includes("--no-desk") ? "  brains        every preset's real brain, none with a key in this fresh home; they reach no network here" : "  brain         a script under Claude's id (no model thinks here), beside every other preset's real brain (no key, no network)",
       ...(args.includes("--brain-refuses") ? [`  brain         refuses its key, as the API does, until ${join(s.home, ANTHROPIC_KEY_REF)} holds something else (or a key is saved for Claude on the page)`] : []),
+      ...(args.includes("--providers") ? ['  providers     answer their list of models for a stand-in key — one that holds "standin", like sk-proj-standin0000000000000000 — and refuse any other with a 401; their models answer nothing'] : []),
       `  prices move every ${tickMs / 1000} s · Ctrl-C to stop`,
     ].join("\n"),
   );

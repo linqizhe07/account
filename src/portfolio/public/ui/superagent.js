@@ -38,7 +38,9 @@
 
    THE REST OF THE PAGE, top to bottom: a header in the grammar of Hyperliquid's market bar (the desk, PAPER, its venue, the session's
    state and clock; Equity, Target, Next cycle and the Brain as label-over-value stats — the Brain always a button, "Brain ›", that opens
-   the Brains sheet (ui/brains.js): every provider the account offers, a key typed once, the model, Test, and "Use this brain", one
+   the Brains sheet (ui/brains.js): at its top one field to paste ANY provider's key ("Paste an API key", Connect — the account tells whose
+   it is, checks it with that provider and switches the desk to its best model, after the owner's yes and signatures; in focus while the
+   brain cannot think), then every provider the account offers, a key typed once, the model, Test, and "Use this brain", one
    signature; the owner's controls — Pause or Resume, Cycle now, Autonomy Cards | Auto on paper, End; an ended session's "Start again ·
    auto on paper", ONE signature: setDesk resume carrying the autonomy, so the new session's first cycle already has it); the "Waits for you" strip, only while a card of the desk's waits (each with Reject and Approve, the
    same signature the Agents pane asks); the floor; eight role cards (each seat's standing, its duty, its latest line typed out as it
@@ -46,8 +48,10 @@
    market's chart and book, ui/chart.js and ui/book.js, and its leads as HL's positions table), the rules with the real numbers the hard
    checks use and the pipeline lit where the desk is working, and the room's stream.
    NO DESK YET: what each mode is in one sentence, then — two columns on a wide pane, one on a narrow one — the steps (the form) beside a
-   checklist read live from the first view (a paper account, a brain key: typed in the Brains sheet from "3 · The brain", or the key file
-   the account names, with Copy — never a command composed here, never a sample key — and Start) and what the superagent is (its eight
+   checklist read live from the first view (a paper account, a brain key: pasted right there, any provider's — the Brains sheet's own paste
+   row, outside the form, its provider and best model put into the form once the owner signs (sgConnectAct); once a key is in, its masked
+   tail and "Replace or remove the key ›" — or typed in the Brains sheet from "3 · The brain", or the key file the account names, with Copy
+   — never a command composed here, never a sample key — and Start) and what the superagent is (its eight
    seats, each with its duty). What is typed in the form survives the form being drawn again when a key saved meanwhile flips a brain to
    ready (core formKeep). "Start the superagent"
    signs in order: approveAgent for each house seat, approveSpend for each seat that trades, setDesk hire, setDesk autonomy {paper: true}
@@ -1173,6 +1177,15 @@ function sgFixHtml(b) {
  * checklist at once (the catalog is read again). `pick`: a provider to open on */
 function sgOpenBrains(form, pick = "") {
   if (typeof openBrains !== "function") return;
+  const ctx = sgBrainsCtx(form, pick);
+  // opened from the floor while its brain cannot think: the sheet's paste row has the focus, the key the one thing missing
+  const b = !form && SG.desk ? SG.desk.brain : null;
+  openBrains(b && !b.ok ? { ...ctx, focus: "paste" } : ctx);
+}
+/** Where the Brains sheet opens from — and where the setup's own paste row is (sgConnectAct) — as ui/brains.js reads it: the floor (`form`
+ * null: the desk's brain in use, switched by a signed setDesk) or the setup (`form`: the brain its form names, a pick put into that form —
+ * where there is a form yet). After a change: the desk's reads again */
+function sgBrainsCtx(form, pick = "") {
   const root = $("pane-superagent");
   const setup = () => (root && root.querySelector ? root.querySelector("form.sg-setup-f") : null);
   const brainOf = () => {
@@ -1180,7 +1193,7 @@ function sgOpenBrains(form, pick = "") {
     const b = f ? sgBrainOf(formFields(f), SG.catalog) : null;
     return b && typeof b === "object" ? b : null;
   };
-  openBrains({
+  return {
     where: form ? "setup" : "superagent",
     catalog: SG.catalog,
     pick,
@@ -1192,7 +1205,13 @@ function sgOpenBrains(form, pick = "") {
       SG.viewAt = 0;
       sgAgain([]);
     },
-  });
+  };
+}
+/* the setup's paste row (ui/brains.js brPasteHtml, in the checklist's "A brain key"): Connect, as the Brains sheet's own row does it, with
+   the pick put into the setup's form */
+function sgConnectAct(act, strip) {
+  if (typeof brConnectAct !== "function" || !strip) return;
+  brConnectAct(act, strip, sgBrainsCtx(true));
 }
 /* a Copy button: its text to the clipboard, the button saying so a moment */
 function sgCopyClick(e) {
@@ -1736,14 +1755,18 @@ function sgCheckHtml(owner, c, papers, f, form) {
   const two = !b
     ? step(false, 2, "A brain key", "No brain is offered by this account.")
     : b.ok
-      ? step(true, 2, "A brain key", `${esc(b.label)} is ready, through ${esc(b.how || "its API")}. ${esc(sgBilledWords(b))}`)
+      ? // ready: through what, the key's masked tail where one is saved, and the way to replace or remove it (the Brains sheet, on it)
+        step(true, 2, "A brain key", `${esc(b.label)} is ready, through ${esc(b.how || "its API")}${b.tail ? ` · key ${esc(b.tail)}` : ""}. ${esc(sgBilledWords(b))}${owner && b.tail && !sgKeyOptional(b) ? ` <button type="button" class="sg-link" data-sg-act="brains" data-v="${esc(b.id)}" data-fk="sg:brains:${esc(b.id)}">Replace or remove the key ›</button>` : ""}`)
       : ready
         ? step(true, 2, "A brain key", `${esc(b.label)} is ready with ${esc(model)} once you sign: the account calls it at ${esc(base || "its usual address")} with no key. ${esc(sgBilledWords(b))}`)
         : local && sgOnlyModel(b)
           ? step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: it runs on this machine and needs no key, only the name of a model it serves — type it under 3 · The brain, below.` : `Not yet for ${esc(b.label)}: it runs on this machine and needs no key, only the name of a model it serves, typed in the setup once there is a paper account.`)
           : local
             ? step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: it runs on this machine and needs no key — what it needs is under 3 · The brain, below.` : `Not yet for ${esc(b.label)}: it runs on this machine and needs no key. ${esc(b.why || "Not set up yet.").replace(/\//g, "/<wbr>")}`)
-            : step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: type its key under 3 · The brain, below.` : `Not yet for ${esc(b.label)}.${sgFixHtml(b)}`);
+            : owner && typeof brPasteHtml === "function"
+              ? // any provider's key, pasted here: the account tells whose it is, checks it, and puts its best model into the form below
+                step(false, 2, "A brain key", `Not yet for ${esc(b.label)}. Paste a key from any provider: the account tells whose it is.${brPasteHtml("setup", sgBrainsCtx(true), "sg-btn sg-btn-p sg-btn-s")}${form ? '<span class="sg-dim">Or type its key under 3 · The brain, below.</span>' : `<details class="sg-fix-d"><summary>Or put the key in its key file</summary>${sgFixHtml(b)}</details>`}`)
+              : step(false, 2, "A brain key", form ? `Not yet for ${esc(b.label)}: type its key under 3 · The brain, below.` : `Not yet for ${esc(b.label)}.${sgFixHtml(b)}`);
   const three = step(false, 3, "Start", !v ? "Once there is a paper account." : `Below: say what the superagent is for, then press Start the superagent. You sign each step; nothing starts until you do.${b && !ready ? " It can start before the brain can think: the plan's exits run, and no lead is made up until it can." : ""}`);
   return `${one}${two}${three}`;
 }
@@ -2263,9 +2286,18 @@ function sgWire(el) {
   el.dataset.sgWired = "1";
   el.addEventListener("click", (e) => {
     sgCopyClick(e);
+    // the setup's paste row (ui/brains.js): its own buttons
+    const c = e.target && e.target.closest && e.target.closest("[data-br-connect] [data-br-act]");
+    if (c && el.contains(c) && !c.disabled) return void sgConnectAct(c.dataset.brAct, c.closest("[data-br-connect]"));
     const t = e.target && e.target.closest && e.target.closest("[data-sg-act]");
     if (!t || !el.contains(t) || t.disabled) return;
     sgAct(t.dataset.sgAct, t.dataset);
+  });
+  // Enter in the paste row connects
+  el.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !e.target || !e.target.matches || !e.target.matches("[data-br-paste]")) return;
+    e.preventDefault();
+    sgConnectAct("connect", e.target.closest("[data-br-connect]"));
   });
   el.addEventListener("submit", (e) => {
     const form = e.target;

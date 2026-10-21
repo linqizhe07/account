@@ -542,6 +542,10 @@ export interface Brain {
   /** "Test the key": the one call that bills nothing (the provider's list of models), answered in words — never the key (BrainTest).
    * `model`: the model the owner means to use, said to be among what the provider lists or not */
   test?(model?: string): Promise<BrainTest>;
+  /** "Connect a key" (brain-detect.ts): the same call that bills nothing, asked at the provider's own address with a key the owner pasted
+   * and has not saved — nothing read from the key file or the environment, nothing written (BrainProbe). Only a model API has one: a server
+   * on this machine, a custom endpoint and a per-workspace address have no address of their own to ask a pasted key at */
+  probe?(key: string): Promise<BrainProbe>;
 }
 
 /** Model ids to offer as SUGGESTIONS: read from the provider's own page (`source`) on the day `checked` — never the whole list, never
@@ -600,6 +604,22 @@ export interface BrainTest {
   status?: number | undefined;
   models?: string[] | undefined;
   fix?: BrainFix | undefined;
+}
+/** "Connect a key" (brain-detect.ts): what a provider answered when its list of models was asked with a key that is NOT saved — one the
+ * owner pasted, before anything is signed — the one call every model API answers without billing a token. `outcome`: "taken" (the key was
+ * taken and the list read: `models`, each checked to look like a model's name and to hold no piece of the key, at most 1000), "refused"
+ * (401 or 403, or a 400 that names the key: not a key this provider takes — or, `kind` "manages", one of its keys that manages an account
+ * and runs no model; `kind` "blocked", a key it took that is blocked or may call no model yet, `words` saying which), "unreachable"
+ * (no answer, in time or at all, or a redirect, which is never followed), "error" (any other answer: its status). `words`: what happened,
+ * in a phrase ("no answer from api.openai.com in time"); `said`: the provider's own words when it gave any ("Incorrect API key provided"),
+ * at most 160 characters — both scrubbed of the key and every piece of it, never the key */
+export interface BrainProbe {
+  outcome: "taken" | "refused" | "unreachable" | "error";
+  words: string;
+  said?: string | undefined;
+  status?: number | undefined;
+  models?: string[] | undefined;
+  kind?: "manages" | "blocked" | undefined;
 }
 export interface BrainModel {
   id: string;

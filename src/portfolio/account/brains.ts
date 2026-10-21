@@ -40,9 +40,15 @@
  * are the meta and xai presets above. Nothing here pretends otherwise.
  *
  * "Test the key" (testBrain): the brain's own test — the provider's list of models, the one call that bills nothing — answered in words.
+ *
+ * "Connect a key" (brain-detect.ts): a key pasted on the Superagent, checked with the provider its shape names — the same list of models,
+ * asked at the preset's own address (the brains' probe) — and connected with the first of the preset's BEST models (presetBest: its
+ * flagship first, from the same day's research) that the provider lists for that key; the host it is checked at and sent to is the
+ * preset's own (presetHost). A preset with no address of its own (Qwen's per-workspace URL, the servers on this machine, a custom
+ * endpoint) is never asked a pasted key: those are set up by hand in the Brains place, as before.
  */
 import { CLAUDE_KEY_REF, claudeBrain, type ClaudeClient, type ClaudeClientOptions } from "./brain-claude.ts";
-import { OPENAI_DEFAULT_BASE, OPENAI_KEY_REF, OPENAI_LABEL, openaiBrain, type OpenAIPreset } from "./brain-openai.ts";
+import { hostOf, OPENAI_DEFAULT_BASE, OPENAI_KEY_REF, OPENAI_LABEL, openaiBrain, type OpenAIPreset } from "./brain-openai.ts";
 import { brainKeyRef, keyShaped } from "./brain-key.ts";
 import type { Brain, BrainConfig, BrainTest } from "./desk.ts";
 
@@ -56,6 +62,32 @@ const PROVIDER_DEFAULT: ReadonlyArray<BrainConfig["effort"]> = [];
  * order: Claude first, as the desk's default brain, then the model APIs, the servers on this machine, the custom endpoint */
 export type BrainPreset = ({ format: "anthropic" } & Pick<OpenAIPreset, "id" | "label" | "kind" | "defaultBase" | "keyRef" | "legacyKeyRef" | "efforts">) | ({ format: "openai" } & OpenAIPreset);
 
+/** the day each preset's BEST models (the models a pasted key is connected with, brain-detect.ts) were read from the provider's own pages
+ * — each provider's recommended model first: OpenAI's gpt-6-astra ("our most capable model"), DeepSeek's V4-Pro, xAI's grok-4.7 ("the most
+ * capable model we've built"), Meta's muse-spark-1.3 ("recommended for new work"; muse-wonder-1.0, more capable, is a preview), Kimi's
+ * kimi-k3, Gemini's gemini-4-argon ("our most capable model", GA 13 Oct 2026), Groq's gpt-oss-120b, Together's Kimi-K3 (its pick for chat
+ * and reasoning). OpenRouter is a router with no model of its own: OpenAI's flagship there first, whose strict JSON schema brings the desk's
+ * answers back in their shape most surely, then Anthropic's, then the Meta model the preset suggests */
+export const BEST_READ = "2026-10-21";
+
+/** OpenRouter's GET /key, read for a key that manages the account (formerly "provisioning"): it cannot call the completion endpoints
+ * (openrouter.ai's own docs: data.is_management_key, and the older data.is_provisioning_key that means the same) */
+function openrouterKeyJudge(json: unknown): { kind: "manages"; words: string } | undefined {
+  const d = json && typeof json === "object" ? (json as { data?: Record<string, unknown> }).data : undefined;
+  return d && (d.is_management_key === true || d.is_provisioning_key === true) ? { kind: "manages", words: "it is a management key, which makes and manages other keys and cannot run a model" } : undefined;
+}
+/** xAI's GET /v1/api-key, read for a key that is blocked or disabled (api_key_blocked, api_key_disabled, team_blocked), or that may call
+ * nothing yet: a new key's access list (acls) allows nothing until endpoints and models are granted it (docs.x.ai). Only an EMPTY list is
+ * read as "nothing": a list that holds anything is left to the list of models to show what it allows */
+function xaiKeyJudge(json: unknown): { kind: "blocked"; words: string } | undefined {
+  const d = json && typeof json === "object" ? (json as Record<string, unknown>) : undefined;
+  if (!d) return undefined;
+  if (d.api_key_blocked === true || d.api_key_disabled === true) return { kind: "blocked", words: "says the key is blocked or turned off: turn it on, or make another, at console.x.ai › API Keys" };
+  if (d.team_blocked === true) return { kind: "blocked", words: "says the team it belongs to is blocked: see console.x.ai" };
+  if (Array.isArray(d.acls) && d.acls.length === 0) return { kind: "blocked", words: "it may call no model yet: its access list allows nothing. At console.x.ai › API Keys, allow it the chat endpoint and the models (or everything), then paste it again" };
+  return undefined;
+}
+
 export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
   { format: "anthropic", id: "claude", label: "Claude · Anthropic API", kind: "model-api", defaultBase: "https://api.anthropic.com", keyRef: CLAUDE_KEY_REF, legacyKeyRef: "credentials/anthropic/api-key.json", efforts: ALL },
   {
@@ -68,6 +100,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     legacyKeyRef: OPENAI_KEY_REF,
     envPrefix: "OPENAI",
     suggestedModels: { models: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-5.5"], source: "https://developers.openai.com/api/docs/models", checked: CHECKED, prices: { "gpt-6-astra": { inUsd: 10, outUsd: 50 }, "gpt-6.1-sol": { inUsd: 2, outUsd: 10 }, "gpt-6-luna": { inUsd: 0.1, outUsd: 0.5 } } },
+    best: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5"],
     efforts: ALL,
     // max_completion_tokens at api.openai.com is the host's own way (brain-openai.ts HOST_QUIRKS): the older file may point this preset at
     // another endpoint, which then gets that endpoint's ways
@@ -82,6 +115,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.deepseek.com",
     keyRef: brainKeyRef("deepseek"),
     suggestedModels: { models: ["deepseek-flash", "deepseek-v4-pro"], source: "https://api-docs.deepseek.com/quick_start/pricing", checked: CHECKED, prices: { "deepseek-flash": { inUsd: 0.3, outUsd: 1.2 }, "deepseek-v4-pro": { inUsd: 1.32, outUsd: 3.96 } } },
+    best: ["deepseek-v4-pro", "deepseek-flash"],
     efforts: ["low", "high"],
     quirks: { json: "object", reasons: true },
     docs: "https://api-docs.deepseek.com/",
@@ -95,6 +129,8 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.x.ai/v1",
     keyRef: brainKeyRef("xai"),
     suggestedModels: { models: ["grok-4.7", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"], source: "https://docs.x.ai/docs/models", checked: CHECKED, prices: { "grok-4.7": { inUsd: 2, outUsd: 6 }, "grok-4.3": { inUsd: 1.25, outUsd: 2.5 }, "grok-4.20-0309-reasoning": { inUsd: 1.25, outUsd: 2.5 }, "grok-4.20-0309-non-reasoning": { inUsd: 1.25, outUsd: 2.5 } } },
+    best: ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"],
+    keyCheck: { path: "/api-key", judge: xaiKeyJudge },
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://docs.x.ai/docs/overview",
@@ -108,6 +144,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.meta.ai/v1",
     keyRef: brainKeyRef("meta"),
     suggestedModels: { models: ["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-wonder-1.0", "muse-spark-1.3-contributor", "muse-spark-1.2-contributor"], source: "https://dev.meta.ai/docs/models.md", checked: CHECKED, prices: { "muse-wonder-1.0": { inUsd: 4, outUsd: 20 }, "muse-spark-1.3": { inUsd: 1.25, outUsd: 4.25 }, "muse-spark-1.2": { inUsd: 1.25, outUsd: 4.25 }, "muse-spark-1.1": { inUsd: 1.25, outUsd: 4.25 }, "muse-spark-1.3-contributor": { inUsd: 0.1, outUsd: 0.2 }, "muse-spark-1.2-contributor": { inUsd: 0.1, outUsd: 0.2 } } },
+    best: ["muse-spark-1.3", "muse-wonder-1.0", "muse-spark-1.2", "muse-spark-1.1"],
     efforts: ALL,
     quirks: { noEffortNone: true, reasons: true },
     docs: "https://dev.meta.ai/docs/",
@@ -122,6 +159,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.moonshot.ai/v1",
     keyRef: brainKeyRef("moonshot"),
     suggestedModels: { models: ["kimi-k3", "kimi-k2.6"], source: "https://platform.kimi.ai/docs/guide/start-using-kimi-api", checked: CHECKED },
+    best: ["kimi-k3", "kimi-k2.6"],
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://platform.kimi.ai/docs/guide/start-using-kimi-api",
@@ -148,6 +186,8 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://openrouter.ai/api/v1",
     keyRef: brainKeyRef("openrouter"),
     suggestedModels: { models: ["meta/muse-spark-1.3", "meta/muse-wonder"], source: "https://openrouter.ai/meta", checked: CHECKED },
+    best: ["openai/gpt-6-astra", "anthropic/claude-opus-5.5", "meta/muse-spark-1.3"],
+    keyCheck: { path: "/key", judge: openrouterKeyJudge },
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://openrouter.ai/docs/quickstart",
@@ -161,6 +201,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://generativelanguage.googleapis.com/v1beta/openai",
     keyRef: brainKeyRef("gemini"),
     suggestedModels: { models: ["gemini-3.8-flash"], source: "https://ai.google.dev/gemini-api/docs/openai", checked: CHECKED },
+    best: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash"],
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://ai.google.dev/gemini-api/docs/openai",
@@ -174,6 +215,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.groq.com/openai/v1",
     keyRef: brainKeyRef("groq"),
     suggestedModels: { models: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"], source: "https://console.groq.com/docs/structured-outputs", checked: CHECKED },
+    best: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://console.groq.com/docs/openai",
@@ -186,6 +228,7 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
     defaultBase: "https://api.together.ai/v1",
     keyRef: brainKeyRef("together"),
     suggestedModels: { models: ["deepseek-ai/DeepSeek-V4-Pro-0813"], source: "https://docs.together.ai/docs/openai-api-compatibility", checked: CHECKED },
+    best: ["moonshotai/Kimi-K3", "deepseek-ai/DeepSeek-V4-Pro-0813", "zai-org/GLM-5.3"],
     efforts: PROVIDER_DEFAULT,
     quirks: {},
     docs: "https://docs.together.ai/docs/openai-api-compatibility",
@@ -235,6 +278,18 @@ export const BRAIN_PRESETS: ReadonlyArray<BrainPreset> = [
 
 /** a preset by its id; undefined for one the account does not know */
 export const presetById = (id: string): BrainPreset | undefined => BRAIN_PRESETS.find((p) => p.id === id);
+
+/** "Connect a key" (brain-detect.ts): the models a pasted key is connected with, best first, for an OpenAI-format preset — none for Claude,
+ * whose own listed models are its order, or for an id the account does not know */
+export const presetBest = (id: string): readonly string[] => {
+  const p = presetById(id);
+  return p && p.format === "openai" ? (p.best ?? []) : [];
+};
+/** …and the host a pasted key is checked at and sent to: the provider's own ("api.openai.com"), "" for a preset with no address of its own */
+export const presetHost = (id: string): string => {
+  const p = presetById(id);
+  return p && p.defaultBase ? hostOf(p.defaultBase) : "";
+};
 
 export interface BrainProvidersOptions {
   /** the environment the brains read their variables from (the service's own by default; the stand-in's is empty) */
