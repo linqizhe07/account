@@ -413,4 +413,37 @@ describe("the ocean, the page's ground", () => {
     expect(o.run("ocMount({}).stats()")).toBeNull();
     expect(o.run("ocMount({ getContext: () => null }).stats()")).toBeNull();
   });
+  it("swims the paper accounts' sharks: bonus(n) brings them in from an edge one at a time, kinds not in the water first, twelve at most; fewer swim out one at a time, one at least; under reduced motion the still frame is drawn with them at once", () => {
+    // every kind but the whale shark in before any comes twice
+    const r = ocean().run<string[]>("ocRoster(12)");
+    expect(r).toHaveLength(12);
+    expect(new Set(r.filter((k) => k !== "whale").slice(0, 8)).size).toBe(8);
+    const o = ocean({ seed: 11 });
+    expect(o.stats().sharks).toBe(4);
+    // three more: one joins at the next step, then one every few seconds (four steps of the world a frame here)
+    expect(o.run("OCEAN.bonus(3)")).toBe(7);
+    o.tick(1);
+    expect(o.stats().sharks).toBe(5);
+    o.tick(120, 1000 / 15);
+    expect(o.stats()).toMatchObject({ sharks: 7, bonus: 3, wanted: 7 });
+    expect(new Set(o.stats().kinds as unknown as string[]).size).toBe(7);
+    // fewer: each leaving one turns for an edge and is gone once past it, the next a few seconds after
+    expect(o.run("OCEAN.bonus(1)")).toBe(5);
+    let t = 0;
+    while (Number(o.stats().sharks) > 5 && t < 600) t += o.tick(10, 1000 / 15);
+    expect(o.stats().sharks).toBe(5);
+    expect(t).toBeGreaterThan(30);
+    // twelve at most and one at least, whatever is asked
+    expect(o.run("[OCEAN.bonus(40), OCEAN.bonus(-40), OCEAN.bonus(Number.NaN), OCEAN.bonus(0)]")).toEqual([12, 1, 4, 4]);
+    // under reduced motion: the still frame drawn again with them, at once
+    const s = ocean({ still: true, seed: 5 });
+    const drawn = s.page.ops.drawImage ?? 0;
+    expect(s.run("OCEAN.bonus(2)")).toBe(6);
+    expect(s.stats().sharks).toBe(6);
+    expect(s.page.ops.drawImage).toBeGreaterThan(drawn);
+    // asked the same again, nothing is drawn for it
+    const again = s.page.ops.drawImage ?? 0;
+    s.run("OCEAN.bonus(2)");
+    expect(s.page.ops.drawImage).toBe(again);
+  });
 });

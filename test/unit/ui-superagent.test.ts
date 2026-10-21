@@ -772,13 +772,15 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
 
   it("says why the brain cannot think, wherever it is shown, and where its key goes — and starting without one makes nothing up", () => {
     const no = { ok: false, why: "the API did not accept the key", label: "Claude", model: "claude-opus-5-5", spend: { calls: 0, usd: 0 } };
-    // the header: always a button, "Brain ›", opening the Brains sheet — here a word in amber, the reason one pointer away
+    // the header: always a button, drawn as one, opening the Brains sheet — its way in written on it ("Connect a key ›" while it cannot
+    // think), here a word in amber, the reason one pointer away
     const stat = p.run<string>(`sgBrainStat(${JSON.stringify(no)}, null)`);
     expect(stat).toContain('<span class="sg-warn-t" title="the API did not accept the key">Not ready</span>');
-    expect(stat).toMatch(/^<button type="button" class="sg-stat sg-brain sg-no" data-sg-act="brain" data-fk="sg:brain" [^>]*><span class="sg-stat-l">Brain ›<\/span>/);
+    expect(stat).toMatch(/^<button type="button" class="sg-stat sg-brain sg-no" data-sg-act="brain" data-fk="sg:brain" [^>]*><span class="sg-stat-l">Brain<\/span><span class="sg-brain-go">Connect a key ›<\/span>/);
+    expect(stat).toContain('title="The AI model the desk thinks with: switch it, or paste an API key from any provider"');
     expect(stat).not.toContain('data-sg-act="fix"');
-    // a brain that thinks is a button too: the model, the calls, the cost
-    expect(p.run<string>(`sgBrainStat(${JSON.stringify(feed().brain)}, ${JSON.stringify(CATALOG)})`)).toMatch(/^<button type="button" class="sg-stat sg-brain" data-sg-act="brain"[^>]*><span class="sg-stat-l">Brain ›<\/span><span class="sg-stat-v tab-nums">Opus 5\.5 · 37 calls · ~\$0\.84<\/span><\/button>$/);
+    // a brain that thinks is a button too: "Change ›", the model, the calls, the cost
+    expect(p.run<string>(`sgBrainStat(${JSON.stringify(feed().brain)}, ${JSON.stringify(CATALOG)})`)).toMatch(/^<button type="button" class="sg-stat sg-brain" data-sg-act="brain"[^>]*><span class="sg-stat-l">Brain<\/span><span class="sg-brain-go">Change ›<\/span><span class="sg-stat-v tab-nums">Opus 5\.5 · 37 calls · ~\$0\.84<\/span><\/button>$/);
     // a key the API refused is never drawn as a healthy brain
     const FIX = { code: "rejected", file: "/Users/x/.account/credentials/anthropic/api-key.json", restart: false, words: "The Anthropic API refused the key in the key file: put a key it accepts there." };
     expect(p.run<string>(`sgBrainStat(${JSON.stringify({ ...no, fix: FIX })}, null)`)).toContain(">Key refused</span>");
@@ -997,9 +999,17 @@ describe("the floor: mounted with flMount, given the state each read and the eve
     expect(frame).toContain('<canvas class="sg-canvas" data-sg-floor role="img" aria-label="The trading floor"></canvas><span class="sg-hud tab-nums" data-sg-hud');
     // no decoration dressed as an instrument: no corner brackets
     expect(frame).not.toContain("sg-c1");
-    // top to bottom: the header, the cards waiting for the owner (hidden until one waits), the floor, the seats, the rest
+    // top to bottom: the header, the next step and the cards waiting for the owner (each hidden until wanted), the floor, then one panel of
+    // tabs under it — the seats, the balance, the chart, the room, the rules
     const at = (s: string) => frame.indexOf(s);
-    expect([at("sg-head"), at("sg-waits"), at("sg-floor"), at("sg-cards"), at("sg-low")]).toEqual([...[at("sg-head"), at("sg-waits"), at("sg-floor"), at("sg-cards"), at("sg-low")]].sort((a, b) => a - b));
+    const order = ["sg-head", "sg-next", "sg-waits", "sg-floor", "sg-low", "sg-tabs", 'data-sg-tp="seats"', 'data-sg-tp="balance"', 'data-sg-tp="chart"', 'data-sg-tp="room"', 'data-sg-tp="rules"'].map(at);
+    expect(order.every((x) => x >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(frame).toContain('<section class="sg-next sg-panel" data-sg-p="next" aria-label="Next step" hidden></section>');
+    // one tab shows — the seats, where none was picked in this browser — each tab naming its panel and each panel named by its tab
+    expect(frame).toContain('<div class="tt-tabs sg-tabs" role="tablist" aria-label="The desk in detail"><button type="button" role="tab" id="sg-t-seats" aria-controls="sg-tp-seats" aria-selected="true" tabindex="0" data-sg-tab="seats">Seats</button><button type="button" role="tab" id="sg-t-balance" aria-controls="sg-tp-balance" aria-selected="false" tabindex="-1" data-sg-tab="balance">Balance</button>');
+    expect(frame).toContain('<div class="sg-cards" role="tabpanel" id="sg-tp-seats" aria-labelledby="sg-t-seats" data-sg-tp="seats">');
+    for (const v of ["balance", "chart", "room", "rules"]) expect(frame, v).toMatch(new RegExp(`role="tabpanel" id="sg-tp-${v}" aria-labelledby="sg-t-${v}" data-sg-tp="${v}" hidden>`));
     expect(frame).toContain('<section class="sg-waits sg-panel" data-sg-p="waits" aria-labelledby="sg-waits-h" tabindex="-1" hidden></section>');
     const asked: string[] = [];
     p.sandbox.fetch = async (path: string) => (asked.push(path), { status: 200, json: async () => ({ ok: true, desk: null }) });
@@ -1077,8 +1087,14 @@ describe("the page: the pane, the switch, the route, the scripts and styles, the
     // the --sg-* names as the area's, and the floor's own deep field on its panel, for ui/floor.js
     expect(sg).toContain("--sg-mint: var(--hl-accent);");
     expect(sg).toContain("--sg-coral: var(--hl-down);");
+    // the floor's room in the page's own background: light on Light (its panel's own names), dark on Black — chosen, or the system's dark
+    // where none was chosen; its words, ups and downs are the area's (none set on the floor)
     const floor = (css.match(/(?:^|\n)\.sg-floor \{([^}]*)\}/) || [])[1] || "";
-    for (const d of ["--sg-deep: #08090a;", "--sg-deep-2: #121315;", "--sg-scan: rgba(0, 0, 0, 0.16);", "--sg-mint: #ffffff;", "--text: #f2f2f0;", "--up: #3bb360;", "--down: #ff7360;"]) expect(floor, d).toContain(d);
+    for (const d of ["--sg-deep: #f1f1ee;", "--sg-deep-2: #ffffff;", "--sg-mint: #00843d;", "--sg-ink: #ffffff;"]) expect(floor, d).toContain(d);
+    for (const t of ["--text:", "--up:", "--down:", "--warn:"]) expect(floor, t).not.toContain(t);
+    const black = (css.match(/(?:^|\n):root\[data-theme="black"\] \.sg-floor \{([^}]*)\}/) || [])[1] || "";
+    for (const d of ["--sg-deep: #08090a;", "--sg-deep-2: #121315;", "--sg-scan: rgba(0, 0, 0, 0.16);", "--sg-mint: #ffffff;", "--sg-ink: #0a0a0a;"]) expect(black, d).toContain(d);
+    expect(css).toMatch(/@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme\]\) \.sg-floor \{[^}]*--sg-deep: #08090a;/);
     // the area's tokens are there to inherit: scoped, never under a background's theme
     const tokens = source("ui/tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(tokens).toContain(':root[data-area="trade"] :is(.main, #modal, #drawer, #ask, .toast-stack) {');
@@ -1313,9 +1329,10 @@ describe("the review's fixes: honest words, the order of a lead's steps, the rea
     const rule = (sel: string) => (css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`)) || [])[1] || "";
     expect(rule(".sg-tline")).not.toContain("warn");
     expect(rule(".sg-sline")).not.toBe(rule(".sg-tline"));
-    // what uses the area's amber: what waits for the owner (the strip, a card's line, a key not let in, a paused session) and a caution
+    // what uses the area's amber: what waits for the owner (the strip, a card's line, a key not let in, a paused session), a caution, and a
+    // brain that cannot think (the Brain button's edge and its way in, under the pointer too)
     const amber = css.split("\n").filter((l) => /var\(--hl-warn/.test(l) && !/^\s*--/.test(l)).map((l) => l.trim().split(" {")[0]);
-    expect(amber).toEqual([".sg-warn-t", ".sg-pill-warn", ".sg-waits", '.sg-light[data-l="warn"]', '.sg-light[data-l="warn"] i', ".sg-k-card .sg-msg-t", ".sg-warn-w"]);
+    expect(amber).toEqual([".sg-warn-t", ".sg-brain.sg-no:hover", ".sg-brain.sg-no:hover .sg-brain-go", ".sg-pill-warn", ".sg-brain.sg-no", ".sg-brain.sg-no .sg-brain-go", ".sg-waits", '.sg-light[data-l="warn"]', '.sg-light[data-l="warn"] i', ".sg-k-card .sg-msg-t", ".sg-warn-w"]);
     // a seat's name is never cut, and its standing keeps its word under it
     expect(rule(".sg-card-n b")).toContain("white-space: normal");
     expect(rule(".sg-card-n b")).not.toContain("ellipsis");
@@ -1744,5 +1761,152 @@ describe("the floor read again as the desk moves (feat/paper-live p1: the accoun
     p.run("SG.fails = 2");
     expect(p.run("sgWaitMs()")).toBe(2_000);
     expect(source("ui/superagent.js")).toContain('if (typeof stOn === "function") stOn("desk", sgNudge);');
+  });
+});
+
+// ---- the desk made plain: the next step, how it works, one tab at a time; the paper accounts' sharks ----------------------------------
+
+describe("the desk made plain: the brain a button that says so, the next step, how it works, one tab under the floor at a time", () => {
+  const NO = { ok: false, why: "no key", fix: { code: "no-key", words: "No key is in the key file." }, label: "Claude", model: "claude-opus-5-5", spend: { calls: 0, usd: 0 } };
+
+  it("says the next step over the floor — connect a brain while it cannot think, else how to use it until put away — and how it works in a sheet", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    // a brain that cannot think: the one thing missing, a button that opens the Brains sheet at its paste row
+    const next = p.run<string>(`sgNextHtml(${JSON.stringify(feed({ brain: NO }))}, null)`);
+    expect(next).toContain("<b>Next: connect a brain.</b>");
+    expect(next).toContain("Paste an API key from any provider: the account tells whose it is and picks its best model.");
+    expect(next).toContain('<button type="button" class="sg-btn sg-btn-p" data-sg-act="brain" data-fk="sg:next">Connect a brain</button>');
+    expect(next).toContain('data-sg-act="how"');
+    // a brain that thinks: how to use it, with the cycle's own minutes, until "Got it"
+    const how = p.run<string>(`sgNextHtml(${JSON.stringify(feed())}, null)`);
+    expect(how).toContain("The desk trades this paper account by itself, every 5 minutes.");
+    expect(how).toContain('<button type="button" class="sg-btn sg-btn-g" data-sg-act="guide-off" data-fk="sg:guide-off">Got it</button>');
+    expect(p.run(`[sgEvery(${JSON.stringify(feed({ routines: { everyMin: 1 } }))}), sgEvery({}), sgEvery(null)]`)).toEqual(["every minute", "", ""]);
+    // put away: kept in this browser, and nothing said after — but a brain that cannot think is said all the same
+    p.run('sgAct("guide-off", {})');
+    expect(p.stored).toContain("account.deskGuideOff");
+    expect(p.run(`sgNextHtml(${JSON.stringify(feed())}, null)`)).toBe("");
+    expect(p.run<string>(`sgNextHtml(${JSON.stringify(feed({ brain: NO }))}, null)`)).toContain("Connect a brain");
+    // How it works: a sheet, its points in order, the cycle's minutes the feed's
+    p.run('var SHEETS = []; openSheet = (html, o) => void SHEETS.push([html, o.title])');
+    p.run(`SG.desk = ${JSON.stringify(feed())}; sgAct("how", {})`);
+    const [html, title] = p.out<[string, string]>("SHEETS[0]");
+    expect(title).toBe("How the superagent works");
+    expect([...html.matchAll(/<li><b>([^<]+)<\/b>/g)].map((m) => m[1])).toEqual(["It trades a paper account by itself.", "A brain thinks for three seats.", "Every 5 minutes, a cycle.", "Autonomy: Cards or Auto on paper.", "The controls.", "Reading it.", "Sharks for what it makes."]);
+    // and the header's way to it, at the end of the desk's name line
+    expect(p.run<string>(`sgBrandHtml(${JSON.stringify(feed())}, null, ${NOW})`)).toMatch(/<button type="button" class="sg-link sg-how-l" data-sg-act="how" data-fk="sg:how">How it works<\/button>$/);
+  });
+
+  it("opens the Brains sheet at its paste row from the floor while the brain the header shows cannot think, and says what each control does where it is pointed at", () => {
+    const p = page();
+    p.set("A", ACCOUNT);
+    p.run('var OPENED = []; openBrains = (ctx) => void OPENED.push(ctx.focus || "")');
+    p.run(`SG.desk = ${JSON.stringify(feed({ brain: NO }))}; sgAct("brain", {})`);
+    p.run(`SG.desk = ${JSON.stringify(feed())}; sgAct("brain", {})`);
+    expect(p.out("OPENED")).toEqual(["paste", ""]);
+    const tools = p.run<string>(`sgToolsHtml(${JSON.stringify(feed())}, true)`);
+    expect(tools).toContain('title="No new cycle until you resume; the desk still follows its open orders">Pause</button>');
+    expect(tools).toContain('title="Cards: each order the seats want waits for your yes">Cards</button>');
+    expect(tools).toContain('title="Auto on paper: the seats place their orders themselves, each inside its trading limit">Auto on paper</button>');
+    expect(tools).toContain('title="End the session: no cycle runs, and the open leads are not managed until a new one starts">End</button>');
+    // a browser that only looks: every control says that instead
+    expect(p.run<string>(`sgToolsHtml(${JSON.stringify(feed())}, false)`)).not.toContain("No new cycle until you resume");
+  });
+
+  it("shows one tab under the floor at a time — kept in this browser, the arrows moving between them — mounts the chart only while its tab shows, and turns to the tab a pick on the floor asks for", () => {
+    const p = page(undefined, { dom: true });
+    p.set("A", ACCOUNT);
+    p.run(`var PANE = mini(sgFrame("floor")); SG.desk = ${JSON.stringify(feed())}; SG.view = ${JSON.stringify(VIEW)}; sgWire(PANE)`);
+    const pane = p.run("PANE");
+    (p.sandbox.document as Fake).getElementById = (id: string) => (id === "pane-superagent" ? pane : null);
+    const shown = () => p.out<string[]>('PANE.querySelectorAll("[data-sg-tp]").filter((x) => !x.hidden).map((x) => x.dataset.sgTp)');
+    const pressed = () => p.out<string[]>('PANE.querySelectorAll("[data-sg-tab]").filter((b) => b.getAttribute("aria-selected") === "true" && b.getAttribute("tabindex") === "0").map((b) => b.dataset.sgTab)');
+    expect(shown()).toEqual(["seats"]);
+    // the chart: shown, pressed, kept — and only now mounted (this page has no chart: it says so where the chart goes)
+    expect(p.run("SG.mounted")).toBe("");
+    p.run('sgTab("chart")');
+    expect([shown(), pressed()]).toEqual([["chart"], ["chart"]]);
+    expect(p.stored).toContain("account.deskTab");
+    expect(p.run("SG.mounted")).not.toBe("");
+    expect(p.run<string>("PANE.querySelector(\"[data-sg-chart]\").innerHTML")).toContain("The chart is not on this page.");
+    // another tab: the chart let go of
+    p.run('sgTab("balance")');
+    expect([shown(), p.run("SG.mounted")]).toEqual([["balance"], ""]);
+    // the arrows move to the next tab and show it, round the ends; Home and End to the first and the last; the tab pressed takes the focus
+    const key = (k: string) => p.run(`PANE.querySelector('[data-sg-tab="${p.run<string>("SG.tab")}"]').dispatchEvent({ type: "keydown", key: "${k}", preventDefault() {} })`);
+    key("ArrowRight");
+    expect(shown()).toEqual(["chart"]);
+    key("End");
+    expect(shown()).toEqual(["rules"]);
+    key("ArrowRight");
+    expect(shown()).toEqual(["seats"]);
+    key("ArrowLeft");
+    expect(shown()).toEqual(["rules"]);
+    key("Home");
+    expect([shown(), p.out("PANE.doc.focused.dataset.sgTab")]).toEqual([["seats"], "seats"]);
+    // a pick on the floor: a character's card on the Seats tab, the wall screen's market on the Chart tab
+    p.run('sgTab("room"); sgPick({ role: "risk" })');
+    expect(shown()).toEqual(["seats"]);
+    p.run('sgPick({ symbol: "SOL/USDT" })');
+    expect(shown()).toEqual(["chart"]);
+    // the tab picked last opens the next frame; a stored word that is no tab opens the seats
+    for (const [kept, want] of [["rules", "rules"], ["nonsense", "seats"]]) {
+      p.sandbox.localStorage = { getItem: (k: string) => (k === "account.deskTab" ? kept : null), setItem() {}, removeItem() {} };
+      p.run('SG.tab = ""');
+      expect(p.run("sgTabNow()"), kept).toBe(want);
+    }
+  });
+});
+
+describe("the paper accounts' sharks: one more in the ocean for each whole 1% the paper accounts made since they started, one fewer for each 1% lost", () => {
+  const MOMENTUM = { id: "paper-2", name: "Momentum · paper", live: true, paper: true, usd: 25_850, paperStartUsd: 25_000, trade: { can: true, kinds: ["spot"] } };
+
+  it("counts only the paper accounts that say what they started with — the paper money added since is put in, never made — in whole steps toward zero", () => {
+    const p = page(PAGE, { full: true });
+    p.set("A", { ...ACCOUNT, venues: [PAPER, REAL, MOMENTUM] });
+    // the paper account with no start of its own and the real one are left out: +$850 on $25,000
+    expect(p.out("shPaperGain()")).toMatchObject({ usd: 850, accounts: 1 });
+    expect(p.out<number>("shPaperGain().pct")).toBeCloseTo(3.4, 9);
+    expect(p.run("shSharkBonus(shPaperGain())")).toBe(3);
+    // a top-up is put in, not made; a paper account disconnected is left out
+    p.set("A", { ...ACCOUNT, venues: [MOMENTUM, { ...MOMENTUM, id: "paper-3", usd: 10_300, paperStartUsd: 8_000, paperAddedUsd: 2_000 }, { ...MOMENTUM, id: "paper-4", live: false, usd: 1, paperStartUsd: 99_000 }] });
+    expect(p.out("shPaperGain()")).toMatchObject({ usd: 1_150, accounts: 2 });
+    expect(p.run("shSharkBonus(shPaperGain())")).toBe(3);
+    // losses take sharks away; under a whole 1% either way changes nothing; none that says its start: none
+    expect(p.run('[shSharkBonus({ pct: -2.4 }), shSharkBonus({ pct: -0.4 }), shSharkBonus({ pct: 0.99 }), shSharkBonus({ pct: 12.7 }), shSharkBonus(null)]')).toEqual([-2, 0, 0, 12, 0]);
+    p.set("A", { ...ACCOUNT, venues: [PAPER, REAL] });
+    expect(p.out("shPaperGain()")).toBeNull();
+  });
+
+  it("asks the ocean for them on each drawing, says a shark joining or leaving once — never on the page's first reading, never when the water did not change — and says how many swim on the paper book", () => {
+    const p = page(PAGE, { full: true });
+    p.run("var TOASTS = []; toast = (t, k) => void TOASTS.push([t, k]); var ASKED = []; var SEA = { bonus: (n) => (ASKED.push(n), Math.max(1, Math.min(12, 4 + n))) }");
+    p.set("A", { ...ACCOUNT, venues: [{ ...MOMENTUM, usd: 25_000 }] });
+    // the page's first reading: the ocean asked, nothing said
+    p.run("shSharks(SEA)");
+    expect(p.out("[ASKED, SH.sharks, SH.sharkCount, TOASTS]")).toEqual([[0], 0, 4, []]);
+    // up 3.4%: three join, said once
+    p.set("A", { ...ACCOUNT, venues: [MOMENTUM] });
+    p.run("shSharks(SEA); shSharks(SEA)");
+    expect(p.out("[SH.sharks, SH.sharkCount]")).toEqual([3, 7]);
+    expect(p.out("TOASTS")).toEqual([["3 sharks joined the water: your paper accounts stand at +3.4% since they started — a shark for each whole 1%.", "info"]]);
+    // the paper book says how many swim, and why
+    expect(p.run("shSharkWords()")).toBe("7 sharks in the water — one more for each 1% your paper accounts make since they started (twelve at most), one fewer for each 1% lost; they are up 3.4%: +3.");
+    p.run("PF.histPaper = new Map(); PF.holdPaper = null; PF.holdReal = null");
+    expect(p.run<string>('pfPaperWorthHtml({ kind: "all", id: "", name: "All accounts" })')).toContain('<p class="dim small pf-note pf-sharks">7 sharks in the water — one more for each 1%');
+    expect(p.run<string>('pfPaperWorthHtml({ kind: "venue", id: "paper-2", name: "Momentum · paper" })')).not.toContain("pf-sharks");
+    // down 2.1%: five leave (from seven to two), said once
+    p.set("A", { ...ACCOUNT, venues: [{ ...MOMENTUM, usd: 24_475 }] });
+    p.run("shSharks(SEA)");
+    expect(p.out("TOASTS.at(-1)")).toEqual(["5 sharks left the water: your paper accounts stand at −2.1% since they started — a shark for each whole 1%.", "info"]);
+    // at the most already: asked, and nothing said, since the water did not change
+    p.set("A", { ...ACCOUNT, venues: [{ ...MOMENTUM, usd: 30_000 }] });
+    p.run("shSharks(SEA)");
+    const said = p.out<unknown[]>("TOASTS").length;
+    p.set("A", { ...ACCOUNT, venues: [{ ...MOMENTUM, usd: 31_000 }] });
+    p.run("shSharks(SEA)");
+    expect(p.out("[SH.sharks, SH.sharkCount]")).toEqual([24, 12]);
+    expect(p.out<unknown[]>("TOASTS")).toHaveLength(said);
   });
 });

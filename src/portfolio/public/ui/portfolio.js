@@ -462,7 +462,9 @@ function pfPaperWorthHtml(l) {
   // reached from the book it would trade. A link only: it does not change the mode the rail's Trade opens (only the switch keeps that)
   const superagent = ` <a class="link" href="${esc(hashOf("superagent", one ? { venue: one.id } : {}))}">${icon("superagent", "sm")}Let the superagent trade it ›</a>`;
   const foot = `<p class="dim small pf-note">Paper money, not counted in your net worth${l.kind === "all" || l.kind === "paper" ? ` (real money: ${money(realUsd)})` : ""}.${l.kind === "venue" || l.kind === "paper" ? ` ${pfBtn("all", "Show all accounts", { cls: "link" })}` : ""}${superagent}</p>`;
-  return `${head}${pfCurveHtml(h, { paper: true })}${foot}`;
+  // the ocean's sharks, which the paper accounts' gain sets (shell.js shSharks): how many swim, and why
+  const sharks = !one && typeof shSharkWords === "function" ? shSharkWords() : "";
+  return `${head}${pfCurveHtml(h, { paper: true })}${foot}${sharks ? `<p class="dim small pf-note pf-sharks">${esc(sharks)}</p>` : ""}`;
 }
 /* the paper curve's change over the range: since the first point when the range starts before it */
 function pfPaperRangeLine(h) {

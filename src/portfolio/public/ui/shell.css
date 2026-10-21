@@ -183,7 +183,10 @@ button.pill-btn:hover { filter: brightness(0.96); }
 .rkey.yes-k { background: var(--accent); color: var(--on-accent); }
 .rkey.yes-k:hover:not(:disabled) { background: var(--accent); opacity: 0.88; }
 /* the top bar: a glass bar over the water, as the reference floats its controls */
-.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; min-height: 60px; padding: 8px 10px 8px 18px; border: 1px solid var(--card-border); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-card); }
+/* the top bar is glass, and glass (a backdrop-filter) is a stacking context of its own: the lens's menu, the search's results and anything
+   else that drops from the bar are layered INSIDE it, so their z-index never lifts them over a panel further down the page — each panel
+   being glass too, the later one would be drawn on top of the menu. The bar itself is lifted over the panes, and everything it drops with it */
+.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; z-index: 30; min-height: 60px; padding: 8px 10px 8px 18px; border: 1px solid var(--card-border); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-card); }
 .lens { font-size: 16px; font-weight: 700; border: 0; border-radius: var(--radius-s); background: transparent; height: 44px; padding: 0 6px; margin-left: -6px; display: inline-flex; align-items: center; gap: 6px; max-width: 320px; }
 .lens:hover { background: var(--hover); }
 .lens span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

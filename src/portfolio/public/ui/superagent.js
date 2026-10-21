@@ -37,16 +37,21 @@
    A read that comes after a gap (the pane put aside, the page hidden) draws what is now and replays nothing.
 
    THE REST OF THE PAGE, top to bottom: a header in the grammar of Hyperliquid's market bar (the desk, PAPER, its venue, the session's
-   state and clock; Equity, Target, Next cycle and the Brain as label-over-value stats — the Brain always a button, "Brain ›", that opens
-   the Brains sheet (ui/brains.js): at its top one field to paste ANY provider's key ("Paste an API key", Connect — the account tells whose
-   it is, checks it with that provider and switches the desk to its best model, after the owner's yes and signatures; in focus while the
-   brain cannot think), then every provider the account offers, a key typed once, the model, Test, and "Use this brain", one
-   signature; the owner's controls — Pause or Resume, Cycle now, Autonomy Cards | Auto on paper, End; an ended session's "Start again ·
-   auto on paper", ONE signature: setDesk resume carrying the autonomy, so the new session's first cycle already has it); the "Waits for you" strip, only while a card of the desk's waits (each with Reject and Approve, the
-   same signature the Agents pane asks); the floor; eight role cards (each seat's standing, its duty, its latest line typed out as it
-   lands, its one real number); the balance (the desk's equity curve, its closes as bars, the big figure rolling), the analysis (the focus
-   market's chart and book, ui/chart.js and ui/book.js, and its leads as HL's positions table), the rules with the real numbers the hard
-   checks use and the pipeline lit where the desk is working, and the room's stream.
+   state and clock, and "How it works" — a sheet of what the desk is and does, sgHow; Equity, Target, Next cycle and the Brain as
+   label-over-value stats — the Brain always a button, and drawn as one: edged, "Change ›" written on it, in amber "Connect a key ›" while it
+   cannot think — that opens the Brains sheet (ui/brains.js): at its top one field to paste ANY provider's key ("Paste an API key", Connect
+   — the account tells whose it is, checks it with that provider and switches the desk to its best model, after the owner's yes and
+   signatures; in focus while the brain cannot think), then every provider the account offers, a key typed once, the model, Test, and "Use
+   this brain", one signature; the owner's controls, each saying what it does where it is pointed at — Pause or Resume, Cycle now, Autonomy
+   Cards | Auto on paper, End; an ended session's "Start again · auto on paper", ONE signature: setDesk resume carrying the autonomy, so the
+   new session's first cycle already has it); the next step, only while there is one (sgNextHtml: "Connect a brain" while it cannot think,
+   else "How to use it" in three lines until "Got it" puts it away in this browser); the "Waits for you" strip, only while a card of the
+   desk's waits (each with Reject and Approve, the same signature the Agents pane asks); the floor; then one panel of tabs, one showing at
+   a time and the one picked last kept in this browser (SG_TABS) — Seats: eight role cards (each seat's standing, its duty, its latest line
+   typed out as it lands, its one real number); Balance: the desk's equity curve, its closes as bars, the big figure rolling; Chart: the
+   focus market's chart and book, ui/chart.js and ui/book.js, and its leads as HL's positions table — mounted only while its tab shows;
+   Room: the room's stream; Rules: the real numbers the hard checks use and the pipeline lit where the desk is working. A character picked
+   on the floor turns to Seats and its card, the wall screen to Chart.
    NO DESK YET: what each mode is in one sentence, then — two columns on a wide pane, one on a narrow one — the steps (the form) beside a
    checklist read live from the first view (a paper account, a brain key: pasted right there, any provider's — the Brains sheet's own paste
    row, outside the form, its provider and best model put into the form once the owner signs (sgConnectAct); once a key is in, its masked
@@ -63,8 +68,8 @@
    the floor dims and says since when (sgFloorState stale), and the beat asks less often (1, 2, 5, then every 10 s) until it answers.
 
    The look is Hyperliquid's trade app's grammar, on the trading area's tokens (ui/tokens.css html[data-area="trade"]): panels, controls,
-   type and motion as Regular has them, so the two modes are one screen. Only the floor keeps a field of its own, a dark screen in either
-   background (.sg-floor, ui/superagent.css).
+   type and motion as Regular has them, so the two modes are one screen. Only the floor keeps a room of its own, in the page's background:
+   light on Light, dark on Black (.sg-floor, ui/superagent.css; ui/floor.js reads it again when the page switches).
    Every string from outside is escaped before it is drawn. The parts are built once and painted with paint(): a read that changed nothing
    writes nothing. */
 
@@ -121,6 +126,10 @@ const SG = {
   // that answer land in the form that asked — the feed's beat, which keeps reading meanwhile, would otherwise swap the setup for the
   // floor as soon as the desk is hired, and a refusal of the steps after it would be said nowhere
   signing: false,
+  // the tab showing under the floor ("" until read: the one picked last in this browser, else the seats), and whether "How to use it" was
+  // put away in this browser (read once, then kept here)
+  tab: "",
+  guideOff: null,
 };
 const SG_EVERY_MS = 1_000;
 /* while the account's stream is connected the desk tells the page each time its floor moves (a `desk` event: sgNudge reads it at once), and
@@ -920,25 +929,60 @@ function sgArrive(root) {
   if (h && typeof h.focus === "function") h.focus({ preventScroll: true });
 }
 
-/** the frame for each mode: built once, its parts painted. The floor's, top to bottom: the header (HL's market bar), the cards waiting for
- * the owner (only while one waits), the floor, the eight seats, then the balance, the analysis, the rules and the room */
+/* the tabs under the floor, in their order: the eight seats, the balance, the chart of the market in focus, the room, the rules. One shows
+   at a time; the one picked last is kept in this browser */
+const SG_TABS = [["seats", "Seats"], ["balance", "Balance"], ["chart", "Chart"], ["room", "Room"], ["rules", "Rules"]];
+const SG_TAB_KEY = "account.deskTab";
+const SG_GUIDE_KEY = "account.deskGuideOff";
+/* the tab showing: the one picked last in this browser (storage off or never picked: the seats) */
+function sgTabNow() {
+  if (SG.tab) return SG.tab;
+  let kept = "";
+  try {
+    kept = String(localStorage.getItem(SG_TAB_KEY) || "");
+  } catch {
+    kept = "";
+  }
+  SG.tab = SG_TABS.some(([v]) => v === kept) ? kept : "seats";
+  return SG.tab;
+}
+/* "How to use it" put away in this browser ("Got it"); storage off: shown each visit until put away */
+function sgGuideOff() {
+  if (SG.guideOff !== null) return SG.guideOff;
+  try {
+    SG.guideOff = localStorage.getItem(SG_GUIDE_KEY) === "1";
+  } catch {
+    SG.guideOff = false;
+  }
+  return SG.guideOff;
+}
+
+/** the frame for each mode: built once, its parts painted. The floor's, top to bottom: the header (HL's market bar), the next step (only
+ * while there is one), the cards waiting for the owner (only while one waits), the floor, then one panel of tabs under it — the eight
+ * seats, the balance, the chart, the room, the rules — one showing at a time */
 function sgFrame(mode) {
   if (mode === "wait") return '<div class="sg" data-sg="wait"><div class="sg-panel sg-wait"><p class="sg-dim">Reading the desk…</p><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></div>';
   if (mode === "error") return '<div class="sg" data-sg="error"><div class="sg-panel sg-wait"><p class="sg-err" role="alert" data-sg-p="err"></p></div></div>';
   if (mode === "setup") return '<div class="sg" data-sg="setup"><section class="sg-panel sg-setup" aria-labelledby="sg-setup-h"><div data-sg-p="setup"></div></section></div>';
   if (mode === "real") return '<div class="sg" data-sg="real"><section class="sg-panel sg-setup" aria-labelledby="sg-real-h"><div data-sg-p="real"></div></section></div>';
   const cards = SG_ROLES.map((role) => `<article class="sg-card sg-r-${role}" data-sg-card="${role}" data-s="reading" tabindex="-1"><div class="sg-card-h" data-sg-p="h"></div><p class="sg-owns" data-sg-p="owns"></p><p class="sg-said"><q class="sg-line" data-sg-line hidden><span data-sg-txt></span><span class="sg-caret" aria-hidden="true"></span></q></p><div class="sg-said-m" data-sg-p="said"></div><div class="sg-metric" data-sg-p="m"></div></article>`).join("");
+  // the tabs as Regular's tables draw theirs (terminal.css .tt-tabs, its line sliding under the tab pressed); the arrows move between them
+  const tab = sgTabNow();
+  const tabs = SG_TABS.map(([v, t]) => `<button type="button" role="tab" id="sg-t-${v}" aria-controls="sg-tp-${v}" aria-selected="${String(v === tab)}" tabindex="${v === tab ? "0" : "-1"}" data-sg-tab="${v}">${t}</button>`).join("");
+  const pane = (v, cls, body) => `<div class="${cls}" role="tabpanel" id="sg-tp-${v}" aria-labelledby="sg-t-${v}" data-sg-tp="${v}"${v === tab ? "" : " hidden"}>${body}</div>`;
   return `<div class="sg" data-sg="floor">
     <header class="sg-head sg-panel"><div class="sg-head-a" data-sg-p="brand"></div><div class="sg-stats" data-sg-p="meta"></div><div class="sg-tools" data-sg-p="tools"></div><div class="sg-head-n" data-sg-p="note" role="status"></div></header>
+    <section class="sg-next sg-panel" data-sg-p="next" aria-label="Next step" hidden></section>
     <section class="sg-waits sg-panel" data-sg-p="waits" aria-labelledby="sg-waits-h" tabindex="-1" hidden></section>
     <section class="sg-floor sg-panel" aria-label="The floor"><canvas class="sg-canvas" data-sg-floor role="img" aria-label="The trading floor"></canvas><span class="sg-hud tab-nums" data-sg-hud title="The floor's own frame rate, measured"></span><p class="sg-cap" data-sg-p="cap" aria-live="off"></p></section>
-    <div class="sg-cards" role="group" aria-label="The seats">${cards}</div>
-    <div class="sg-low">
-      <section class="sg-bal sg-panel" aria-labelledby="sg-bal-h"><div data-sg-p="bal"></div></section>
-      <section class="sg-ana sg-panel" aria-labelledby="sg-ana-h"><div class="sg-ana-h" data-sg-p="ana-h"></div><div class="sg-ana-g"><div class="sg-chart" data-sg-chart></div><div class="sg-book" data-sg-book></div></div><div class="sg-marks" data-sg-p="marks"></div></section>
-      <section class="sg-rules sg-panel" aria-labelledby="sg-rules-h"><div data-sg-p="rules"></div></section>
-      <section class="sg-room sg-panel" aria-labelledby="sg-room-h"><div class="sg-sec-h"><h3 class="sg-lab" id="sg-room-h">The room</h3><span class="sg-dim" data-sg-p="room-n"></span></div><div class="sg-msgs" data-sg-msgs role="log" aria-live="polite"></div></section>
-    </div>
+    <section class="sg-low sg-panel" aria-label="The desk in detail">
+      <div class="tt-tabs sg-tabs" role="tablist" aria-label="The desk in detail">${tabs}</div>
+      ${pane("seats", "sg-cards", cards)}
+      ${pane("balance", "sg-bal", '<div data-sg-p="bal"></div>')}
+      ${pane("chart", "sg-ana", '<div class="sg-ana-h" data-sg-p="ana-h"></div><div class="sg-ana-g"><div class="sg-chart" data-sg-chart></div><div class="sg-book" data-sg-book></div></div><div class="sg-marks" data-sg-p="marks"></div>')}
+      ${pane("room", "sg-room", '<div class="sg-sec-h"><h3 class="sg-lab" id="sg-room-h">The room</h3><span class="sg-dim" data-sg-p="room-n"></span></div><div class="sg-msgs" data-sg-msgs role="log" aria-live="polite"></div>')}
+      ${pane("rules", "sg-rules", '<div data-sg-p="rules"></div>')}
+    </section>
   </div>`;
 }
 
@@ -968,7 +1012,12 @@ function sgUnmount() {
   }
   SG.floor = null;
   const el = $("pane-superagent");
-  const root = el && el.querySelector ? el.querySelector("[data-sg]") : null;
+  sgLetChartGo(el && el.querySelector ? el.querySelector("[data-sg]") : null);
+  SG.typing.clear();
+  SG.typed = {};
+}
+/* the chart and the book let go of — their reads and timers stop — when the frame goes, or another tab shows than the chart */
+function sgLetChartGo(root) {
   if (root && root.querySelector) {
     const chart = root.querySelector("[data-sg-chart]");
     const book = root.querySelector("[data-sg-book]");
@@ -976,8 +1025,6 @@ function sgUnmount() {
     if (book && typeof bkRelease === "function") bkRelease(book);
   }
   SG.mounted = "";
-  SG.typing.clear();
-  SG.typed = {};
 }
 
 /* the floor's events, in order (ui/floor.js queues them per actor) */
@@ -991,21 +1038,59 @@ function sgPush(events) {
     }
   }
 }
-/* a character picked on the floor: its card, brought into view and marked a moment; the wall screen: the analysis; the owner's tray: the
-   cards waiting for the owner */
+/* a character picked on the floor: its card (the Seats tab shown), brought into view and marked a moment; the wall screen: the Chart tab;
+   the owner's tray: the cards waiting for the owner */
 function sgPick(what) {
   const el = $("pane-superagent");
   if (!el || !what) return;
   if (what.tray) return void sgToWaits();
-  const target = what.role ? el.querySelector(`[data-sg-card="${String(what.role).replace(/[^a-z]/g, "")}"]`) : what.symbol ? el.querySelector(".sg-ana") : null;
+  if (what.role || what.symbol) sgTab(what.role ? "seats" : "chart");
+  const target = what.role ? el.querySelector(`[data-sg-card="${String(what.role).replace(/[^a-z]/g, "")}"]`) : what.symbol ? el.querySelector(".sg-low") : null;
   if (!target) return;
   if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "nearest", behavior: still() ? "auto" : "smooth" });
-  if (target.classList) {
+  if (what.role && target.classList) {
     target.classList.remove("sg-picked");
     nextFrame(() => target.classList.add("sg-picked"));
     setTimeout(() => target.classList.remove("sg-picked"), 1400);
   }
   if (what.role && typeof target.focus === "function") target.focus({ preventScroll: true });
+}
+/** a tab under the floor shown: its panel, its button pressed (the line sliding under it), kept for the next visit in this browser. What
+ * draws only while its tab shows is drawn now (the chart and the book), and the room opens at its newest line. `focus`: the tab's button
+ * takes the focus (the arrow keys moved there) */
+function sgTab(v, { focus = false } = {}) {
+  if (!SG_TABS.some(([x]) => x === v)) return;
+  const was = SG.tab;
+  SG.tab = v;
+  if (was !== v) {
+    try {
+      localStorage.setItem(SG_TAB_KEY, v);
+    } catch {
+      // storage off: kept for this visit
+    }
+  }
+  const el = $("pane-superagent");
+  const root = el && el.querySelector ? el.querySelector('[data-sg="floor"]') : null;
+  if (!root || !root.querySelectorAll) return;
+  for (const b of root.querySelectorAll("[data-sg-tab]")) {
+    const on = b.dataset.sgTab === v;
+    b.setAttribute("aria-selected", String(on));
+    b.setAttribute("tabindex", on ? "0" : "-1");
+    if (on && focus && typeof b.focus === "function") b.focus();
+  }
+  for (const p of root.querySelectorAll("[data-sg-tp]")) p.hidden = p.dataset.sgTp !== v;
+  if (SG.desk) sgPaintTab(root, SG.desk);
+  if (v === "room") {
+    const box = root.querySelector("[data-sg-msgs]");
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+}
+/* what draws only while its tab shows: the chart and the book (mounted when the Chart tab shows, let go of when another does); the tab's line
+   slid under the tab pressed, once the bar has a size */
+function sgPaintTab(root, feed) {
+  if (sgTabNow() === "chart") sgPaintFocus(root, feed);
+  else if (SG.mounted) sgLetChartGo(root);
+  if (typeof bkSlideUnder === "function") bkSlideUnder(root.querySelector(".sg-tabs"));
 }
 /* the "Waits for you" strip brought into view, its first answer focused (from the tray, and from a card's "Answer ›") */
 function sgToWaits() {
@@ -1044,6 +1129,10 @@ function sgPaintFloor(root, owner) {
     if (run && typeof run.focus === "function") run.focus();
   }
   paint(q('[data-sg-p="note"]'), sgNoteHtml(feed, SG.view, owner, now));
+  const next = q('[data-sg-p="next"]');
+  const nextHtml = sgNextHtml(feed, SG.view);
+  paint(next, nextHtml);
+  if (next) next.hidden = !nextHtml;
   sgPaintWaits(q('[data-sg-p="waits"]'), owner);
   if (SG.floor && typeof SG.floor.set === "function") {
     try {
@@ -1057,7 +1146,7 @@ function sgPaintFloor(root, owner) {
   sgPaintCards(root, now);
   paint(q('[data-sg-p="cap"]'), esc(SG.err || sgCaption(feed, SG.catalog, now)));
   paint(q('[data-sg-p="bal"]'), sgBalanceHtml(feed, SG.view, SG.live, now));
-  sgPaintFocus(root, feed);
+  sgPaintTab(root, feed);
   paint(q('[data-sg-p="rules"]'), `${sgRulesHtml(feed, SG.view)}${sgPipeHtml(feed)}`);
   sgPaintRoom(root);
 }
@@ -1083,9 +1172,10 @@ function sgBrandHtml(feed, view, now, stale = null) {
   const pill = stale
     ? `<span class="sg-pill sg-pill-off">Not read since ${esc(nyTime(stale.since))}</span>`
     : { live: `<span class="sg-pill sg-pill-on"><i aria-hidden="true"></i>Live <span class="tab-nums" data-sg-clock>${esc(clock)}</span> of ${esc(String(num(s && s.hours)))} h</span>`, paused: '<span class="sg-pill sg-pill-warn"><i aria-hidden="true"></i>Paused</span>', halted: '<span class="sg-pill sg-pill-bad"><i aria-hidden="true"></i>Halted</span>', ended: '<span class="sg-pill sg-pill-off">Ended</span>', none: '<span class="sg-pill sg-pill-off">No session</span>' }[st] || `<span class="sg-pill sg-pill-off">${esc(String(st))}</span>`;
-  // beside the Paper chip the venue's name without its own "· paper" (Momentum · paper → Momentum): paper is said once
+  // beside the Paper chip the venue's name without its own "· paper" (Momentum · paper → Momentum): paper is said once; at the end, the way
+  // to how the desk works (sgHow)
   const name = sgVenueName(feed, view);
-  return `<h2 class="sg-desk-n" id="sg-desk-h" tabindex="-1">${esc((view && view.name) || "The superagent")}</h2>${v.paper ? '<span class="sg-chip">Paper</span>' : ""}<span class="sg-venue">${esc(v.paper ? sgPaperless(name) : name)}${v.connected !== true ? " · not connected" : ""}</span>${pill}`;
+  return `<h2 class="sg-desk-n" id="sg-desk-h" tabindex="-1">${esc((view && view.name) || "The superagent")}</h2>${v.paper ? '<span class="sg-chip">Paper</span>' : ""}<span class="sg-venue">${esc(v.paper ? sgPaperless(name) : name)}${v.connected !== true ? " · not connected" : ""}</span>${pill}<button type="button" class="sg-link sg-how-l" data-sg-act="how" data-fk="sg:how">How it works</button>`;
 }
 /* a paper account's name without its own "paper" where a Paper chip already says it (Regular's tkPaperless where it is on the page) */
 const sgPaperless = (name) => (typeof tkPaperless === "function" ? tkPaperless(name) : String(name || "").replace(/\s*[·-]\s*paper\s*$/i, "") || String(name || ""));
@@ -1133,19 +1223,20 @@ const SG_FIX_WORDS = { "no-key": "Not ready", example: "Not ready", unusable: "K
 /* …and as the floor's brain cabinet says it, in a few words (a key file with the empty template or a sample in it, or a sample key in the
    service's environment, is no key) */
 const SG_FIX_SHORT = { "no-key": "no key", example: "no key", unusable: "key file unusable", rejected: "key refused", env: "no key" };
-/** the brain as a header stat, and always a button ("Brain ›") that opens the Brains sheet on it: its model as people say it, its calls
- * (and how many got no answer at all — the account's spend.failed counts every call that came back with nothing: a key refused, a rate
- * limit, an endpoint that could not be reached; it cannot tell those apart, so neither does this: "not answered", as the account's own
- * evening report says it, never "refused"), what they cost — or, when it cannot think, a word in amber with the account's reason one
- * pointer away; the sheet says the rest, takes a key, switches the brain */
+/** the brain as a header stat, and always a button — drawn as one, edged, its way in written on it ("Change ›", or "Connect a key ›" in
+ * amber while it cannot think) — that opens the Brains sheet on it: its model as people say it, its calls (and how many got no answer at
+ * all — the account's spend.failed counts every call that came back with nothing: a key refused, a rate limit, an endpoint that could not
+ * be reached; it cannot tell those apart, so neither does this: "not answered", as the account's own evening report says it, never
+ * "refused"), what they cost — or, when it cannot think, a word in amber with the account's reason one pointer away; the sheet says the
+ * rest, takes a key (pasted, any provider's), switches the brain */
 function sgBrainStat(b, catalog) {
   if (!b) return "";
-  const stat = (value, cls) => `<button type="button" class="sg-stat sg-brain${cls}" data-sg-act="brain" data-fk="sg:brain" title="The desk's brain: switch the model, add or test a key"><span class="sg-stat-l">Brain ›</span><span class="sg-stat-v tab-nums">${value}</span></button>`;
+  const stat = (value, cls, go) => `<button type="button" class="sg-stat sg-brain${cls}" data-sg-act="brain" data-fk="sg:brain" title="The AI model the desk thinks with: switch it, or paste an API key from any provider"><span class="sg-stat-l">Brain</span><span class="sg-brain-go">${go} ›</span><span class="sg-stat-v tab-nums">${value}</span></button>`;
   if (!b.ok) {
     const code = b.fix && b.fix.code;
     const word = SG_FIX_WORDS[code] || "Not ready";
     const why = (b.fix && b.fix.words) || b.why || SG_NO_WHY;
-    return stat(`<span class="sg-warn-t" title="${esc(why)}">${esc(word)}</span>`, " sg-no");
+    return stat(`<span class="sg-warn-t" title="${esc(why)}">${esc(word)}</span>`, " sg-no", "Connect a key");
   }
   // a scripted brain is a script whatever model it is filed under; a model is named from the catalog's list of its own provider (or of any,
   // where the provider is not known), else as people say its id
@@ -1157,7 +1248,7 @@ function sgBrainStat(b, catalog) {
   const sp = b.spend || {};
   const tokens = num(sp.inputTokens) + num(sp.outputTokens);
   const cost = num(sp.usd) === 0 && tokens === 0 ? "no cost recorded" : `~${money(sp.usd)}`;
-  return stat(`${esc(name)} · ${esc(plural(num(sp.calls), "call"))}${num(sp.failed) > 0 ? ` · ${esc(String(num(sp.failed)))} not answered` : ""} · ${esc(cost)}${num(sp.unpricedTokens) ? ` + ${esc(String(sp.unpricedTokens))} tokens unpriced` : ""}`, "");
+  return stat(`${esc(name)} · ${esc(plural(num(sp.calls), "call"))}${num(sp.failed) > 0 ? ` · ${esc(String(num(sp.failed)))} not answered` : ""} · ${esc(cost)}${num(sp.unpricedTokens) ? ` + ${esc(String(sp.unpricedTokens))} tokens unpriced` : ""}`, "", "Change");
 }
 
 /** where a brain's key goes, said by the account (brain.fix): its sentence, the key file's path with Copy, the command (when it gives one)
@@ -1178,8 +1269,9 @@ function sgFixHtml(b) {
 function sgOpenBrains(form, pick = "") {
   if (typeof openBrains !== "function") return;
   const ctx = sgBrainsCtx(form, pick);
-  // opened from the floor while its brain cannot think: the sheet's paste row has the focus, the key the one thing missing
-  const b = !form && SG.desk ? SG.desk.brain : null;
+  // opened from the floor while its brain cannot think (as the header says it): the sheet's paste row has the focus, the key the one thing
+  // missing
+  const b = !form && SG.desk ? sgBrainNow(SG.desk, SG.view) : null;
   openBrains(b && !b.ok ? { ...ctx, focus: "paste" } : ctx);
 }
 /** Where the Brains sheet opens from — and where the setup's own paste row is (sgConnectAct) — as ui/brains.js reads it: the floor (`form`
@@ -1253,11 +1345,48 @@ function sgToolsHtml(feed, owner) {
   const paper = !!(feed.venue && feed.venue.paper);
   const auto = !!(feed.autonomy && feed.autonomy.paper);
   const again = paper ? btn("resume", "Start again · auto on paper", "sg-btn sg-btn-p", "A new session, its autonomy on paper: one signature", "run", "auto") : btn("resume", "Start a new session", "sg-btn sg-btn-p", "", "run");
-  const run = st === "live" || st === "halted" ? btn("pause", "Pause", "sg-btn", "", "run") : st === "paused" ? btn("resume", "Resume", "sg-btn sg-btn-p", "", "run") : st === "ended" ? again : "";
+  const run = st === "live" || st === "halted" ? btn("pause", "Pause", "sg-btn", "No new cycle until you resume; the desk still follows its open orders", "run") : st === "paused" ? btn("resume", "Resume", "sg-btn sg-btn-p", "Cycles start again", "run") : st === "ended" ? again : "";
   const cycle = st === "live" || st === "halted" ? btn("cycle", "Cycle now", "sg-btn", feed.brain && feed.brain.ok ? "Run one cycle now: the brain is asked, which costs its tokens" : "The house seats have no brain to think with: a cycle now runs the plan's exits only") : "";
-  const seg = `<div class="sg-seg" role="group" aria-label="Autonomy"><span class="sg-seg-l" aria-hidden="true">Autonomy</span>${[["off", "Cards"], ["on", "Auto on paper"]].map(([v, t]) => `<button type="button" data-sg-act="autonomy" data-v="${v}" data-fk="sg:auto:${v}" aria-pressed="${String((v === "on") === auto)}"${off || (v === "on" && !paper ? ` disabled title="${sgVenueUnread(feed) ? "The desk's venue is not connected: autonomy waits until it is read as a paper account" : "Autonomy is for a paper account only"}"` : "")}>${t}</button>`).join("")}</div>`;
-  const end = st !== "ended" && st !== "none" ? btn("end", "End", "sg-btn sg-btn-g") : "";
+  // each choice says what it does where it is pointed at (a choice that cannot be made says why instead)
+  const means = { off: "Cards: each order the seats want waits for your yes", on: "Auto on paper: the seats place their orders themselves, each inside its trading limit" };
+  const seg = `<div class="sg-seg" role="group" aria-label="Autonomy"><span class="sg-seg-l" aria-hidden="true">Autonomy</span>${[["off", "Cards"], ["on", "Auto on paper"]].map(([v, t]) => `<button type="button" data-sg-act="autonomy" data-v="${v}" data-fk="sg:auto:${v}" aria-pressed="${String((v === "on") === auto)}"${off || (v === "on" && !paper ? ` disabled title="${sgVenueUnread(feed) ? "The desk's venue is not connected: autonomy waits until it is read as a paper account" : "Autonomy is for a paper account only"}"` : ` title="${means[v]}"`)}>${t}</button>`).join("")}</div>`;
+  const end = st !== "ended" && st !== "none" ? btn("end", "End", "sg-btn sg-btn-g", "End the session: no cycle runs, and the open leads are not managed until a new one starts") : "";
   return `${run}${cycle}${seg}${end}`;
+}
+
+/* how often a cycle comes, as the feed's routines say it ("every minute", "every 5 minutes"), or "" where it does not say */
+function sgEvery(feed) {
+  const n = Number(feed && feed.routines && feed.routines.everyMin);
+  return n > 0 ? (n === 1 ? "every minute" : `every ${plural(n, "minute")}`) : "";
+}
+/** the next step, between the header and the floor: while the brain cannot think, connecting one — the one thing the desk is missing (Head,
+ * Search and Risk think with it) — with a button that opens the Brains sheet at its paste row; else, until "Got it" puts it away in this
+ * browser, how to use the desk in three lines. Nothing once neither is wanted */
+function sgNextHtml(feed, view) {
+  const b = sgBrainNow(feed, view);
+  const how = '<button type="button" class="sg-link" data-sg-act="how" data-fk="sg:how-next">How it works</button>';
+  if (b && !b.ok) return `<div class="sg-next-t"><b>Next: connect a brain.</b> <span class="sg-dim">Head, Search and Risk think with an AI model. Paste an API key from any provider: the account tells whose it is and picks its best model. Until then no new lead is found; the open leads' take-profits, stops and time limits still run.</span></div><div class="sg-next-k">${how}<button type="button" class="sg-btn sg-btn-p" data-sg-act="brain" data-fk="sg:next">Connect a brain</button></div>`;
+  if (sgGuideOff()) return "";
+  const every = sgEvery(feed) || "cycle by cycle";
+  return `<div class="sg-next-t"><b>How to use it.</b> <span class="sg-dim">The desk trades this paper account by itself, ${esc(every)}. <b>Brain</b> is the AI model it thinks with: change it there. <b>Autonomy</b>: Cards — each order waits for your yes; Auto on paper — the seats place their orders themselves. Click anyone on the floor to see their seat.</span></div><div class="sg-next-k">${how}<button type="button" class="sg-btn sg-btn-g" data-sg-act="guide-off" data-fk="sg:guide-off">Got it</button></div>`;
+}
+
+/** How it works, in a sheet: what the desk is and does, the brain, a cycle and the checks it passes, the autonomy, the controls, and where
+ * to read it — each said as the desk does it (the duties, the cycle's minutes and the checks are this page's own: SG_DUTIES, the feed) */
+function sgHow() {
+  if (typeof openSheet !== "function") return;
+  const feed = SG.desk;
+  const every = sgCap(sgEvery(feed)) || "Each cycle";
+  const item = (h, body) => `<li><b>${esc(h)}</b><span>${body}</span></li>`;
+  openSheet(`<ol class="sg-how">
+    ${item("It trades a paper account by itself.", "Paper money only: nothing real moves. It says Paper wherever it shows.")}
+    ${item("A brain thinks for three seats.", "Head, Search and Risk ask an AI model. <b>Brain</b>, in the header, switches the model or takes a key — paste one from any provider and the account tells whose it is. Each call costs that provider's tokens, counted beside the model.")}
+    ${item(`${every}, a cycle.`, "Search scans the venue's markets for a lead → Risk sizes it and sets its take-profit, stop and time limit → the Sniper places it → the Exit closes it at one of the three. Hard checks — the spread, the risk a lead may take, the leads open at once, the day's loss line — turn a lead down at the door; past the day's loss line the desk halts until the next New York day.")}
+    ${item("Autonomy: Cards or Auto on paper.", "Cards: each order the seats want waits for your yes — on this page under Waits for you, and under Portfolio. Auto on paper: the seats place their orders at once, each inside its trading limit, without a card.")}
+    ${item("The controls.", "Pause: no new cycle until you resume — the desk still follows its open orders. Cycle now: one cycle at once (it asks the brain). End: the session stops, and the open leads are not managed until a new one starts.")}
+    ${item("Reading it.", "On the floor each seat is a character: click one for its card, the wall screen for the chart, the tray for the cards waiting for you. Under the floor: Seats (each seat's latest words and number), Balance (the desk's equity and its closes), Chart (the market in focus, its book and leads), Room (everything the desk said, in plain words), Rules (the numbers its checks use).")}
+    ${item("Sharks for what it makes.", "Each whole 1% your paper accounts make since they started puts one more shark in the ocean behind the page (twelve at most); each 1% lost takes one away.")}
+  </ol>`, { title: "How the superagent works" });
 }
 
 /** the line under the header: why the floor is halted (amber), what Start just did (for a minute), and — arrived from Regular on another
@@ -2289,12 +2418,23 @@ function sgWire(el) {
     // the setup's paste row (ui/brains.js): its own buttons
     const c = e.target && e.target.closest && e.target.closest("[data-br-connect] [data-br-act]");
     if (c && el.contains(c) && !c.disabled) return void sgConnectAct(c.dataset.brAct, c.closest("[data-br-connect]"));
+    // a tab under the floor
+    const tab = e.target && e.target.closest && e.target.closest("[data-sg-tab]");
+    if (tab && el.contains(tab)) return void sgTab(tab.dataset.sgTab);
     const t = e.target && e.target.closest && e.target.closest("[data-sg-act]");
     if (!t || !el.contains(t) || t.disabled) return;
     sgAct(t.dataset.sgAct, t.dataset);
   });
-  // Enter in the paste row connects
+  // on a tab, the arrows (and Home, End) move to the next one and show it, as a tab bar does; Enter in the paste row connects
   el.addEventListener("keydown", (e) => {
+    const tab = e.target && e.target.closest && e.target.closest("[data-sg-tab]");
+    if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      const all = SG_TABS.map(([v]) => v);
+      const i = all.indexOf(tab.dataset.sgTab);
+      const j = e.key === "Home" ? 0 : e.key === "End" ? all.length - 1 : (i + (e.key === "ArrowRight" ? 1 : all.length - 1)) % all.length;
+      return void sgTab(all[j], { focus: true });
+    }
     if (e.key !== "Enter" || !e.target || !e.target.matches || !e.target.matches("[data-br-paste]")) return;
     e.preventDefault();
     sgConnectAct("connect", e.target.closest("[data-br-connect]"));
@@ -2323,6 +2463,17 @@ async function sgAct(act, d) {
   if (act === "brain" || act === "fix") return void sgOpenBrains(null, (SG.desk && SG.desk.brain && SG.desk.brain.provider) || "");
   if (act === "brains") return void sgOpenBrains(true, (d && d.v) || "");
   if (act === "answer") return void sgToWaits();
+  if (act === "how") return void sgHow();
+  if (act === "guide-off") {
+    // "How to use it" put away, in this browser
+    SG.guideOff = true;
+    try {
+      localStorage.setItem(SG_GUIDE_KEY, "1");
+    } catch {
+      // storage off: put away for this visit
+    }
+    return void sgAgain([]);
+  }
   if (!owns()) return;
   const feed = SG.desk;
   if (act === "move") return void sgMoveSheet(d.v);

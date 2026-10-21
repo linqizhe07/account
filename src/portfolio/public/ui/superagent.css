@@ -5,11 +5,11 @@
    controls 33 high with 3 px corners; ink for what is on, the brightest ink under the pointer; up, down and the area's amber for waiting.
    .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, the book, chg(), the
    toggles) is the area's too.
-   ONLY THE FLOOR keeps a field of its own: a dark screen in either background (its glows add light, which only a dark room shows),
-   declared on its panel (.sg-floor) for ui/floor.js, which reads its colours from there — its room, lines, scanlines and accent (--sg-*),
-   and its words, ups, downs and amber as Black's, set on the panel too so its caption reads on it. The seats' tints (--sg-r-<role>) are
-   a grey ramp, each seat at a lightness of its own — dark greys on Light, light greys on Black and on the floor: each is a mascot's colour
-   and a room chip's, never alone (the seat's name is always beside it).
+   THE FLOOR keeps a room of its own, in the page's background: light on Light, dark on Black, declared on its panel (.sg-floor) for
+   ui/floor.js, which reads its colours from there (and again when the page switches) — its room, lines, scanlines and accent (--sg-*:
+   the Account's green on Light, white on Black); its words, ups, downs and amber are the area's. The seats' tints (--sg-r-<role>) are
+   a grey ramp, each seat at a lightness of its own — dark greys on Light, light greys on Black: each is a mascot's colour and a room
+   chip's, never alone (the seat's name is always beside it).
    The --sg-* names the floor and the older rules know are kept as aliases of the area's: mint is the accent, coral is down, amber is the
    area's caution.
    MOTION in the chrome is HL's: colour, background and edge over 0.2 s ease-in-out; a card or a room line comes in from 5 px above, fading,
@@ -107,7 +107,10 @@
   .sg-btn-p:hover:not(:disabled) { background: var(--hl-accent); }
   .sg-btn-g:hover:not(:disabled) { background: transparent; border-color: var(--hl-muted); color: var(--hl-text); }
   .sg-link:hover, .sg a:hover { color: var(--hl-accent); }
-  .sg-brain:hover .sg-stat-l { color: var(--hl-accent); }
+  .sg-brain:hover { border-color: var(--hl-muted); background: var(--hl-inset); }
+  .sg-brain:hover .sg-brain-go { color: var(--hl-accent); }
+  .sg-brain.sg-no:hover { border-color: var(--hl-warn); }
+  .sg-brain.sg-no:hover .sg-brain-go { color: var(--hl-warn); }
   .sg-seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--hl-title); }
   .sg-msg:hover { background: var(--hl-inset); }
 }
@@ -136,10 +139,17 @@
 .sg-stat-v { color: var(--hl-text); }
 .sg-stat .sg-link { min-height: 0; }
 .sg-stale .sg-stat-v { color: var(--hl-dim); }
-/* the Brain stat is a button (it opens the Brains sheet, ui/brains.js): drawn as the other stats, its label in the soft accent with its
-   "›", a little lighter on hover; its focus ring the area's */
-.sg-brain { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--hl-r-check); }
-.sg-brain .sg-stat-l { color: var(--hl-accent-soft); transition: color var(--hl-ease); }
+/* the Brain stat is a button (it opens the Brains sheet, ui/brains.js), and drawn as one: an edged box around its label and value, its way
+   in written on it in the accent ("Change ›") — in amber, edge and words, while the brain cannot think ("Connect a key ›"). It sits in the
+   stats' row with their label and value lines where theirs are (its padding taken back by its margin); on a narrow pane it takes the row */
+.sg-brain { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "l go" "v v"; gap: 4px 16px; margin: -6px 0; padding: 5px 10px; border: 1px solid var(--hl-inset); border-radius: var(--hl-r); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color var(--hl-ease), background-color var(--hl-ease); }
+.sg-brain .sg-stat-l { grid-area: l; }
+.sg-brain .sg-stat-v { grid-area: v; }
+.sg-brain-go { grid-area: go; justify-self: end; color: var(--hl-accent-soft); white-space: nowrap; transition: color var(--hl-ease); }
+.sg-brain.sg-no { border-color: var(--hl-warn); }
+.sg-brain.sg-no .sg-brain-go { color: var(--hl-warn); }
+/* How it works, at the end of the desk's name line */
+.sg-how-l { min-height: 0; }
 .sg-tools { grid-area: t; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .sg-head-n { grid-area: n; display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; overflow-wrap: anywhere; }
 .sg-head-n:empty { display: none; }
@@ -150,7 +160,19 @@
   .sg-head { grid-template-columns: minmax(0, 1fr); grid-template-areas: "a" "s" "t" "n"; }
   .sg-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px 24px; }
   .sg-stat { white-space: normal; }
+  .sg-brain { grid-column: 1 / -1; margin: 0; }
   .sg-tools { justify-content: flex-start; flex-wrap: wrap; }
+}
+
+/* ---- the next step: a panel edged in the accent between the header and the floor — what it is in a line (its few words in the ink, the rest
+   dim), and its buttons at the end; under 760 the buttons go under the words ------------------------------------------------------------ */
+.sg-next { display: flex; align-items: center; justify-content: space-between; gap: 8px 24px; box-shadow: inset 2px 0 0 var(--hl-accent-soft), inset 0 0 0 1px var(--card-border); }
+.sg-next[hidden] { display: none; }
+.sg-next-t { margin: 0; min-width: 0; line-height: 18px; overflow-wrap: anywhere; }
+.sg-next-t b { font-weight: 400; color: var(--hl-title); }
+.sg-next-k { display: flex; align-items: center; gap: 16px; flex: none; }
+@container (max-width: 759px) {
+  .sg-next { flex-direction: column; align-items: flex-start; }
 }
 @container (max-width: 559px) {
   .sg-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -172,39 +194,41 @@
   .sg-wr-k { grid-column: 1 / -1; }
 }
 
-/* ---- the floor: a dark screen in either background — its own room, the canvas filling the panel, the frame rate in its corner, a
-   caption under it. Its names are set here, whatever the page wears: the room's two near-blacks, its lines and scanlines, white for what
-   is on with black on it, its words, ups, downs and amber as Black's, and the seats in the light greys --------------------------------- */
+/* ---- the floor: a room in the page's own background — light on Light, dark on Black (ui/floor.js reads these again when the page
+   switches) — the canvas filling the panel, the frame rate in its corner, a caption under it. Its own names are set here: the room and
+   its desks, its lines and scanlines, and what is on (the Account's green on Light, white on Black) with the words on it; its words, ups,
+   downs, amber and the seats' tints are the area's, as every panel's ------------------------------------------------------------------ */
 .sg-floor {
+  --sg-deep: #f1f1ee;
+  --sg-deep-2: #ffffff;
+  --sg-line: rgba(17, 17, 17, 0.13);
+  --sg-scan: rgba(17, 17, 17, 0.035);
+  --sg-mint: #00843d;
+  --sg-ink: #ffffff;
+  padding: 0;
+  overflow: hidden;
+  background: var(--sg-deep);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* on Black (chosen, or the system's dark where no script chose): the dark room — its two near-blacks, white lines, white for what is on */
+:root[data-theme="black"] .sg-floor {
   --sg-deep: #08090a;
   --sg-deep-2: #121315;
   --sg-line: rgba(255, 255, 255, 0.14);
   --sg-scan: rgba(0, 0, 0, 0.16);
   --sg-mint: #ffffff;
   --sg-ink: #0a0a0a;
-  --text: #f2f2f0;
-  --dim: #9d9d98;
-  --up: #3bb360;
-  --down: #ff7360;
-  --warn: #f5c46b;
-  --border: rgba(255, 255, 255, 0.1);
-  --primary: #ffffff;
-  --on-primary: #0a0a0a;
-  --hl-text: #f2f2f0;
-  --hl-dim: #9d9d98;
-  --sg-r-head: #ffffff;
-  --sg-r-search: #e4e4e0;
-  --sg-r-risk: #c9c9c4;
-  --sg-r-sniper: #b4b4ae;
-  --sg-r-exit: #9f9f99;
-  --sg-r-watch: #d6d6d1;
-  --sg-r-flow: #bdbdb7;
-  --sg-r-sentiment: #a8a8a2;
-  padding: 0;
-  overflow: hidden;
-  background: var(--sg-deep);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sg-floor {
+    --sg-deep: #08090a;
+    --sg-deep-2: #121315;
+    --sg-line: rgba(255, 255, 255, 0.14);
+    --sg-scan: rgba(0, 0, 0, 0.16);
+    --sg-mint: #ffffff;
+    --sg-ink: #0a0a0a;
+  }
 }
 .sg-canvas { display: block; width: 100%; aspect-ratio: 16 / 7; max-height: min(560px, 60vh); border-radius: var(--hl-r-panel) var(--hl-r-panel) 0 0; background: var(--sg-deep); }
 /* tall enough on a tablet that the floor's own scale stays at 0.6 or more (its words never under its smallest size) */
@@ -217,7 +241,15 @@
 .sg-cap { margin: 0; padding: 6px 170px 8px 12px; color: var(--hl-dim); overflow-wrap: anywhere; }
 @container (max-width: 559px) { .sg-cap { padding-right: 12px; padding-bottom: 26px; } }
 
-/* ---- the eight seats: a strip of panels, eight across on a wide pane, four, two, and on a phone a row that scrolls a card at a time -- */
+/* ---- under the floor: one panel of tabs — Seats, Balance, Chart, Room, Rules — its tab bar Regular's (terminal.css .tt-tabs: dim words, the
+   one showing in the ink with its line under it, sliding to the next one pressed) along the panel's top edge, one tab's panel under it ---- */
+.sg-low { padding-top: 0; }
+.sg-low > [role="tabpanel"] { min-width: 0; padding-top: 10px; }
+.sg-low > [role="tabpanel"][hidden] { display: none; }
+.sg-tabs button:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -2px; }
+
+/* ---- the eight seats: boxes edged in the tab line, eight across on a wide pane, four, two, and on a phone a row that scrolls a card at a
+   time -- */
 .sg-cards { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--hl-gap); }
 @container (max-width: 1399px) { .sg-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (max-width: 759px) { .sg-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -229,10 +261,10 @@
 /* a card is not a size container of its own: in Chromium a card that was one lost its contents' height (every card 20 px high, empty) once
    the pane went from a phone's width to a wide one and the strip turned from a scrolling row back into a grid. Its few width rules read the
    pane's width (.sg) instead */
-.sg-card { --sg-role: var(--hl-accent); position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: var(--hl-r-panel); background: var(--hl-glass); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); outline: none; animation: sg-in 0.3s ease both; transition: box-shadow var(--hl-ease); }
+.sg-card { --sg-role: var(--hl-accent); position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: var(--hl-r-panel); background: transparent; box-shadow: inset 0 0 0 1px var(--hl-tabline); outline: none; animation: sg-in 0.3s ease both; transition: box-shadow var(--hl-ease); }
 .sg-card:focus-visible { box-shadow: inset 0 0 0 2px var(--hl-accent-soft); }
 /* the seat whose brain call is under way: HL's active-tab line, at the card's foot */
-.sg-card[data-s="thinking"] { box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.sg-card[data-s="thinking"] { box-shadow: inset 0 0 0 1px var(--hl-tabline), inset 0 -2px 0 var(--hl-accent-soft); }
 .sg-card.sg-picked { box-shadow: inset 0 0 0 1px var(--hl-accent-soft); }
 .sg-card-h { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 /* the name whole, wrapping where it must (never cut), the standing under it — a light and always its word */
@@ -302,14 +334,9 @@
 /* a card or a room line coming in: HL's popover entrance, 5 px from above, fading, no overshoot */
 @keyframes sg-in { from { opacity: 0; transform: translateY(-5px); } }
 
-/* ---- under the floor: the balance across; then the analysis and the rules, the room beside them on a wide pane ----------------------- */
-.sg-low { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); grid-template-areas: "bal bal" "ana room" "rules room"; gap: var(--hl-gap); align-items: stretch; }
-@container (max-width: 1499px) { .sg-low { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "bal bal" "ana ana" "rules room"; } }
-@container (max-width: 759px) { .sg-low { grid-template-columns: minmax(0, 1fr); grid-template-areas: "bal" "ana" "rules" "room"; } }
-.sg-bal { grid-area: bal; }
-.sg-ana { grid-area: ana; display: flex; flex-direction: column; gap: 8px; }
-.sg-rules { grid-area: rules; }
-.sg-room { grid-area: room; display: flex; flex-direction: column; min-height: 0; }
+/* ---- the tabs' panels: the balance, the chart (the analysis), the room ---------------------------------------------------------------- */
+.sg-ana { display: flex; flex-direction: column; gap: 8px; }
+.sg-room { display: flex; flex-direction: column; min-height: 0; }
 
 /* the balance: the figure, its change, the target; the curve beside them */
 .sg-livew { display: inline-flex; align-items: center; gap: 6px; color: var(--hl-accent-soft); }
@@ -383,7 +410,7 @@
    the top fades there (24 px, driven by the stream's own scroll: none while it is at its top, or where it does not scroll), so what is cut
    reads as more above, not as a line the header covers */
 .sg-room > .sg-sec-h { margin-bottom: 0; padding-bottom: 8px; border-bottom: 1px solid var(--hl-tabline); }
-.sg-msgs { display: flex; flex-direction: column; gap: 2px; flex: 1 1 0; min-height: 240px; max-height: none; overflow-y: auto; overscroll-behavior: contain; padding: 6px 2px 0 0; scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
+.sg-msgs { display: flex; flex-direction: column; gap: 2px; flex: none; height: clamp(240px, 46vh, 520px); overflow-y: auto; overscroll-behavior: contain; padding: 6px 2px 0 0; scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
 @property --sg-room-fade { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @keyframes sg-room-fade { from { --sg-room-fade: 0px; } 3% { --sg-room-fade: 24px; } to { --sg-room-fade: 24px; } }
 @supports (animation-timeline: scroll()) {
@@ -489,11 +516,20 @@
 .sg-path { display: block; min-width: 0; padding: 8px 10px; border-radius: var(--hl-r); background: var(--hl-inset); color: var(--hl-text); font: 400 12px/1.4 var(--font-mono); white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; user-select: all; }
 @container (max-width: 559px) { .sg-fix-r { grid-template-columns: minmax(0, 1fr); grid-template-areas: "l" "c" "b"; } .sg-fix-r .sg-btn { justify-self: start; } }
 
+/* ---- How it works (a sheet, ui/core.js openSheet, on the area's tokens there): numbered points, each its few words in the ink over its
+   lines in the dim ------------------------------------------------------------------------------------------------------------------ */
+.sg-how { margin: 0; padding: 0 0 0 20px; display: flex; flex-direction: column; gap: 14px; max-width: 64ch; }
+.sg-how li { padding-left: 4px; color: var(--hl-modal-body, var(--dim)); line-height: 1.5; }
+.sg-how li::marker { color: var(--hl-dim, var(--dim)); }
+.sg-how li > b { display: block; color: var(--hl-title, var(--text)); font-weight: 600; }
+.sg-how li > span b { color: var(--hl-title, var(--text)); font-weight: 600; }
+
 /* ---- a coarse pointer: every control 44 high ------------------------------------------------------------------------------------------ */
 @media (pointer: coarse) {
   .sg-btn, .sg-seg, .sg-setup :is(input, select), .sg-move-f :is(input, select) { min-height: 44px; }
   .sg-seg button { min-height: 40px; }
   .sg-link, .sg-brain { min-height: 44px; }
+  .sg-tabs button { line-height: 44px; }
 }
 
 /* ---- under reduced motion: nothing moves (last, so it outweighs every rule above) ------------------------------------------------------ */

@@ -63,6 +63,45 @@ function renderChrome(L, owner) {
   $("lens").setAttribute("aria-label", `Showing ${lensNow().name}: choose what the page shows`);
   drawBanner(owner);
   drawRestoreNotice();
+  shSharks();
+}
+
+/* THE PAPER ACCOUNTS' SHARKS: the ocean under the page (ui/ocean.js OCEAN.bonus) swims one more shark for each whole 1% the paper accounts
+   made since they started, and one fewer for each whole 1% lost — what they hold now against the paper money they started with and the
+   paper money added since (topUpPaper: put in, never made). Only the paper accounts the account keeps itself say what they started with
+   (paperStartUsd): one that does not is left out, and with none the ocean keeps the window's own sharks. A shark joining or leaving for it
+   is said once, as a word in passing; the page's first reading says nothing */
+const SH_SHARK_PCT = 1;
+function shPaperGain() {
+  if (!A || !Array.isArray(A.venues)) return null;
+  const L = connected().filter((v) => v.paper && num(v.paperStartUsd) > 0);
+  const put = L.reduce((s, v) => s + num(v.paperStartUsd) + num(v.paperAddedUsd), 0);
+  if (!(put > 0)) return null;
+  const made = L.reduce((s, v) => s + num(v.usd), 0) - put;
+  return { usd: made, pct: (made / put) * 100, accounts: L.length };
+}
+/* the sharks the paper accounts earned: whole steps toward zero (+1.9% one, −0.4% none, −1.2% one fewer) */
+const shSharkBonus = (g) => (g ? Math.trunc(g.pct / SH_SHARK_PCT) || 0 : 0);
+function shSharks(ocean = typeof OCEAN !== "undefined" ? OCEAN : null) {
+  if (!ocean || typeof ocean.bonus !== "function") return;
+  const g = shPaperGain();
+  const n = shSharkBonus(g);
+  const was = SH.sharks;
+  const before = SH.sharkCount;
+  SH.sharks = n;
+  SH.sharkCount = ocean.bonus(n);
+  // said when the water really changed for it (not at the most or the fewest already, and not on the page's first reading)
+  const d = SH.sharkCount - before;
+  if (was === null || was === n || !g || !d || Math.sign(d) !== Math.sign(n - was)) return;
+  const pct = `${g.pct < 0 ? "−" : "+"}${Math.abs(g.pct).toFixed(Math.abs(g.pct) < 1 ? 2 : 1)}%`;
+  toast(`${Math.abs(d) === 1 ? "A shark" : `${Math.abs(d)} sharks`} ${d > 0 ? "joined" : "left"} the water: your paper accounts stand at ${pct} since they started — a shark for each whole 1%.`, "info");
+}
+/* the sharks in a sentence, for the paper book (ui/portfolio.js): how many swim, and why — or "" where no paper account says its start */
+function shSharkWords() {
+  const g = shPaperGain();
+  if (!g || !(SH.sharkCount > 0)) return "";
+  const n = shSharkBonus(g);
+  return `${plural(SH.sharkCount, "shark")} in the water — one more for each 1% your paper accounts make since they started (twelve at most), one fewer for each 1% lost${n ? `; they are ${n > 0 ? "up" : "down"} ${Math.abs(g.pct).toFixed(1)}%: ${n > 0 ? "+" : "−"}${Math.abs(n)}` : ""}.`;
 }
 /* the top bar's New York time: the account's own clock as last read, moved on by the time since that read — while the stream is connected
    the read comes minutes apart, and the stamp is never that far behind */
@@ -508,7 +547,8 @@ document.addEventListener("visibilitychange", () => {
    over a read that comes back behind them (the account's door hears of a paper fill at its next poll), so a row never steps back */
 const SH_PUSH_MS = 60;
 const SH_AHEAD_MS = 30_000;
-const SH = { timer: 0, frame: false, loading: false, again: false, late: false, ahead: new Map() };
+// …and the paper accounts' sharks asked of the ocean last (null before the first), with the count it gave for them (shSharks)
+const SH = { timer: 0, frame: false, loading: false, again: false, late: false, ahead: new Map(), sharks: null, sharkCount: 0 };
 const SH_DONE = ["filled", "canceled", "rejected", "expired"];
 
 /* an order's new state: its row in A.orders takes it (the account's own record of it, by its id — or by the client id the account gave it,
