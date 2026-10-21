@@ -273,6 +273,10 @@ export interface PublicSource {
    * (`live:exchange:okx`) */
   connectTo: string;
   connector: string;
+  /** the other connections that trade the same markets, in the order they are offered after `connector` — US stocks at Robinhood beside
+   * Alpaca. Markets offers the first of them that serves the network where `connector`'s venue does not (service.ts explore), so one
+   * broker refusing the network never hides a line another serves */
+  alsoVia?: ReadonlyArray<{ connectTo: string; connector: string }> | undefined;
   /** why nothing is traded through this listing itself, when nothing is (Stock Tokens: they trade from a connected wallet's own rows) */
   readOnly?: string | undefined;
   listings(o: ListingsQuery): Promise<Listing[] | Refusal>;

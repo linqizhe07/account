@@ -242,11 +242,12 @@ let S = [];
 const view = { month: "", account: "", type: "", agent: "", lens: "" };
 /* when the account was last read, for the shell's refresh */
 let loadedAt = 0;
-/* what was done, as a toast or a sheet says it: a connection's summary short (its name and balance; the rest behind "details"), and an
-   order's id (orderSaid) out of the words, one pointer away */
+/* what was done, as a toast or a sheet says it: a connection's summary short — its name and balance, a paper account's said as paper money
+   (service.ts connect: "… connected live · …" or "… connected · PAPER, no real money · …"); how it fills and the rest behind "details" — and
+   an order's id (orderSaid) out of the words, one pointer away */
 const sayHtml = (s) => {
-  const m = /^(.+?) connected live · (\$[\d,.]+) there now · (.+)$/.exec(s || "");
-  if (m) return `<b>${esc(m[1])}</b> connected · ${esc(m[2])}<details class="inl"><summary>details</summary>${esc(m[3])}</details>`;
+  const m = /^(.+?) connected (?:live|· (PAPER), no real money) · (\$[\d,.]+) there now · (.+)$/.exec(s || "");
+  if (m) return `<b>${esc(m[1])}</b> connected · ${esc(m[3])}${m[2] ? " of paper money" : ""}<details class="inl"><summary>details</summary>${esc(m[4])}</details>`;
   // the account's ids for the orders it speaks of (orderSaid: "… · ord-0011"), taken out of the words and kept one pointer away
   const ids = [];
   const words = String(s || "").replace(/ · (ord-\d+)(?= · |$)/g, (all, id) => (ids.push(id), ""));

@@ -1644,6 +1644,19 @@ describe("the third round: the frame held while the owner signs, the header's wo
     expect(p.run<string>('sayHtml("a <b> · ord-12x")')).toBe("a &lt;b&gt; · ord-12x");
   });
 
+  it("says a connection in a line — its name and balance, a paper account's as paper money — with how it fills and the rest behind details", () => {
+    const p = page();
+    // a real venue (service.ts connect: "… connected live · …")
+    expect(p.run<string>('sayHtml("Kraken · main connected live · $2,200.50 there now · connected · read only")')).toBe('<b>Kraken · main</b> connected · $2,200.50<details class="inl"><summary>details</summary>connected · read only</details>');
+    // a paper account: never its whole paragraph in the toast
+    const paper = "Clean room · paper connected · PAPER, no real money · $10,000.00 there now · Clean room · paper: a paper account: fills at the public quote by the account's own rule — a market order at the ask or the bid · a paper account: its orders are rehearsals and its balance is not money, so nothing of it is counted in your net worth or moved from here";
+    const said = p.run<string>(`sayHtml(${JSON.stringify(paper)})`);
+    expect(said.split("<details")[0]).toBe("<b>Clean room · paper</b> connected · $10,000.00 of paper money");
+    expect(said).toContain('<details class="inl"><summary>details</summary>Clean room · paper: a paper account: fills at the public quote');
+    // anything else is said as it is
+    expect(p.run<string>('sayHtml("Moved $5.00")')).toBe("Moved $5.00");
+  });
+
   it("says a take-profit or a stop as the desk writes it for a price in the thousands — grouped (desk.ts fig) — never as its raw words", () => {
     const p = page();
     expect(p.run<string>('sgExitWords("TP HIT at 61,800 (+1.00%)")')).toMatch(/^at the take-profit \(61,800(\.0+)?, \+1\.00%\)$/);

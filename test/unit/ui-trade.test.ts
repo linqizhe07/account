@@ -2865,6 +2865,14 @@ describe("the trading area names exactly the markets it shows, and draws what th
     expect(q.out("ttChangeAt(110, 105, 5, 5)")).toEqual({ abs: 10, pct: 10 });
     expect(q.out("ttChangeAt(110, 105, undefined, 5)")).toEqual({ abs: 10, pct: 10 });
     expect(q.out("ttChangeAt(110, 105)")).toBeNull();
+    // the change at the market's own places: by its price step where it says one, else by the places of the prices beside it — never the
+    // tail of a difference or of the venue's own change figure
+    expect(q.out('[ttChangeFig(2027.934895, 0.01, [84453.28]), ttChangeFig(10, 0.01), ttChangeFig(2027.934895, undefined, [84453.28, 84453.3]), ttChangeFig(0.002031455, undefined, [0.08321, 0.0832]), ttChangeFig(1.5, undefined, [221]), ttChangeFig(0.004567, undefined, [250]), ttChangeFig(0.00204, undefined, [0.08295]), ttChangeFig(0.002016, undefined, [0.082928]), ttChangeFig(1.5), ttChangeFig(NaN)]')).toEqual(["2,027.93", "10.00", "2,027.93", "0.002031", "1.5", "0.004567", "0.00204", "0.002016", "1.5", "—"]);
+    q.run(`TT.mk = ${JSON.stringify(market({ price: 84453.28, bid: 84453.2, ask: 84453.36, change24h: 2027.934895, changePct24h: 2.4612, priceStep: 0.01 }))}; ttStats(EL)`);
+    expect(q.out<string>("BOX.innerHTML")).toContain("+2,027.93 / +2.46%");
+    q.run(`TT.mk = ${JSON.stringify(market({ price: 84453.28, bid: 84453.2, ask: 84453.36, change24h: -2027.934895, changePct24h: -2.3466 }))}; ttStats(EL)`);
+    expect(q.out<string>("BOX.innerHTML")).toContain("−2,027.93 / −2.35%");
+    q.run(`TT.mk = ${JSON.stringify(market())}; ttStats(EL)`);
     // the feed's box in the bar, at its right end; under 560 pixels its word goes to the hover and its dot and age stay
     expect(q.run<string>("ttFrame()")).toMatch(/data-tt-stats><\/div>\s*<span class="tt-feed" data-tt-feed role="status" aria-live="off"><\/span>\s*<\/div>/);
     const css = source("ui/terminal.css");

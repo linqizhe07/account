@@ -599,7 +599,9 @@ function ttStats(el) {
   const quoteFrom = live ? live.from : m ? m.quoteFrom : undefined;
   const fmt = (n) => (ev ? tkCents(n) : px(n));
   const dir = pct === undefined ? "" : pct > 0 ? "up" : pct < 0 ? "down" : "";
-  const change = pct !== undefined ? `${abs !== undefined ? `${abs > 0 ? "+" : abs < 0 ? "−" : ""}${esc(ev ? tkCents(Math.abs(abs)) : px(Math.abs(abs)))} / ` : ""}${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%` : "";
+  // the change at the market's own places (ttChangeFig): never the tail of a difference or of the venue's own change figure
+  const step = m && Number(m.priceStep) > 0 ? Number(m.priceStep) : undefined;
+  const change = pct !== undefined ? `${abs !== undefined ? `${abs > 0 ? "+" : abs < 0 ? "−" : ""}${esc(ev ? tkCents(Math.abs(abs)) : ttChangeFig(Math.abs(abs), step, [price, read, bid, ask]))} / ` : ""}${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%` : "";
   // how old the price is, beside it, once it is not the last few seconds' (a paper quote is the public source's as its venue last
   // answered: core ageWords) — and on hover where it is from and when
   const age = quoteAt ? ageWords(quoteAt) : "";
@@ -1022,6 +1024,24 @@ function ttFig(n, { step, like = [] } = {}) {
     dec = Math.min(own, seen.length ? Math.max(sig, ...seen) : sig);
   }
   return { text: v.toLocaleString("en-US", { minimumFractionDigits: pad ? dec : 0, maximumFractionDigits: dec }), exact: dec < own ? px(v) : "" };
+}
+/** A CHANGE AS ITS MARKET WRITES ITS PRICES — the bar's 24h or day change: to the decimals of the market's price step where it says one,
+ * else to the most the prices shown beside it are written in (`like`: the price, the read, the bid and ask) — but never fewer than keep
+ * four significant figures of the change (so a small coin's change does not lose a digit each time its price ends in a zero), never more
+ * than eight and never more than the figure has. The tail a difference or a venue's own change figure carries is not printed:
+ * 2,027.934895 on a 0.01 step reads 2,027.93; beside a price of 0.08321 a change of 0.002031455 reads 0.002031; beside a round 250 a
+ * change of 2.5 stays 2.5 */
+function ttChangeFig(n, step, like = []) {
+  const v = Number(n);
+  if (n === undefined || n === null || n === "" || !Number.isFinite(v)) return "—";
+  if (Number(step) > 0) {
+    const dec = Math.min(8, ttDecimals(step) ?? 0);
+    return v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  }
+  const own = ttDecimals(v) ?? 0;
+  const seen = like.map(ttDecimals).filter((d) => d !== undefined);
+  const four = Math.max(0, 4 - (Math.floor(Math.log10(Math.abs(v) || 1)) + 1));
+  return v.toLocaleString("en-US", { maximumFractionDigits: Math.min(8, own, Math.max(four, ...seen)) });
 }
 /* Positions: everything held at the venues in the lens that the venues list as positions — a perpetual, a share, a coin a paper account
    holds, an event contract — with its entry, its mark, what it is worth and its result, in HL's columns (Market · Size · Position value ·
