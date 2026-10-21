@@ -454,6 +454,8 @@ export function usStocksPublic(deps: PublicDeps = {}): PublicSource {
     kind: "stocks",
     connectTo: "alpaca",
     connector: "live:alpaca",
+    // a US stock trades at Robinhood too: where Alpaca does not serve the network, the line is offered there (its prices are neither's)
+    alsoVia: [{ connectTo: "robinhood", connector: "live:robinhood" }],
     readOnly: US_STOCKS_READ_ONLY,
     sessions: usClock,
     feed,

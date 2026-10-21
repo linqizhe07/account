@@ -931,7 +931,14 @@ export class PortfolioService {
       // close-only too, for a venue not connected: nothing held there to sell, and nothing it would take from here
       const refusing = new Set((this.venuesKept?.v ?? []).filter((x) => x.verdict === "not-served" || x.verdict === "closed" || x.verdict === "close-only").map((x) => x.connector));
       const serves = (r: { id: string; connected: boolean; connector?: string | undefined }): boolean => (r.connected ? !away.has(r.id) : !(r.connector !== undefined && refusing.has(r.connector)));
-      return exploreAcross({ connected: placed, public: this.publicMarkets() }, { q, ...(key ? { key } : {}), limit, clock: () => this.realNow(), serves, ...(tab ? { tab: tab as TabId } : {}), ...(sort ? { sort: sort as ExploreSort } : {}) });
+      // a source more than one connection trades (US stocks: Alpaca, Robinhood) is offered through the first of them that serves this
+      // network: Alpaca refusing it leaves Robinhood's way in, and the line stays listed — left out only where none of them serves
+      const routed = this.publicMarkets().map((s) => {
+        if (!s.alsoVia || !refusing.has(s.connector)) return s;
+        const via = s.alsoVia.find((v) => !refusing.has(v.connector));
+        return via ? { ...s, connectTo: via.connectTo, connector: via.connector } : s;
+      });
+      return exploreAcross({ connected: placed, public: routed }, { q, ...(key ? { key } : {}), limit, clock: () => this.realNow(), serves, ...(tab ? { tab: tab as TabId } : {}), ...(sort ? { sort: sort as ExploreSort } : {}) });
     });
   }
 

@@ -94,11 +94,11 @@ register({
 } as never);
 
 /** a real account on stand-ins, on a clock the test moves */
-async function account(o: { publicMarkets?: PublicSource[]; openExchange?: OpenExchange } = {}) {
+async function account(o: { publicMarkets?: PublicSource[]; openExchange?: OpenExchange; http?: Http } = {}) {
   const home = mkdtempSync(join(tmpdir(), "geo-after-connect-"));
   homes.push(home);
   let now = Date.parse("2026-10-10T15:00:00.000Z");
-  const svc = await PortfolioService.create({ home, venues: "frontline", real: true, publicMarkets: o.publicMarkets ?? [], liveDeps: { clock: () => now, http: async () => ({ status: 404, body: undefined, text: "" }), price: async () => undefined, mm: (async () => ({ authenticated: true })) as unknown as RunMm, ...(o.openExchange ? { openExchange: o.openExchange } : {}) }, liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } } as never);
+  const svc = await PortfolioService.create({ home, venues: "frontline", real: true, publicMarkets: o.publicMarkets ?? [], liveDeps: { clock: () => now, http: o.http ?? (async () => ({ status: 404, body: undefined, text: "" })), price: async () => undefined, mm: (async () => ({ authenticated: true })) as unknown as RunMm, ...(o.openExchange ? { openExchange: o.openExchange } : {}) }, liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date().toISOString() }] } } as never);
   await svc.restoring;
   const own = async (a: NoNonce<OwnerAction>) => svc.exchange(await signOwner(owner, { ...a, nonce: Date.now() + ++seq } as OwnerAction));
   const connect = async (venue: string, label: string) => {
@@ -169,6 +169,40 @@ describe("a connected venue that starts refusing the network", () => {
     expect(asked).toBe(0);
     expect(r.items).toEqual([]);
     expect(r.notes).toContain("Binance does not serve this network: its markets are not listed here.");
+  });
+
+  it("a line more than one connection trades — US stocks, at Alpaca or at Robinhood — stays listed while one of them serves the network, offered there; it goes only when none does", async () => {
+    const AAPL = { ...BTC, symbol: "AAPL", name: "Apple Inc", kind: "stock", base: "AAPL", quote: "USD", price: 220, bid: 219.9, ask: 220.1, priceStep: 0.01, types: [] };
+    // the US stocks line: its prices are neither broker's (live/public-stocks.ts), and either trades it
+    const stocks: PublicSource = { id: "us-stocks", name: "US stocks", kind: "stocks", connectTo: "alpaca", connector: "live:alpaca", alsoVia: [{ connectTo: "robinhood", connector: "live:robinhood" }], readOnly: "Real-time quotes: a US stock trades at a connected broker (Alpaca, Robinhood), or in a paper account", listings: async () => [AAPL as never] };
+    // what each broker's first, keyless question meets on this network: Alpaca's clock, and Robinhood's two sign-in documents
+    const here = { alpaca: 451, robinhood: 200 };
+    const refused = { status: 451, body: undefined, text: "Unavailable For Legal Reasons" };
+    const http: Http = async (url) => {
+      if (url.startsWith("https://api.alpaca.markets/")) return here.alpaca === 451 ? refused : { status: 401, body: { message: "unauthorized" }, text: "" };
+      if (url.includes("oauth-protected-resource")) return here.robinhood === 451 ? refused : { status: 200, body: { authorization_servers: ["https://auth.robinhood.test"] }, text: "" };
+      if (url.includes("oauth-authorization-server")) return { status: 200, body: { issuer: "https://auth.robinhood.test", authorization_endpoint: "https://auth.robinhood.test/authorize", token_endpoint: "https://auth.robinhood.test/token", registration_endpoint: "https://auth.robinhood.test/register", code_challenge_methods_supported: ["S256"] }, text: "" };
+      return { status: 404, body: undefined, text: "" };
+    };
+    const x = await account({ publicMarkets: [stocks], http });
+    let n = 30;
+    const line = async () => {
+      await x.svc.venuesHere(true);
+      // a new limit each time: Markets keeps an answer to the same question for half a minute
+      const r = await x.svc.explore({ limit: n-- });
+      if (isRefusal(r)) throw new Error(r.message);
+      return { at: r.items.flatMap((i) => i.at).find((a) => a.symbol === "AAPL"), notes: r.notes };
+    };
+    // Alpaca refuses the network and Robinhood serves it: the line stays, and "Connect to trade" is Robinhood's
+    expect((await line()).at).toMatchObject({ public: true, price: 220, connectTo: "robinhood", connector: "live:robinhood" });
+    // neither serves it: the line is left out, and named once
+    here.robinhood = 451;
+    const none = await line();
+    expect(none.at).toBeUndefined();
+    expect(none.notes).toContain("US stocks does not serve this network: its markets are not listed here.");
+    // Alpaca answers this network again: the line is offered there, first
+    here.alpaca = 401;
+    expect((await line()).at).toMatchObject({ connectTo: "alpaca", connector: "live:alpaca" });
   });
 });
 

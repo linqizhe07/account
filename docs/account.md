@@ -44,7 +44,7 @@ npx tsx test/standin/ui-standin.ts --port 4821   # 替身账户：同一个页�
 
 **接上以后，场所开始拒绝这个网络**（笔记本换了网络，或场所改了规矩；`service.ts` 的 `notServedBy`、`present`，`adapters/live.ts` 的 `wake`，`account/live-moves.ts` 的 `heldNow`/`asked`；`test/unit/geo-after-connect.test.ts`）。这是一种状态，按状态列，不按报错印：
 - **余额**：留着上一次好的数字，`/api/account` 的这个场所带 `notServed`（场所的话，和它给你那里的版本，如果有）；Venues 里是一枚中性的 "Not served here"（不是 ✗ Not answering），旁边有版本就是 "Connect Binance.US"；抽屉里一行说它在哪、数字是几点的，不再两行"读失败"。余额读跟着账户唯一的那个 hold 走：按 "Check again"（或半小时的自动检查）发现它答了，余额当场重读（`wake`），不再等满十分钟。
-- **列表只列服务这个网络的**：Markets、下单票和比价里，不服务这个网络（或没有入口）的场所——接上的和只读公开行情的——不问、不列，Markets 底下折叠的 "Why these" 里一句话点名（"Binance and Bybit do not serve this network: their markets are not listed here."），不带它们的原话；Where 行里也不再写 "Not served here — 原话"。只能平仓（close-only）的还列，一个词，原话在悬停里。
+- **列表只列服务这个网络的**：Markets、下单票和比价里，不服务这个网络（或没有入口）的场所——接上的和只读公开行情的——不问、不列，Markets 底下折叠的 "Why these" 里一句话点名（"Binance and Bybit do not serve this network: their markets are not listed here."），不带它们的原话；Where 行里也不再写 "Not served here — 原话"。只能平仓（close-only）的还列，一个词，原话在悬停里。一行行情不止一个连接能交易时（美股：Alpaca 和 Robinhood，`PublicSource.alsoVia`），第一家不服务这个网络就换下一家：那一行照列，"Connect to trade" 给的是服务这里的那家；一家都不服务才不列（2026-10-21 之前只看 Alpaca，Alpaca 不服务时整行美股不见，虽然价格来自 Robinhood、Nasdaq、Cboe）。
 - **钱**：Move 和 Receive 只列服务这个网络的账户，其余的在表单下一行点名；挪钱这扇门在场所被 hold 时什么都不问它（不再去要充值地址、手续费），场所新答的地区拒绝记进同一个 hold（下单、读数、earn 都等它）；等待中的连接被说成"已接上、还没答这个网络"，不是"没有这个场所"。
 - **agent**：`portfolio_account` 的场所带 `asOf`、`stale` 或 `notServed`，`trading` / `realMoney` 直接说"它现在不服务这个网络"（有版本就点名该请主人接哪一家），agent 不用试了才知道。
 - **地址找不到地方的网络**（三个来源都答了 XX 或 T1）：话和"这会儿查不到地方"一样（不说这是哪种地址），只是不说"马上再试"，说"过几分钟再问"；地方的来源十分钟内不再问，等待中的 Hyperliquid 交易连接也十分钟一次。
