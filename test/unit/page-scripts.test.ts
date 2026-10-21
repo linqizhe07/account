@@ -261,11 +261,11 @@ describe("the account page's scripts", () => {
     const shell = source("ui/shell.css").replace(/\/\*[\s\S]*?\*\//g, "");
     // the colours on html itself (so the rail and the page's background take them), the shape and face on the area's containers only
     const colours = /:root\[data-area="trade"\],\s*:root\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
-    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-glass);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-glass);", "--hl-glass: rgba(255, 255, 255, 0.95);", "--hl-panel: #fdfdfc;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-mark: #da291c;", "--warn: var(--hl-warn);", "color-scheme: light;"]) expect(colours, d).toContain(d);
+    for (const d of ["--bg: var(--hl-ground);", "--surface: var(--hl-glass);", "--text: var(--hl-text);", "--dim: var(--hl-dim);", "--rail-bg: var(--hl-glass);", "--hl-glass: rgba(255, 255, 255, 0.95);", "--hl-panel: #fdfdfc;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-mark: #00843d;", "--warn: var(--hl-warn);", "color-scheme: light;"]) expect(colours, d).toContain(d);
     // the area wears the background the Account wears: Black's values for the same names, chosen or the system's dark; the ocean behind it
     // is the background's own (the area sets none of the ocean's colours)
     const black = /:root\[data-theme="black"\]\[data-area="trade"\],\s*:root\[data-theme="black"\]\[data-area="trade"\] :is\(\.main, #modal, #drawer, #ask, \.toast-stack\) \{([^}]*)\}/.exec(tokens)?.[1] ?? "";
-    for (const d of ["--hl-glass: rgba(9, 10, 12, 0.82);", "--hl-panel: #0a0b0d;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-up: #3bb360;", "--hl-down: #ff7360;", "color-scheme: dark;"]) expect(black, d).toContain(d);
+    for (const d of ["--hl-glass: rgba(9, 10, 12, 0.82);", "--hl-panel: #0a0b0d;", "--hl-buy: #00843d;", "--hl-sell: #da291c;", "--hl-mark: #00843d;", "--hl-up: #3bb360;", "--hl-down: #ff7360;", "color-scheme: dark;"]) expect(black, d).toContain(d);
     expect(tokens).toMatch(/@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme\]\)\[data-area="trade"\],/);
     expect(colours + black).not.toContain("--oc-");
     for (const d of ["--font-sans", "--radius-pill", "font-weight", "font-family"]) expect(colours, d).not.toContain(d);
@@ -308,6 +308,28 @@ describe("the account page's scripts", () => {
     expect(lit).toEqual([]);
   });
 
+
+  it("marks the Account in its green — the mark beside its name, the rail's current item, a chosen tab, in both backgrounds and the trading area — and keeps the red for down, a sell and a loss alone, never in the ocean's glints or bursts", () => {
+    const tokens = source("ui/tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const shell = source("ui/shell.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    // each background (Light, Black, the system's dark) points the mark at the green, and the trading area's line under a chosen tab is it
+    expect(tokens.match(/--mark: var\(--green\);/g)).toHaveLength(3);
+    expect(tokens).not.toContain("--mark: var(--red)");
+    expect(tokens.match(/--hl-mark: #00843d;/g)).toHaveLength(3);
+    // what wears the mark: the square beside the Account's name (white on the green, 4.8:1), the rail's current item, a chosen tab
+    expect(shell).toMatch(/\.brand-mark \{[^}]*background: var\(--mark\); color: #ffffff;/);
+    expect(shell).toContain('.rail-nav a[aria-current="page"] { background: var(--surface-2); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--mark); }');
+    expect(shell).toContain('.tabs button[aria-pressed="true"]::after { background: var(--mark); }');
+    // the red names a fall alone: the pair's own name, down, a sell, a candle that fell
+    const reds = new Set([...tokens.matchAll(/(--[\w-]+): #da291c;/g)].map((m) => m[1]));
+    expect(reds).toEqual(new Set(["--red", "--down", "--hl-sell", "--hl-down", "--hl-candle-down"]));
+    // the ocean: no red in its glints, its bursts in the green, its sharks half see-through, in each background
+    const glints = [...tokens.matchAll(/--oc-glints: ([^;]*);/g)].map((m) => m[1]);
+    expect(glints).toHaveLength(3);
+    for (const g of glints) expect(g).not.toMatch(/#da291c|#ff7360/i);
+    expect([...tokens.matchAll(/--oc-spark: ([^;]*);/g)].map((m) => m[1])).toEqual(["#00843d", "#3bb360", "#3bb360"]);
+    expect(tokens.match(/--oc-shark-opacity: 0\.5;/g)).toHaveLength(3);
+  });
   it("gives the panes helpers that say up and down without colour alone, tables, toggles and the route, each as written in the contract", () => {
     const b = browser();
     const r = (code: string) => b.run(code);

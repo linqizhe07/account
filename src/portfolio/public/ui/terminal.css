@@ -2,7 +2,7 @@
    §3 and §5), in the ocean's colours and the background the Account wears (Light or Black): glass panels (--hl-glass, radius 4, a
    hairline inside the edge, no shadow) six pixels apart, the water showing in the gutters — the order book on the solid panel colour, its
    figures never over a moving blur (and its hover card, a fixed box, never held inside a blurred panel); 12/15 Inter at weight 400 almost
-   everywhere; tabs with a 1 px line under every tab and a 1 px red line under the one showing; controls 33 high with a 3 px radius; colour,
+   everywhere; tabs with a 1 px line under every tab and a 1 px green line under the one showing; controls 33 high with a 3 px radius; colour,
    fill and edge changing over .2 s ease-in-out. Every colour is a token of the trading area (ui/tokens.css, :root[data-area="trade"]),
    never a value written here.
 

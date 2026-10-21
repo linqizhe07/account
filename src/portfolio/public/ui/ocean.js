@@ -4,6 +4,10 @@
    glass (shell.css), and the only things it answers are the pointer — fish keep clear of it, and a click on open water scatters them —
    and the page's headline: a part marked [data-ocean-calm] (the Portfolio's net worth, floating on the water) is a stretch of calm water
    the sharks swim round, so the figure is seldom crossed.
+   No word is ever behind a shark — the clear water, read from the page's own boxes: under a pane (anything filled at least half way, or
+   frosted: a card, the rail, a panel, a sheet) a shark swims on out of sight, and under a word on the open water nothing is drawn at all,
+   not a shark, a fish, a wake or a burst. It is read four times a second, and again at the next frame once the page scrolls, its page
+   changes or it is clicked; under reduced motion, twice a second and once a scroll is drawn, the still frame drawn again when it changed.
 
    Back to front, on one canvas fixed behind the app (account.html #ocean):
      the ground   a fill and a faint grid of cells — about a 170th of the window's width, 7 to 10 px — in the background's own colours
@@ -21,21 +25,23 @@
                   grey shaded by the light with a glyph on it — denser glyphs in shadow, a few glinting in colour — and a cell it half
                   covers, at the edge, is a light glyph alone; its markings are blocks of their own (a tiger's bars, a leopard shark's spots
                   and ridges, a whale shark's pale spots and lines, a blacktip's tips). Each glyph and each spot is tied to a place on the
-                  skin, so it rides along with it. They patrol, grow hungry, and hunt the stragglers of a school, each kind at its own speed
-                  and turn (a mako fast and sharp, a nurse shark slow; a whale shark hunts nothing); the smaller swim deeper, under the bigger
+                  skin, so it rides along with it. The whole shark is half see-through (--oc-shark-opacity): the grid and the wake show
+                  through it. They patrol, grow hungry, and hunt the stragglers of a school, each kind at its own speed and turn (a mako
+                  fast and sharp, a nurse shark slow; a whale shark hunts nothing); the smaller swim deeper, under the bigger
 
    COST. The world moves in fixed steps (1/60 s, at most four a frame). A frame copies the ground, draws the blocks one colour at a time
    and every glyph from an atlas (each glyph in each colour drawn once, then copied); a shark is laid only on the cells near it, and a cell
-   deep in its body is taken whole, unsampled. The loop stops while the page is hidden; past 10 ms for a step and a drawing (the 95th
-   percentile of the last 120 of each), it draws every second frame. With prefers-reduced-motion there is no
-   loop: one still frame, drawn again when the size or the background changes.
+   deep in its body is taken whole, unsampled. The clear water's read walks only what is outside the panes. The loop stops while the page
+   is hidden; past 10 ms for a step and a drawing (the 95th percentile of the last 120 of each), it draws every second frame. With
+   prefers-reduced-motion there is no loop: one still frame, drawn again when the size, the background or the clear water changes.
 
    ocMount(canvas)   the ocean drawn into canvas (it sizes itself to the canvas's box); returns { stats(), release() }: stats() is
-                     { fps, p95ms, engineMs, stepMs, drawMs, lite, still, cells, fish, sharks, kinds } — the display's frame rate (the median
-                     interval between frames), the 95th percentile of that interval, of the engine's own part of a frame, of one step of the
-                     world and of one drawing (a frame is a drawing and as many steps as the time since the last one asks: one at 60 fps),
-                     whether it draws every second frame, whether it is still, the grid's cells, the fish, the sharks and their kinds (deepest
-                     first) — or null where there is no canvas to draw on
+                     { fps, p95ms, engineMs, stepMs, drawMs, clearMs, lite, still, cells, fish, sharks, kinds, clear } — the display's frame
+                     rate (the median interval between frames), the 95th percentile of that interval, of the engine's own part of a frame, of
+                     one step of the world, of one drawing (a frame is a drawing and as many steps as the time since the last one asks: one
+                     at 60 fps) and of one read of the clear water, whether it draws every second frame, whether it is still, the grid's
+                     cells, the fish, the sharks and their kinds (deepest first), and the clear water's cells, { panes, words } — or null
+                     where there is no canvas to draw on
    OCEAN             the page's own, mounted on #ocean as the page loads */
 
 const OC_STEP = 1 / 60;
@@ -294,6 +300,15 @@ function ocMount(canvas) {
   // the calm water: the boxes of the parts marked [data-ocean-calm], read again at most four times a second
   let calm = [];
   let calmAt = -1;
+  // the clear water, a cell each: 1 under a pane (a shark there swims out of sight), 2 under a word on the open water (nothing drawn),
+  // 0 open water; the next read is made in the other array, so a change is seen. Read when it is due (clearDirty)
+  let clear = new Uint8Array(0);
+  let clearNext = new Uint8Array(0);
+  let clearDirty = true;
+  const clearN = [0, 0];
+  const clearCosts = [];
+  let stillTimer = 0;
+  let stillRaf = 0;
   const events = [];
   let time = 0;
   let acc = 0;
@@ -359,6 +374,8 @@ function ocMount(canvas) {
       wake: v("--oc-wake", [110, 230, 255, 1]),
       spark: v("--oc-spark", [255, 122, 69, 1]),
       glints: String(cs.getPropertyValue("--oc-glints") || "").trim().split(/\s+/).map(ocRgb).filter(Boolean),
+      // how much of a shark is drawn over the water: the blocks and their glyphs alike
+      opacity: ocClamp(parseFloat(cs.getPropertyValue("--oc-shark-opacity")) || 1, 0.1, 1),
     };
     if (!p.glints.length) p.glints = [[224, 137, 44, 1]];
     return p;
@@ -498,6 +515,9 @@ function ocMount(canvas) {
     cFish = new Uint32Array(n);
     cSeen = new Uint32Array(n);
     order = new Int32Array(n);
+    clear = new Uint8Array(n);
+    clearNext = new Uint8Array(n);
+    clearDirty = true;
     const wasW = W;
     const wasH = H;
     W = r.width;
@@ -974,6 +994,100 @@ function ocMount(canvas) {
       calm.push({ x: r.left + r.width / 2, y: r.top + r.height / 2, rx: r.width / 2, ry: r.height / 2 });
     }
   }
+
+  /* the clear water as the page lays it out now: a walk down from the body — a pane's box taken whole (what is in it is never walked),
+     every word outside the panes by the boxes of its own lines, nothing outside a part that clips it, nothing of a part that is not shown
+     or lies off the window. The answer is whether it changed (a still frame is drawn again only then) */
+  const range = typeof document.createRange === "function" ? document.createRange() : null;
+  function readClear() {
+    const t0 = performance.now();
+    clearDirty = false;
+    const next = clearNext;
+    next.fill(0);
+    if (document.body && cols && typeof getComputedStyle === "function") clearWalk(document.body, 0, 0, W, H, true);
+    let changed = false;
+    clearN[0] = clearN[1] = 0;
+    for (let i = 0; i < next.length; i++) {
+      const v = next[i];
+      if (v !== clear[i]) changed = true;
+      if (v) clearN[v - 1]++;
+    }
+    clearNext = clear;
+    clear = next;
+    keep(clearCosts, performance.now() - t0);
+    return changed;
+  }
+  /* a box laid on the cells as v (1 a pane, 2 a word), cut to the part of the window that shows it (x0 y0 x1 y1): a pane takes the cells
+     whose middle it covers — its edge under the glass hides the rest — and a word every cell it touches, with a few pixels round it */
+  function clearBox(r, v, x0, y0, x1, y1) {
+    const px = v === 2 ? 4 : 0;
+    const py = v === 2 ? 3 : 0;
+    const left = Math.max(r.left - px, x0);
+    const right = Math.min(r.right + px, x1);
+    const top = Math.max(r.top - py, y0);
+    const bottom = Math.min(r.bottom + py, y1);
+    if (!(right > left && bottom > top)) return;
+    const word = v === 2;
+    const c0 = Math.max(0, word ? Math.floor(left / cw) : Math.ceil(left / cw - 0.5));
+    const c1 = Math.min(cols - 1, word ? Math.ceil(right / cw) - 1 : Math.floor(right / cw - 0.5));
+    const r0 = Math.max(0, word ? Math.floor(top / ch) : Math.ceil(top / ch - 0.5));
+    const r1 = Math.min(rows - 1, word ? Math.ceil(bottom / ch) - 1 : Math.floor(bottom / ch - 0.5));
+    const next = clearNext;
+    for (let rr = r0; rr <= r1; rr++) {
+      const row = rr * cols;
+      for (let c = c0; c <= c1; c++) if (next[row + c] < v) next[row + c] = v;
+    }
+  }
+  /* the walk under one element: its text nodes are words (when it is shown), each child element a pane (walked as well only when
+     something spills out of it), a word as a whole (a field, a canvas: what they hold is drawn, not written), skipped (not shown, off the
+     window, nothing to read in it), or walked in turn — within its own box where it clips what overflows it */
+  function clearWalk(el, x0, y0, x1, y1, shown) {
+    for (let n = el.firstChild; n; n = n.nextSibling) {
+      const type = n.nodeType;
+      if (type === 3) {
+        if (!shown || !range || !/\S/.test(n.data)) continue;
+        range.selectNodeContents(n);
+        const lines = range.getClientRects();
+        for (let k = 0; k < lines.length; k++) clearBox(lines[k], 2, x0, y0, x1, y1);
+        continue;
+      }
+      if (type !== 1 || n === canvas) continue;
+      const tag = n.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEMPLATE" || tag === "NOSCRIPT" || tag === "IMG" || tag === "VIDEO") continue;
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || cs.opacity === "0") continue;
+      const r = n.getBoundingClientRect();
+      const sized = r.width > 0 && r.height > 0;
+      if (sized && (r.bottom <= y0 || r.top >= y1 || r.right <= x0 || r.left >= x1)) continue;
+      const bg = ocRgb(cs.backgroundColor);
+      const blur = cs.backdropFilter || cs.webkitBackdropFilter || "none";
+      if ((bg && bg[3] >= 0.5) || blur !== "none") {
+        if (!sized) continue;
+        clearBox(r, 1, x0, y0, x1, y1);
+        // what spills out of a pane stands on the open water (a price's marker at the end of its range): a pane that lets its overflow
+        // show and has some is walked in turn, its words cleared like any other
+        if (cs.overflowX === "visible" && cs.overflowY === "visible" && (n.scrollWidth > n.clientWidth + 1 || n.scrollHeight > n.clientHeight + 1)) clearWalk(n, x0, y0, x1, y1, cs.visibility === "visible");
+        continue;
+      }
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "CANVAS") {
+        if (sized && cs.visibility === "visible") clearBox(r, 2, x0, y0, x1, y1);
+        continue;
+      }
+      let a0 = x0;
+      let b0 = y0;
+      let a1 = x1;
+      let b1 = y1;
+      if (sized && cs.overflowX !== "visible") {
+        a0 = Math.max(a0, r.left);
+        a1 = Math.min(a1, r.right);
+      }
+      if (sized && cs.overflowY !== "visible") {
+        b0 = Math.max(b0, r.top);
+        b1 = Math.min(b1, r.bottom);
+      }
+      if (a1 > a0 && b1 > b0) clearWalk(n, a0, b0, a1, b1, cs.visibility === "visible");
+    }
+  }
   function step(dt) {
     time += dt;
     sortFish();
@@ -1260,6 +1374,7 @@ function ocMount(canvas) {
 
   function draw(dt) {
     if (!cols || !pal) return;
+    if (clearDirty) readClear();
     const t = time;
     const n = cols * rows;
     frameNo++;
@@ -1270,24 +1385,24 @@ function ocMount(canvas) {
     g.globalAlpha = 1;
     g.drawImage(groundC, 0, 0);
 
-    // the fish take their cells (the nearer first, where two meet in one); none where a shark is
+    // the fish take their cells (the nearer first, where two meet in one); none where a shark is, none under a word
     let taken = 0;
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 0; i < N; i++) {
         if (!falive[i] || (fdep[i] > 0.78 ? 0 : 1) !== pass) continue;
         const k = cellOf(fx[i], fy[i]);
-        if (k < 0 || cFish[k] === frameNo || cFlag[k]) continue;
+        if (k < 0 || cFish[k] === frameNo || cFlag[k] || clear[k] === 2) continue;
         cFish[k] = frameNo;
         fishCells[taken++] = k;
         fishCells[taken++] = i;
       }
     }
 
-    // the wake's dots, one colour a strength (counted into order, then drawn a strength at a time)
+    // the wake's dots, one colour a strength (counted into order, then drawn a strength at a time); none under a word
     const counts = wakeCount.fill(0);
     for (let i = 0; i < n; i++) {
       const e = wake[i];
-      if (e > 0.45 && !cFlag[i] && cFish[i] !== frameNo) counts[Math.min(5, ((e - 0.45) * 5) | 0)]++;
+      if (e > 0.45 && !cFlag[i] && cFish[i] !== frameNo && clear[i] !== 2) counts[Math.min(5, ((e - 0.45) * 5) | 0)]++;
     }
     const starts = wakeStart;
     starts[0] = 0;
@@ -1296,7 +1411,7 @@ function ocMount(canvas) {
     at.set(starts);
     for (let i = 0; i < n; i++) {
       const e = wake[i];
-      if (e > 0.45 && !cFlag[i] && cFish[i] !== frameNo) order[at[Math.min(5, ((e - 0.45) * 5) | 0)]++] = i;
+      if (e > 0.45 && !cFlag[i] && cFish[i] !== frameNo && clear[i] !== 2) order[at[Math.min(5, ((e - 0.45) * 5) | 0)]++] = i;
     }
     const dot = Math.max(2, Math.round(CW * 0.2));
     for (let b = 0; b < 6; b++) {
@@ -1308,10 +1423,10 @@ function ocMount(canvas) {
       }
     }
 
-    // the bursts
+    // the bursts (none under a word)
     for (let i = 0; i < n; i++) {
       const h = heat[i];
-      if (h < 0.08 || cFlag[i]) continue;
+      if (h < 0.08 || cFlag[i] || clear[i] === 2) continue;
       glyph(inks.spark0 + (h > 0.5 ? 0 : 1), h > 0.6 ? OC_I.star : OC_I.dot, i % cols, (i / cols) | 0);
     }
 
@@ -1330,7 +1445,9 @@ function ocMount(canvas) {
       }
     }
 
-    // the sharks: their blocks, one colour at a time (counted by shark and light into order), then their glyphs
+    // the sharks, half see-through: their blocks, one colour at a time (counted by shark and light into order), then their glyphs — none
+    // under a pane or a word (the clear water)
+    g.globalAlpha = pal.opacity;
     const levels = (sharks.length + 1) * OC_LEVELS;
     if (blockCount.length !== levels + 1) {
       blockCount = new Int32Array(levels + 1);
@@ -1343,7 +1460,7 @@ function ocMount(canvas) {
     const bc = blockCount.fill(0);
     for (let i = 0; i < n; i++) {
       const f = cFlag[i];
-      if (blocked(f)) bc[cShark[i] * OC_LEVELS + levelOf(f, i)]++;
+      if (blocked(f) && !clear[i]) bc[cShark[i] * OC_LEVELS + levelOf(f, i)]++;
     }
     const bs = blockStart;
     for (let b = 1; b <= levels; b++) bs[b] = bs[b - 1] + bc[b - 1];
@@ -1351,7 +1468,7 @@ function ocMount(canvas) {
     bat.set(bs);
     for (let i = 0; i < n; i++) {
       const f = cFlag[i];
-      if (blocked(f)) order[bat[cShark[i] * OC_LEVELS + levelOf(f, i)]++] = i;
+      if (blocked(f) && !clear[i]) order[bat[cShark[i] * OC_LEVELS + levelOf(f, i)]++] = i;
     }
     for (let b = 0; b < levels; b++) {
       if (!bc[b]) continue;
@@ -1365,7 +1482,7 @@ function ocMount(canvas) {
     }
     for (let i = 0; i < n; i++) {
       const f = cFlag[i];
-      if (!f) continue;
+      if (!f || clear[i]) continue;
       const col = i % cols;
       const row = (i / cols) | 0;
       const key = cKey[i];
@@ -1394,6 +1511,7 @@ function ocMount(canvas) {
       const ink = f === OC_MARK || f === OC_SPOT ? own : roll < 0.08 ? inks.glint0 + (key % inks.glints) : roll < 0.11 ? 2 : own;
       glyph(ink, gl, col, row);
     }
+    g.globalAlpha = 1;
   }
 
   // ---- the loop ----------------------------------------------------------------------------------------------------------------------
@@ -1405,10 +1523,11 @@ function ocMount(canvas) {
     if (last) keep(gaps, now - last);
     last = now;
     const t0 = performance.now();
-    // the calm water's boxes, four times a second at most (a read of a box may have to lay the page out)
+    // the calm water's boxes, four times a second at most (a read of a box may have to lay the page out), and the clear water with them
     if (now - calmAt > 250) {
       calmAt = now;
       readCalm();
+      clearDirty = true;
     }
     acc += dt;
     let steps = 0;
@@ -1446,6 +1565,24 @@ function ocMount(canvas) {
     if (!cols) return;
     if (time < 4) for (let i = 0; i < 240; i++) step(OC_STEP);
     draw(OC_STEP);
+    watchStill();
+  }
+  /* nothing swims under reduced motion, but the page still moves over the still frame: twice a second, and at the next frame the browser
+     draws after a scroll, a click or a new page, the clear water is read again — and the frame drawn again when it changed */
+  function stillCheck() {
+    stillRaf = 0;
+    if (released || !isStill() || document.hidden) return;
+    if (readClear()) draw(0);
+  }
+  function watchStill() {
+    if (stillTimer || released || typeof setInterval !== "function") return;
+    stillTimer = setInterval(stillCheck, 500);
+  }
+  function unwatchStill() {
+    if (stillTimer) clearInterval(stillTimer);
+    stillTimer = 0;
+    if (stillRaf) cancelAnimationFrame(stillRaf);
+    stillRaf = 0;
   }
   const p95 = (xs) => {
     const s = xs.slice().sort((a, b) => a - b);
@@ -1489,12 +1626,25 @@ function ocMount(canvas) {
     }
   }, { passive: true });
   on(document, "visibilitychange", () => (document.hidden ? stop() : schedule()));
+  // the page moved over the ocean (a scroll anywhere in it, a new page, a click that opens or closes something, a key): the clear water is
+  // read at the next frame drawn
+  const moved = () => {
+    clearDirty = true;
+    if (!stillRaf && !released && isStill()) stillRaf = requestAnimationFrame(stillCheck);
+  };
+  on(document, "scroll", moved, { capture: true, passive: true });
+  on(globalThis, "hashchange", moved);
+  on(document, "click", moved, { capture: true, passive: true });
+  on(document, "keyup", moved, { capture: true, passive: true });
   if (typeof STILL !== "undefined" && STILL && typeof STILL.addEventListener === "function") {
     on(STILL, "change", () => {
       if (isStill()) {
         stop();
         stillFrame();
-      } else schedule();
+      } else {
+        unwatchStill();
+        schedule();
+      }
     });
   }
   let ro = null;
@@ -1526,11 +1676,12 @@ function ocMount(canvas) {
   return {
     stats() {
       const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[gaps.length >> 1] : 0;
-      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length, kinds: sharks.map((sh) => sh.kind) };
+      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), clearMs: +p95(clearCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length, kinds: sharks.map((sh) => sh.kind), clear: { panes: clearN[0], words: clearN[1] } };
     },
     release() {
       released = true;
       stop();
+      unwatchStill();
       if (ro) ro.disconnect();
       if (mo) mo.disconnect();
       for (const f of off.splice(0)) f();
