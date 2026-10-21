@@ -1,4 +1,4 @@
-/* THE FLOOR — the superagent's desk drawn as a trading floor on one canvas: a dark room (a screen in either background), a back wall with the
+/* THE FLOOR — the superagent's desk drawn as a trading floor on one canvas: a room in the page's own background (Light or Black), a back wall with the
    wall screen, the ticker tape, a New York clock, the target trophy, the shredder and the brain's rack, and on the floor one desk per seat
    of the Desk (Head, Search, Risk, Sniper, Exit, Watch, and the two seats only an outside agent can take, Flow and Sentiment) with a soft
    blob mascot at each, speaking in bubbles, passing leads to one another as glowing packets and firing orders at the wall screen.
@@ -88,11 +88,12 @@
      loopW, tapeW) · flPlace(ax, ay, w, h, gap, W, rects, n, out) · flSearchBars(rows, picked) · flEmptyShort(seat) · flTicks(lo, hi, n,
      out) · flIsCycleLine(entry) · flTrayWords(cards, autonomy) · flMarkLabels(labs, top, bottom, pitch) · flMarkWords(mark, step) ·
      flScreenHead(focus) · flBase(symbol) · flKindName(kind) · flSniperText(E, usd, per, w, fs) · flRestore(E) · flDprNow(w, h) ·
-     flBrainCode(brain)/flBrainWord(brain) · flScreenNone(scan) · flScreenFit(...)/flMarksApart(...) · flDecimals(x)
+     flBrainCode(brain)/flBrainWord(brain) · flScreenNone(scan) · flScreenFit(...)/flMarksApart(...) · flDecimals(x) · flLight(rgb) ·
+     flGlowOp(pal)
 
    The engine. One requestAnimationFrame loop at whatever rate the display runs (120 Hz where it can), each step capped at 50 ms so a
    stalled frame never throws a packet across the room. The canvas is drawn at the device's pixel ratio up to 2 — 1.5 where that would
-   make it more than two million device pixels, for the cost of a frame grows with them — sized by a ResizeObserver; the loop stops while
+   make it more than six million device pixels, for the cost of a frame grows with them — sized by a ResizeObserver; the loop stops while
    the canvas is scrolled out of view (IntersectionObserver) or the page is hidden, and is not measured for the gap. When nothing moves —
    no packet, particle, ring, beam or floating figure in the air, no bubble typing, every spring settled, nothing waiting in line — the
    floor rests: it still takes each of the browser's frame callbacks (so the display's own rate is what is measured) but draws at most
@@ -114,8 +115,10 @@
    each restore (flRestore) the font and the letter spacing it holds are taken as unknown and set again before the next word.
 
    Colours and type: the trading area's tokens (ui/tokens.css, the --hl-* set behind the Account's names there) read from the canvas's
-   container with getComputedStyle, each from the first name it sets (FL_VARS): the room keeps its own dark field (--sg-deep and
-   --sg-deep-2 on .sg-floor, else --bg and --surface), the words in --text and --dim, the lines in --sg-line (else --border), the accent
+   container with getComputedStyle, each from the first name it sets (FL_VARS), and read again when the page switches between Light and
+   Black (html[data-theme], watched): the room is the page's own background — a light room on Light, a dark one on Black (--sg-deep and
+   --sg-deep-2 on .sg-floor, else --bg and --surface). Its glows add light on a dark room ("lighter"); on a light room, where adding light
+   shows nothing, they are laid over it at a lower strength instead (flGlowOp), the words in --text and --dim, the lines in --sg-line (else --border), the accent
    in --sg-mint (else --primary) with --sg-ink (else --on-primary) on it, rises and falls in --up and --down (the Swiss green and red),
    what waits in --warn, the screen's scanlines in --sg-scan, the glass and the shadows toward --sg-shadow (else the room darkened),
    each mascot in --sg-r-<role> (the same colour as the role's card); FL_PALETTE's values where none is set. Every word is in the area's
@@ -217,8 +220,10 @@ const FL_MIN_WORDS = 10;
 /* resting: a frame drawn at most every 33 ms while nothing moves, and the full rate again for 600 ms after anything wakes the floor */
 const FL_IDLE_MS = 33;
 const FL_WAKE_MS = 600;
-/* the device pixels past which the pixel ratio is held to 1.5 (a frame's cost grows with them) */
-const FL_MAX_PX = 2_000_000;
+/* the device pixels past which the pixel ratio is held to 1.5 (a frame's cost grows with them): six million — a floor 1,700 by 880 CSS
+   pixels at a Retina display's 2, so a laptop's or a desktop's floor is drawn at its display's own sharpness and only a floor wider than
+   that is eased to 1.5 (at two million, a 1440-wide window's floor was drawn at 1.5 and scaled up: soft on a Retina screen) */
+const FL_MAX_PX = 6_000_000;
 /* what a market's kind is called on the wall screen */
 const FL_KINDS = { coin: "Crypto", crypto: "Crypto", stock: "Stock", equity: "Stock", event: "Event", perp: "Perpetual", spot: "Spot", fund: "Fund", etf: "ETF" };
 /* the fixtures' words, longest first: a narrow floor's fixture says the shorter where the longer does not fit at the least size */
@@ -341,6 +346,17 @@ function flRgb(css) {
   }
   return null;
 }
+/* whether a colour is light: its relative luminance (WCAG's) over a half */
+function flLight(rgb) {
+  if (!rgb) return false;
+  const lin = (c) => {
+    const v = flClamp(Number(c) || 0, 0, 255) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]) > 0.5;
+}
+/* how the glows are laid on the room: added as light on a dark room, laid over a light one (where light added shows nothing) */
+const flGlowOp = (pal) => (pal && flLight(pal.bg) ? "source-over" : "lighter");
 /* a colour as CSS at an extra opacity a */
 function flCss(rgb, a = 1) {
   const al = flClamp((rgb[3] ?? 1) * a, 0, 1);
@@ -1398,6 +1414,9 @@ function flEngine(canvas, opts) {
     dpr: 1,
     L: null,
     pal: flPalette(null),
+    lightRoom: false,
+    glowOp: "lighter",
+    mo: null,
     cc: Object.create(null),
     fonts: Object.create(null),
     sans: '"Inter", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
@@ -1677,10 +1696,14 @@ function flResize(E) {
   E.L = flLayout(w, h);
   const host = c && (c.parentElement || c);
   E.pal = flPalette(host);
+  E.lightRoom = flLight(E.pal.bg);
+  E.glowOp = flGlowOp(E.pal);
   flFontsOf(E, host);
   flDerive(E);
   E.cc = Object.create(null);
   E.fonts = Object.create(null);
+  // the tape's fades are made of the room's colour: made again with it (a switch between Light and Black keeps the size)
+  E.tkFade = null;
   flBuildSprites(E);
   flBuildLayers(E);
   flForget(E);
@@ -1704,7 +1727,9 @@ function flFontsOf(E, host) {
 }
 /* the colours made from the palette: each mascot's tint (the page's --sg-r-<role> where it sets one, else the mint stepped toward the
    text or the surface), the desks, the wall and the floor; the glass and the shadows mix toward the page's shade (--sg-shadow), else
-   toward the room darkened — never a colour of the floor's own */
+   toward the room darkened — far down for a dark room, to a soft grey for a light one, where a near-black would sully the room. A
+   screen's glass is darker than a dark room and, on a light room, the desks' own white barely shaded: a lit display either way. Never a
+   colour of the floor's own */
 function flDerive(E) {
   const p = E.pal;
   for (const role of FL_ROLES) {
@@ -1712,11 +1737,12 @@ function flDerive(E) {
     const [toward, f] = FL_TINT[role];
     p[`r_${role}`] = flMix(p.mint, p[toward], f);
   }
-  const shade = p.shade || [p.bg[0] * 0.05, p.bg[1] * 0.05, p.bg[2] * 0.05, 1];
+  const down = E.lightRoom ? 0.62 : 0.05;
+  const shade = p.shade || [p.bg[0] * down, p.bg[1] * down, p.bg[2] * down, 1];
   p.coralBody = flMix(p.down, p.text, 0.12);
   p.deskTop = flMix(p.surface, p.mint, 0.07);
   p.deskFront = flMix(p.surface, p.bg, 0.5);
-  p.glass = flMix(p.bg, shade, 0.35);
+  p.glass = E.lightRoom ? flMix(p.surface, shade, 0.05) : flMix(p.bg, shade, 0.35);
   p.wallHi = flMix(p.surface, p.bg, 0.2);
   p.floorBack = flMix(p.surface, p.bg, 0.55);
   p.shadow = flMix(p.bg, shade, 0.6);
@@ -1727,9 +1753,11 @@ function flBuildSprites(E) {
     if (!c) return null;
     const g = c.getContext("2d");
     const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    grd.addColorStop(0, flCss(E.pal[key], 0.85));
-    grd.addColorStop(0.3, flCss(E.pal[key], 0.32));
-    grd.addColorStop(0.65, flCss(E.pal[key], 0.08));
+    // laid over a light room rather than added to a dark one: a softer halo, so it tints the room and never blots it
+    const k = E.lightRoom ? 0.5 : 1;
+    grd.addColorStop(0, flCss(E.pal[key], 0.85 * k));
+    grd.addColorStop(0.3, flCss(E.pal[key], 0.32 * k));
+    grd.addColorStop(0.65, flCss(E.pal[key], 0.08 * k));
     grd.addColorStop(1, flCss(E.pal[key], 0));
     g.fillStyle = grd;
     g.fillRect(0, 0, 64, 64);
@@ -1891,15 +1919,16 @@ function flPaintFloor(E, g) {
     g.lineTo(xAt(u, 1.1), L.h + 12);
     g.stroke();
   }
-  // the wall's shade on the floor, and the room's corners in shadow
+  // the wall's shade on the floor, and the room's corners in shadow — lighter in a light room, where a deep vignette reads as grime
+  const deep = E.lightRoom ? 0.4 : 1;
   const sh = g.createLinearGradient(0, y0, 0, y0 + 28 * L.k);
-  sh.addColorStop(0, flCss(p.shadow, 0.35));
+  sh.addColorStop(0, flCss(p.shadow, 0.35 * deep));
   sh.addColorStop(1, flCss(p.shadow, 0));
   g.fillStyle = sh;
   g.fillRect(-12, y0, L.w + 24, 28 * L.k);
   const vg = g.createRadialGradient(L.cx, y0 + (L.h - y0) * 0.35, L.w * 0.2, L.cx, y0 + (L.h - y0) * 0.35, L.w * 0.75);
   vg.addColorStop(0, flCss(p.shadow, 0));
-  vg.addColorStop(1, flCss(p.shadow, 0.45));
+  vg.addColorStop(1, flCss(p.shadow, 0.45 * deep));
   g.fillStyle = vg;
   g.fillRect(-12, y0, L.w + 24, L.h - y0 + 12);
 }
@@ -1994,6 +2023,16 @@ function flWire(E) {
     E.io.observe(c);
   }
   if (typeof document !== "undefined" && document) flOn(E, document, "visibilitychange", () => flKick(E));
+  // the page switched between Light and Black: the room's colours read again, and everything drawn from them made again
+  if (typeof MutationObserver === "function" && typeof document !== "undefined" && document && document.documentElement) {
+    E.mo = new MutationObserver(() => {
+      E.w = 0;
+      flResize(E);
+      flKick(E);
+      if (!E.running) flStillFrame(E);
+    });
+    E.mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
   try {
     E.mql = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
   } catch {
@@ -2195,9 +2234,11 @@ function flRelease(E) {
   if (E.ro && typeof E.ro.disconnect === "function") E.ro.disconnect();
   if (E.io && typeof E.io.disconnect === "function") E.io.disconnect();
   if (E.loaf && typeof E.loaf.disconnect === "function") E.loaf.disconnect();
+  if (E.mo && typeof E.mo.disconnect === "function") E.mo.disconnect();
   E.ro = null;
   E.io = null;
   E.loaf = null;
+  E.mo = null;
   E.q.list.length = 0;
 }
 
@@ -3659,7 +3700,7 @@ function flDrawRack(E, t, pass) {
   for (let i = 0; i < FL_RACK_LEDS; i++) {
     const p = ledAt(r, i, cols, rows, led);
     if (i < lit) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "mint", p.x, p.y, ledR * 5, 0.75);
       ctx.globalCompositeOperation = "source-over";
       ctx.fillStyle = flC(E, "mint");
@@ -3808,13 +3849,13 @@ function flDrawTrophy(E, t, pass) {
     ctx.fillRect(cx - half, ly - 0.5, half * 2, Math.max(1, 1.2 * k));
     if (!E.instant) {
       const gx = cx + Math.sin(t * 0.0017) * half * 0.75;
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "mint", gx, ly, 6 * k, 0.8);
       ctx.globalCompositeOperation = "source-over";
     }
     flRestore(E);
     if (level >= 0.999) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "mint", cx, (bowlTop + bowlBot) / 2, bw * 2.2, 0.35);
       ctx.globalCompositeOperation = "source-over";
     }
@@ -4086,7 +4127,7 @@ function flDrawTray(E, t, pass) {
       ctx.fillText(s.label, x + sw / 2, y + sh / 2 + 0.5);
     }
     if (age < 1600 && !E.instant) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "warn", x + sw / 2, y + sh / 2, sw, 0.4 * (1 - age / 1600));
       ctx.globalCompositeOperation = "source-over";
     }
@@ -4751,7 +4792,7 @@ function flThinkDots(E, ch, cw, chh, t, front) {
     const y = cy + sn * R * 0.3;
     const r = Math.max(1.2, cw * 0.05) * (0.8 + 0.25 * sn);
     if (front) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "mint", x, y, r * 4, 0.5);
       ctx.globalCompositeOperation = "source-over";
     }
@@ -4866,7 +4907,7 @@ function flDrawScreen(E, t) {
   const f = E.show.focus;
   // the halo of a live screen
   if (f && f.candles.length) {
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = E.glowOp;
     flGlow(E, "mint", r.x + r.w / 2, r.y + r.h / 2, r.w * 0.62, 0.1);
     ctx.globalCompositeOperation = "source-over";
   }
@@ -5447,7 +5488,7 @@ function flDrawTags(E, t) {
     ctx.scale(sc, sc);
     ctx.translate(-pos.x, -pos.y);
     if (!E.lite) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, g.side === "sell" ? "down" : "mint", x + w / 2, pos.y, w * 0.7, 0.35);
       ctx.globalCompositeOperation = "source-over";
     }
@@ -5518,7 +5559,7 @@ function flDrawNet(E, t) {
           const u = (t / 1700 + i / pulses + (n.h % 1000) / 1000) % 1;
           flBezier(ax, ay, bx, by, cx, cy, dx, dy, u, E.pt);
           const a = Math.sin(u * Math.PI) * n.a.x;
-          ctx.globalCompositeOperation = "lighter";
+          ctx.globalCompositeOperation = E.glowOp;
           flGlow(E, "mint", E.pt.x, E.pt.y, 7 * k, 0.7 * a);
           ctx.globalCompositeOperation = "source-over";
           ctx.fillStyle = flC(E, "mint", a);
@@ -5682,7 +5723,7 @@ function flDrawBeams(E, t, px, py) {
     ctx.lineTo(hx, hy);
     ctx.stroke();
     ctx.lineCap = "butt";
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = E.glowOp;
     flGlow(E, b.col, hx, hy, 10 * L.k, a);
     ctx.globalCompositeOperation = "source-over";
   }
@@ -5710,7 +5751,7 @@ function flDrawPackets(E) {
       }
       ctx.lineCap = "butt";
     }
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = E.glowOp;
     flGlow(E, col, p.x, p.y, 22 * k * p.sc, 0.55 * p.al);
     ctx.globalCompositeOperation = "source-over";
     const font = flFont(E, L.fs.tiny, true, 600);
@@ -5744,7 +5785,7 @@ function flDrawParticles(E) {
   if (!P.alive) return;
   // the glows first, additively, then the cores
   if (!E.lite && E.sprites) {
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = E.glowOp;
     for (let i = 0; i < P.life.length; i++) {
       if (P.life[i] <= 0) continue;
       const kind = P.kind[i];
@@ -6072,7 +6113,7 @@ function flDrawBanner(E, t) {
     ctx.fill();
     const fresh = t - E.haltAt;
     if (!E.instant && fresh >= 0 && fresh < 900) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = E.glowOp;
       flGlow(E, "down", L.w / 2, y + h / 2, w * 0.7, 0.4 * (1 - fresh / 900));
       ctx.globalCompositeOperation = "source-over";
     }

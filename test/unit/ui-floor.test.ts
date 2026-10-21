@@ -52,7 +52,8 @@ function recorder() {
   const seq: Array<{ op: string; style: string; args: unknown[]; font?: string; alpha?: number; base?: string }> = [];
   const state: Record<string, unknown> = { font: "10px sans-serif", letterSpacing: "0px", globalAlpha: 1 };
   const stack: Array<Record<string, unknown>> = [];
-  const grad = { addColorStop() {} };
+  // each gradient made: where it runs and its colours, in order
+  const grads: Array<{ args: unknown[]; stops: string[] }> = [];
   const target: Record<string, unknown> = {};
   const ctx = new Proxy(target, {
     get(_t, k: string) {
@@ -62,7 +63,12 @@ function recorder() {
           const px = Number(/(\d+(?:\.\d+)?)px/.exec(String(state.font))?.[1] ?? 10);
           return { width: String(s).length * px * 0.6 };
         };
-      if (k === "createLinearGradient" || k === "createRadialGradient") return () => grad;
+      if (k === "createLinearGradient" || k === "createRadialGradient")
+        return (...args: unknown[]) => {
+          const g = { args, stops: [] as string[] };
+          grads.push(g);
+          return { addColorStop: (_at: number, c: string) => void g.stops.push(String(c)) };
+        };
       if (k === "createPattern") return () => ({});
       if (k === "then") return undefined;
       return (...a: unknown[]) => {
@@ -83,7 +89,7 @@ function recorder() {
       return k in state;
     },
   });
-  return { ctx, texts, calls, seq, clear: () => (texts.length = 0, calls.clear(), seq.length = 0) };
+  return { ctx, texts, calls, seq, grads, clear: () => (texts.length = 0, calls.clear(), seq.length = 0, grads.length = 0) };
 }
 
 interface Opts {
@@ -473,6 +479,45 @@ describe("the floor's pure parts", () => {
     expect(a.up).toEqual([31, 166, 125, 1]);
   });
 
+  it("draws its room in the page's own background — light on Light, dark on Black — its glows laid over a light room, and reads the room again when the page switches", () => {
+    const p = page();
+    // a light room by its luminance; its glows laid over it (adding light to a light room shows nothing), added on a dark one
+    expect(p.run("[flLight(flRgb('#f1f1ee')), flLight(flRgb('#ffffff')), flLight(flRgb('#08090a')), flLight(flRgb('#1b2429')), flLight(null)]")).toEqual([true, true, false, false, false]);
+    expect(p.run("[flGlowOp({ bg: flRgb('#f1f1ee') }), flGlowOp({ bg: flRgb('#08090a') }), flGlowOp(null)]")).toEqual(["source-over", "lighter", "lighter"]);
+    // Light: the room is drawn in the floor's light field (--sg-deep on .sg-floor)
+    const css: Record<string, string> = { "--sg-deep": "#f1f1ee", "--sg-deep-2": "#ffffff", "--sg-mint": "#00843d", "--sg-ink": "#ffffff", "--text": "#111111", "--dim": "#595954" };
+    const heard: Array<() => void> = [];
+    const q = page({ css });
+    q.sandbox.MutationObserver = class {
+      constructor(fn: () => void) {
+        heard.push(fn);
+      }
+      observe() {}
+      disconnect() {}
+    };
+    q.run("globalThis.H = flMount(CANVAS, {})");
+    const fills = () => q.rec.seq.filter((x) => x.op === "fillRect").map((x) => x.style);
+    // the tape's fades into the wall: the two level gradients across the tape's ends, by their colours
+    const tape = q.run<{ x: number; w: number }>("flLayout(1600, 700).ticker");
+    const fades = () => q.rec.grads.filter((g) => g.args[1] === 0 && g.args[3] === 0 && (g.args[0] === tape.x || Number(g.args[2]) === tape.x + tape.w)).map((g) => g.stops);
+    q.rec.clear();
+    q.run(`H.set(${JSON.stringify({ ...bare, ticker: [{ text: "BTC 67,210 2.1%", dir: "up" }, { text: "ETH 3,100 0.4%", dir: "down" }] })})`);
+    expect(fades()).toEqual([["rgba(241,241,238,1)", "rgba(241,241,238,0)"], ["rgba(241,241,238,0)", "rgba(241,241,238,1)"]]);
+    expect(fills()).toContain("rgba(241,241,238,1)");
+    expect(fills()).not.toContain("rgba(8,9,10,1)");
+    // the page switched to Black (html[data-theme], watched): the room read again and drawn dark, with nothing else asked of the page
+    expect(heard).toHaveLength(1);
+    Object.assign(css, { "--sg-deep": "#08090a", "--sg-deep-2": "#121315", "--sg-mint": "#ffffff", "--sg-ink": "#0a0a0a", "--text": "#f2f2f0", "--dim": "#9d9d98" });
+    q.rec.clear();
+    heard[0]!();
+    expect(fills()).toContain("rgba(8,9,10,1)");
+    expect(fills()).not.toContain("rgba(241,241,238,1)");
+    // the tape's fades into the wall made again in the room's new colour (the size is the same: nothing kept from the light room)
+    expect(fades()).toEqual([["rgba(8,9,10,1)", "rgba(8,9,10,0)"], ["rgba(8,9,10,0)", "rgba(8,9,10,1)"]]);
+    // and let go of on release
+    q.run("H.release()");
+  });
+
   it("drops to lite as the site does: never in the first six seconds, then after four seconds of slow frames, once and for good", () => {
     const p = page();
     p.run("globalThis.D = { born: 0, slowSince: 0, lite: false }");
@@ -651,11 +696,15 @@ describe("the floor mounted", () => {
   it("runs one loop at the display's rate and measures it; a line types out over its frames; the loop stops while the page is hidden and on release", () => {
     const p = page({ raf: true, reduced: false, dpr: 3 });
     p.run("globalThis.H = flMount(CANVAS, {})");
-    // the pixel ratio held to 2, and to 1.5 where 2 would make the canvas more than two million device pixels
-    expect([p.canvas.width, p.canvas.height]).toEqual([2400, 1050]);
+    // the pixel ratio held to 2 — a Retina screen's own sharpness for a floor up to some 1,700 by 880 — and to 1.5 only where 2 would make
+    // the canvas more than six million device pixels
+    expect([p.canvas.width, p.canvas.height]).toEqual([3200, 1400]);
     const small = page({ raf: true, reduced: false, dpr: 3, size: { w: 800, h: 350 } });
     small.run("globalThis.H = flMount(CANVAS, {})");
     expect([small.canvas.width, small.canvas.height]).toEqual([1600, 700]);
+    const huge = page({ raf: true, reduced: false, dpr: 2, size: { w: 2400, h: 1050 } });
+    huge.run("globalThis.H = flMount(CANVAS, {})");
+    expect([huge.canvas.width, huge.canvas.height]).toEqual([3600, 1575]);
     expect(p.frames.size).toBe(1);
     p.run(`H.set(${JSON.stringify(state())})`);
     let t = 1000;
@@ -1075,8 +1124,8 @@ describe("the floor after review: what it never says wrongly, and what it never 
     expect(res).toHaveLength(1);
     p.sandbox.devicePixelRatio = 2;
     for (const fn of [...res[0]!.fns]) fn({});
-    // (1.5 for this size: two would make it more than two million device pixels)
-    expect(p.canvas.width).toBe(2400);
+    // (2 for this size: 3,200 by 1,400 is under six million device pixels)
+    expect(p.canvas.width).toBe(3200);
     expect(mq.filter((m) => /resolution: 2dppx/.test(m.q) && m.fns.size)).toHaveLength(1);
     expect(res[0]!.fns.size).toBe(0);
     p.run("H.release()");

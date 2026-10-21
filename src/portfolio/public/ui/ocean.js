@@ -1,9 +1,10 @@
 /* THE OCEAN — the page's ground, drawn in type: a grid of character cells under the whole page, where a few sharks patrol and hunt schools
    of small fish. Written for this page in the look of stackedlol's ascii-sharks (none of its code is used: that repository carries no
-   licence). It is decor and nothing else: it reads nothing, says nothing and stands for no figure. The panes float over it as frosted
-   glass (shell.css), and the only things it answers are the pointer — fish keep clear of it, and a click on open water scatters them —
-   and the page's headline: a part marked [data-ocean-calm] (the Portfolio's net worth, floating on the water) is a stretch of calm water
-   the sharks swim round, so the figure is seldom crossed.
+   licence). It is decor: it reads nothing and says nothing, and stands for one figure only — how many sharks swim is the page's to say
+   (OCEAN.bonus: the paper accounts' sharks, shell.js shBonus, one more for each whole 1% they made since they started, one fewer for
+   each 1% lost). The panes float over it as frosted glass (shell.css), and the only other things it answers are the pointer — fish keep
+   clear of it, and a click on open water scatters them — and the page's headline: a part marked [data-ocean-calm] (the Portfolio's net
+   worth, floating on the water) is a stretch of calm water the sharks swim round, so the figure is seldom crossed.
    No word is ever behind a shark — the clear water, read from the page's own boxes: under a pane (anything filled at least half way, or
    frosted: a card, the rail, a panel, a sheet) a shark swims on out of sight, and under a word on the open water nothing is drawn at all,
    not a shark, a fish, a wake or a burst. It is read four times a second, and again at the next frame once the page scrolls, its page
@@ -17,8 +18,10 @@
      the fish     schools: each fish keeps its room, lines up with the school and closes on its middle, one dash each, brighter the
                   nearer it swims and glinting while it turns hard. They bolt from a shark's head and flanks and from the pointer, and the alarm
                   runs fish to fish through a school, so a whole school breaks when only its edge saw the shark
-     the sharks   two to five a visit, of nine kinds drawn at random (OC_SPECIES: blacktip reef, scalloped and great hammerheads, tiger,
-                  mako, thresher, nurse, leopard, and one visit in three a whale shark, the biggest), none twice. Each is a spine of joints
+     the sharks   two to five a visit by the window's width, and the ones the paper accounts earned on top (twelve at most, one at
+                  least: they swim in from an edge, or the smallest swims out, one at a time a few seconds apart), of nine kinds drawn at
+                  random (OC_SPECIES: blacktip reef, scalloped and great hammerheads, tiger, mako, thresher, nurse, leopard, and one visit
+                  in three a whale shark, the biggest), none twice until every kind swims. Each is a spine of joints
                   the head pulls along (each joint bending only so far), a wave running down it, laid on the cells against its kind's
                   top-down outline — its snout, its girth, how its body narrows and how its tail ends (a fork, a ribbon, a thresher's whip),
                   its pectorals, dorsals and eyes, a hammerhead's head — at some sixty cells for the biggest. A cell it covers is a block of
@@ -35,13 +38,15 @@
    is hidden; past 10 ms for a step and a drawing (the 95th percentile of the last 120 of each), it draws every second frame. With
    prefers-reduced-motion there is no loop: one still frame, drawn again when the size, the background or the clear water changes.
 
-   ocMount(canvas)   the ocean drawn into canvas (it sizes itself to the canvas's box); returns { stats(), release() }: stats() is
-                     { fps, p95ms, engineMs, stepMs, drawMs, clearMs, lite, still, cells, fish, sharks, kinds, clear } — the display's frame
-                     rate (the median interval between frames), the 95th percentile of that interval, of the engine's own part of a frame, of
-                     one step of the world, of one drawing (a frame is a drawing and as many steps as the time since the last one asks: one
-                     at 60 fps) and of one read of the clear water, whether it draws every second frame, whether it is still, the grid's
-                     cells, the fish, the sharks and their kinds (deepest first), and the clear water's cells, { panes, words } — or null
-                     where there is no canvas to draw on
+   ocMount(canvas)   the ocean drawn into canvas (it sizes itself to the canvas's box); returns { stats(), bonus(n), release() }: stats()
+                     is { fps, p95ms, engineMs, stepMs, drawMs, clearMs, lite, still, cells, fish, sharks, kinds, bonus, wanted, clear } —
+                     the display's frame rate (the median interval between frames), the 95th percentile of that interval, of the engine's own
+                     part of a frame, of one step of the world, of one drawing (a frame is a drawing and as many steps as the time since the
+                     last one asks: one at 60 fps) and of one read of the clear water, whether it draws every second frame, whether it is
+                     still, the grid's cells, the fish, the sharks in the water now (one leaving among them) and their kinds (deepest first),
+                     the bonus asked for and the sharks it comes to, and the clear water's cells, { panes, words } — or null where there is
+                     no canvas to draw on; bonus(n) the paper accounts' sharks, n more than the window's own (fewer under 0), returning
+                     how many there will be
    OCEAN             the page's own, mounted on #ocean as the page loads */
 
 const OC_STEP = 1 / 60;
@@ -177,15 +182,30 @@ const OC_SPECIES = {
   leopard: { half: ocBody({ snout: 0.1, blunt: 0.7, girth: 0.1, shoulder: 0.28, stalk: 0.55, taper: 1.1, stalkW: 0.022, end: "ribbon" }), pec: [0.12, 0.3, 0.36, 0.19], falcate: false, pelvic: [0.42, 0.48, 0.51, 0.065], tail: 0, dorsal: [0.36, 0.44, 0.3], dorsal2: [0.49, 0.53], eye: [0.06, 0.09, 0.62], gills: [0.13, 0.2], head: null, mark: "spots", back: 0, tint: [1.08, 0.97, 0.74], speed: 0.85, agility: 0.95, hunts: true, size: 1 },
 };
 const OC_KINDS = Object.keys(OC_SPECIES);
-/* how big each shark of a visit is against the biggest (the smaller swim deeper, under the bigger) */
-const OC_SIZES = [1, 0.86, 0.77, 0.69, 0.63];
-/* the sharks of one visit: n kinds, none twice — a whale shark one visit in three, at the head of the list (the biggest), the rest drawn
-   at random from the others */
+/* how big each shark of a visit is against the biggest (the smaller swim deeper, under the bigger): the window's own two to five, then
+   the ones the paper accounts earned, each a little smaller */
+const OC_SIZES = [1, 0.86, 0.77, 0.69, 0.63, 0.6, 0.57, 0.55, 0.53, 0.51, 0.5, 0.49];
+const ocSize = (i) => OC_SIZES[ocClamp(i, 0, OC_SIZES.length - 1)];
+/* how many sharks a window holds of itself, by its width; and the most there are with the ones the paper accounts earned (OCEAN.bonus) */
+const ocBaseCount = (w) => (w >= 1600 ? 5 : w >= 1100 ? 4 : w >= 700 ? 3 : 2);
+const OC_MOST = 12;
+/* the sharks of one visit: n kinds — a whale shark one visit in three, at the head of the list (the biggest), the rest drawn at random
+   from the others, none twice until every other kind is in the water (more than nine only with the paper accounts' sharks) */
 function ocRoster(n) {
-  const pool = OC_KINDS.filter((k) => k !== "whale");
   const out = Math.random() < 0.34 ? ["whale"] : [];
-  while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  let pool = [];
+  while (out.length < n) {
+    if (!pool.length) pool = OC_KINDS.filter((k) => k !== "whale");
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
   return out;
+}
+/* the kind of a shark joining the water: one not in it yet where there is one (never a second whale shark: it is the biggest), else any */
+function ocJoinKind(have) {
+  const all = OC_KINDS.filter((k) => k !== "whale");
+  const fresh = all.filter((k) => !have.includes(k));
+  const from = fresh.length ? fresh : all;
+  return from[Math.floor(Math.random() * from.length)];
 }
 /* a marking at a point of a shark's skin — s along, v across (signed, a share of the length), `across` its share of the half-width there:
    1 darker (a tiger's bars, a leopard shark's spots), 2 paler (a whale shark's spots and lines, a leopard shark's ridges), 0 none. Spots sit
@@ -218,7 +238,7 @@ function ocMarkAt(P, s, v, across, id) {
 }
 
 function ocMount(canvas) {
-  const none = { stats: () => null, release() {} };
+  const none = { stats: () => null, bonus: () => 0, release() {} };
   if (!canvas || typeof canvas.getContext !== "function" || typeof requestAnimationFrame !== "function" || typeof getComputedStyle !== "function") return none;
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) return none;
@@ -296,6 +316,12 @@ function ocMount(canvas) {
   const roomY = new Float32Array(OC_FISH.length);
   let other = 40;
   let sharks = [];
+  // the sharks the paper accounts earned: how many more (or fewer) than the window's own count the page asked for (OCEAN.bonus); each
+  // shark's id (its markings' seed), counted up; when the next one may join or leave (one at a time, a few seconds apart, so each is seen)
+  let bonus = 0;
+  let nextId = 1;
+  let adjustAt = 0;
+  const wanted = () => ocClamp(ocBaseCount(W) + bonus, 1, OC_MOST);
   const pointer = { x: 0, y: 0, on: false };
   // the calm water: the boxes of the parts marked [data-ocean-calm], read again at most four times a second
   let calm = [];
@@ -543,34 +569,37 @@ function ocMount(canvas) {
 
   // ---- the world ---------------------------------------------------------------------------------------------------------------------
 
+  /* a shark of a kind and a size (against the biggest), its head at x, y and heading so, its body laid out straight behind it */
+  function makeShark(kind, size, x, y, heading, dir, orbit) {
+    const L = ocClamp(Math.min(W, H) * 0.5, 180, 460) * size * OC_SPECIES[kind].size;
+    const joints = new Float32Array(OC_JOINTS * 2);
+    const seg = L / (OC_JOINTS - 1);
+    for (let k = 0; k < OC_JOINTS; k++) {
+      joints[k * 2] = x - Math.cos(heading) * seg * k;
+      joints[k * 2 + 1] = y - Math.sin(heading) * seg * k;
+    }
+    return { id: nextId++, kind, L, joints, heading, speed: 30, phase: ocRand(0, Math.PI * 2), turn: 0, hunger: ocRand(0.25, 0.75), wander: 0, dir, orbit, target: -1, retarget: 0, depth: size, fills: [], inkOf: new Uint8Array(OC_LEVELS), leaving: false };
+  }
+  /* the deeper (smaller) first, so the bigger swim over them; each numbered in that order (its blocks are counted by that number) */
+  function rank() {
+    sharks.sort((a, b) => a.L - b.L);
+    sharks.forEach((sh, i) => (sh.slot = i + 1));
+  }
   function seed() {
     const side = Math.min(W, H);
-    const base = ocClamp(side * 0.5, 180, 460);
-    const count = W >= 1600 ? 5 : W >= 1100 ? 4 : W >= 700 ? 3 : 2;
+    const count = wanted();
     // this visit's kinds (ocRoster), the first the biggest
     const kinds = ocRoster(count);
     sharks = [];
     for (let i = 0; i < kinds.length; i++) {
-      const kind = kinds[i];
-      const size = OC_SIZES[i];
-      const L = base * size * OC_SPECIES[kind].size;
       const orbit = side * ocRand(0.28, 0.4);
       const a = (i / count) * Math.PI * 2 + ocRand(-0.4, 0.4);
       const dir = i % 2 === 0 ? 1 : -1;
       const x = W / 2 + Math.cos(a) * orbit * (W / side) * 0.9;
       const y = H / 2 + Math.sin(a) * orbit;
-      const heading = a + (dir * Math.PI) / 2;
-      const joints = new Float32Array(OC_JOINTS * 2);
-      const seg = L / (OC_JOINTS - 1);
-      for (let k = 0; k < OC_JOINTS; k++) {
-        joints[k * 2] = x - Math.cos(heading) * seg * k;
-        joints[k * 2 + 1] = y - Math.sin(heading) * seg * k;
-      }
-      sharks.push({ id: i + 1, kind, L, joints, heading, speed: 30, phase: ocRand(0, Math.PI * 2), turn: 0, hunger: ocRand(0.25, 0.75), wander: 0, dir, orbit, target: -1, retarget: 0, depth: size, fills: [], inkOf: new Uint8Array(OC_LEVELS) });
+      sharks.push(makeShark(kinds[i], ocSize(i), x, y, a + (dir * Math.PI) / 2, dir, orbit));
     }
-    // the deeper (smaller) first, so the bigger swim over them
-    sharks.sort((a, b) => a.L - b.L);
-    sharks.forEach((sh, i) => (sh.slot = i + 1));
+    rank();
 
     N = ocClamp(Math.round((W * H) / 4600), 70, 320);
     fx = new Float32Array(N);
@@ -608,6 +637,42 @@ function ocMount(canvas) {
       }
     }
     if (pal) shadeSharks();
+  }
+  /* one shark more: a kind not in the water yet where there is one, the next size down, swimming in from an edge toward the middle */
+  function join() {
+    const stay = sharks.filter((sh) => !sh.leaving);
+    const edge = Math.floor(Math.random() * 4);
+    const x = edge === 0 ? -cw * 2 : edge === 1 ? W + cw * 2 : ocRand(W * 0.15, W * 0.85);
+    const y = edge === 2 ? -ch * 2 : edge === 3 ? H + ch * 2 : ocRand(H * 0.15, H * 0.85);
+    const heading = Math.atan2(H / 2 - y, W / 2 - x) + ocRand(-0.3, 0.3);
+    sharks.push(makeShark(ocJoinKind(stay.map((sh) => sh.kind)), ocSize(stay.length), x, y, heading, Math.random() < 0.5 ? 1 : -1, Math.min(W, H) * ocRand(0.28, 0.4)));
+    rank();
+    if (pal) shadeSharks();
+  }
+  /* one shark fewer: the smallest still here turns for the nearest edge, and is gone once it is out of the window (stepSharks) */
+  function leave() {
+    const stay = sharks.filter((sh) => !sh.leaving);
+    if (stay.length > 1) stay[0].leaving = true;
+  }
+  /* the water brought to the count wanted, a shark at a time — one joins, or the smallest leaves — a few seconds apart */
+  function adjust() {
+    if (!cols || time < adjustAt) return;
+    const here = sharks.filter((sh) => !sh.leaving).length;
+    const want = wanted();
+    if (here === want) return;
+    if (here < want) join();
+    else leave();
+    adjustAt = time + 2.5;
+  }
+  /* gone: every joint of a shark that is leaving out past the window's edge, by more than its fins reach */
+  function gone(sh) {
+    const m = sh.L * 0.3;
+    for (let k = 0; k < OC_JOINTS; k++) {
+      const x = sh.joints[k * 2];
+      const y = sh.joints[k * 2 + 1];
+      if (x > -m && x < W + m && y > -m && y < H + m) return false;
+    }
+    return true;
   }
   function pickKind() {
     let r = Math.random() * OC_ODDS;
@@ -854,13 +919,20 @@ function ocMount(canvas) {
       dx += Math.cos(sh.heading + sh.wander) * 0.45;
       dy += Math.sin(sh.heading + sh.wander) * 0.45;
       if (time >= sh.retarget) {
-        sh.target = S.hunts ? prey(sh) : -1;
+        sh.target = S.hunts && !sh.leaving ? prey(sh) : -1;
         sh.retarget = time + 0.45;
       }
       const t = sh.target;
       let hunting = false;
       let closing = 0;
-      if (t >= 0 && falive[t] && sh.hunger > 0.3) {
+      if (sh.leaving) {
+        // leaving the water: straight out from its middle, past the nearest edge
+        const ox = (hx - cxW) / (W / side);
+        const oy = hy - cyW;
+        const d = Math.hypot(ox, oy) || 1;
+        dx += (ox / d) * 2.4;
+        dy += (oy / d) * 2.4;
+      } else if (t >= 0 && falive[t] && sh.hunger > 0.3) {
         // aim where the fish is about to be
         const tx = fx[t] + fvx[t] * 0.35 - hx;
         const ty = fy[t] + fvy[t] * 0.35 - hy;
@@ -906,9 +978,9 @@ function ocMount(canvas) {
           dy += (ey / e) * w;
         }
       }
-      // the snout out of the window: turn back, so a body dips off the edge now and then but never wanders away
+      // the snout out of the window: turn back, so a body dips off the edge now and then but never wanders away (unless it is leaving)
       const out = Math.max(-hx, hx - W, -hy, hy - H);
-      if (out > -L * 0.05) {
+      if (!sh.leaving && out > -L * 0.05) {
         const w = ocClamp((out + L * 0.05) / (L * 0.35), 0, 1) * 3.5;
         const toX = cxW - hx;
         const toY = cyW - hy;
@@ -1093,6 +1165,12 @@ function ocMount(canvas) {
     sortFish();
     stepFish(dt);
     stepSharks(dt);
+    // a shark that has left the water is gone; the next joins or leaves when it is due
+    if (sharks.some((sh) => sh.leaving && gone(sh))) {
+      sharks = sharks.filter((sh) => !(sh.leaving && gone(sh)));
+      rank();
+    }
+    adjust();
     respawn();
   }
 
@@ -1676,7 +1754,20 @@ function ocMount(canvas) {
   return {
     stats() {
       const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[gaps.length >> 1] : 0;
-      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), clearMs: +p95(clearCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length, kinds: sharks.map((sh) => sh.kind), clear: { panes: clearN[0], words: clearN[1] } };
+      return { fps: med ? Math.round(1000 / med) : 0, p95ms: +p95(gaps).toFixed(1), engineMs: +p95(costs).toFixed(2), stepMs: +p95(stepCosts).toFixed(2), drawMs: +p95(drawCosts).toFixed(2), clearMs: +p95(clearCosts).toFixed(2), lite, still: isStill(), cells: cols * rows, fish: N, sharks: sharks.length, kinds: sharks.map((sh) => sh.kind), bonus, wanted: cols ? wanted() : 0, clear: { panes: clearN[0], words: clearN[1] } };
+    },
+    /* the sharks the paper accounts earned: n more than the window's own count (fewer where n is under 0), one at least and OC_MOST at
+       most in all. While the world moves they swim in from an edge — or the smallest swim out — one at a time, a few seconds apart; under
+       reduced motion the still frame is drawn again with them. Returns how many there will be */
+    bonus(n) {
+      const v = Math.trunc(Number(n));
+      bonus = Number.isFinite(v) ? ocClamp(v, -OC_MOST, OC_MOST) : 0;
+      if (released || !cols) return cols ? wanted() : 0;
+      if (isStill() && sharks.length !== wanted()) {
+        seed();
+        stillFrame();
+      }
+      return wanted();
     },
     release() {
       released = true;
