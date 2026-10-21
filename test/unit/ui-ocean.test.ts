@@ -126,7 +126,7 @@ function ocean(opts: { still?: boolean; tokens?: Record<string, string>; calm?: 
     ground,
     listeners,
     pending: () => frames.length,
-    stats: () => run<Record<string, number | boolean>>("OCEAN.stats()"),
+    stats: () => run<Record<string, number | boolean | string[]>>("OCEAN.stats()"),
     fire: (on: string, type: string, e?: unknown) => (heard[`${on}:${type}`] ?? []).forEach((fn) => fn(e)),
     hide: (hidden: boolean) => ((sandbox.document as { hidden: boolean }).hidden = hidden),
     setMotion: (still: boolean) => (motion.matches = still),
@@ -151,8 +151,14 @@ describe("the ocean, the page's ground", () => {
     expect(s.still).toBe(false);
     expect(s.sharks).toBe(4);
     expect(s.fish).toBe(282);
-    // the grid's cells: a 140th of 1440 is 10 px, half again as tall, at 2× (144 × 60)
-    expect(s.cells).toBe(8640);
+    // the grid's cells: a 170th of 1440 is 8 px, half again as tall, at 2× (180 × 75)
+    expect(s.cells).toBe(13500);
+    // this visit's kinds: four, none twice, each one the ocean knows (a whale shark, when there is one, is the biggest: drawn last)
+    const kinds = s.kinds as unknown as string[];
+    expect(kinds).toHaveLength(4);
+    expect(new Set(kinds).size).toBe(4);
+    for (const k of kinds) expect(o.run<string[]>("OC_KINDS"), k).toContain(k);
+    if (kinds.includes("whale")) expect(kinds.at(-1)).toBe("whale");
     // one step and one drawing measured apiece
     expect(Number(s.stepMs)).toBeGreaterThan(0);
     expect(Number(s.drawMs)).toBeGreaterThan(0);

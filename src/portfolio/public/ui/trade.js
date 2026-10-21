@@ -1838,7 +1838,7 @@ function tkTicket(panel, kind0, preset) {
     const p = tkTopPrice(b.dataset.px, topNow(), { side, step: mk.priceStep });
     if (p > 0) setLimitTo(p);
   });
-  /* the sign button in the side's colour: Sell and Short red, as HL's own (trade.css) */
+  /* the sign button in the side's colour: Buy and Long in the green, Sell and Short in the red (trade.css) */
   const sideButton = () => {
     if (btn.dataset) btn.dataset.side = side;
   };

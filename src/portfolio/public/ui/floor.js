@@ -1,4 +1,4 @@
-/* THE FLOOR — the superagent's desk drawn as a trading floor on one canvas: a deep-sea room in the trading area's colours, a back wall with the
+/* THE FLOOR — the superagent's desk drawn as a trading floor on one canvas: a dark room (a screen in either background), a back wall with the
    wall screen, the ticker tape, a New York clock, the target trophy, the shredder and the brain's rack, and on the floor one desk per seat
    of the Desk (Head, Search, Risk, Sniper, Exit, Watch, and the two seats only an outside agent can take, Flow and Sentiment) with a soft
    blob mascot at each, speaking in bubbles, passing leads to one another as glowing packets and firing orders at the wall screen.
@@ -114,12 +114,12 @@
    each restore (flRestore) the font and the letter spacing it holds are taken as unknown and set again before the next word.
 
    Colours and type: the trading area's tokens (ui/tokens.css, the --hl-* set behind the Account's names there) read from the canvas's
-   container with getComputedStyle, each from the first name it sets (FL_VARS): the room keeps its own deep-sea field (--sg-deep and
+   container with getComputedStyle, each from the first name it sets (FL_VARS): the room keeps its own dark field (--sg-deep and
    --sg-deep-2 on .sg-floor, else --bg and --surface), the words in --text and --dim, the lines in --sg-line (else --border), the accent
-   in --sg-mint (else --primary) with --sg-ink (else --on-primary) on it, rises and falls in --up and --down (the area's green and red),
-   what waits in --warn, the screen's scanlines in --sg-scan, the glass and the shadows toward --sg-shadow (else the deep sea darkened),
+   in --sg-mint (else --primary) with --sg-ink (else --on-primary) on it, rises and falls in --up and --down (the Swiss green and red),
+   what waits in --warn, the screen's scanlines in --sg-scan, the glass and the shadows toward --sg-shadow (else the room darkened),
    each mascot in --sg-r-<role> (the same colour as the role's card); FL_PALETTE's values where none is set. Every word is in the area's
-   face (--font-sans: Manrope there), as a trading screen draws it: no monospace face is drawn. The ▲/▼ glyphs ride with every up
+   face (--font-sans: Inter there), as a trading screen draws it: no monospace face is drawn. The ▲/▼ glyphs ride with every up
    and down: never colour alone. Amber is for what waits (the owner's tray while a card waits, a seat not let in) and the halt banner's
    second line only. */
 
@@ -146,19 +146,18 @@ const FL_WHAT = { scan: "scanning", clear: "clearing", enter: "entering", exit: 
 /* each mascot's tint, inside the accent's family: the accent mixed toward the room's text (lighter) or its surface (darker) by a step of its
    own, so no two seats share a lightness; the name under each mascot says who it is, never the colour alone */
 const FL_TINT = { head: ["text", 0.42], search: ["text", 0.14], sniper: ["surface", 0.06], watch: ["surface", 0.17], exit: ["surface", 0.26], risk: ["surface", 0.34], flow: ["surface", 0.43], sentiment: ["surface", 0.5] };
-/* the colours where the container sets none: the floor's own deep-sea field and the trading area's tokens (ui/tokens.css, the ocean's
-   Black) — its text, its dim words, its accent (the wake's cyan) and the near-black on it, its up green and its down red — and the amber
-   of what waits */
+/* the colours where the container sets none: the floor's own dark room (ui/superagent.css .sg-floor) — its words, its dim words, white for
+   what is on and black on it, the Swiss green and red as Black writes them — and the amber of what waits */
 const FL_PALETTE = {
-  bg: "#05090c",
-  surface: "#0c161b",
+  bg: "#08090a",
+  surface: "#121315",
   text: "#f2f2f0",
   dim: "#9d9d98",
-  line: "rgba(140,239,255,0.16)",
-  mint: "#8cefff",
-  ink: "#00161b",
-  up: "#3fcf72",
-  down: "#ff6b61",
+  line: "rgba(255,255,255,0.14)",
+  mint: "#ffffff",
+  ink: "#0a0a0a",
+  up: "#3bb360",
+  down: "#ff7360",
   warn: "#f5c46b",
   scan: "rgba(0,0,0,0.16)",
 };
@@ -1401,7 +1400,7 @@ function flEngine(canvas, opts) {
     pal: flPalette(null),
     cc: Object.create(null),
     fonts: Object.create(null),
-    sans: '"Manrope", system-ui, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", sans-serif',
+    sans: '"Inter", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
     font: "",
     track: "",
     hasTrack: !!ctx && "letterSpacing" in ctx,
@@ -1693,7 +1692,7 @@ function flResize(E) {
   // every bubble showing laid out again for this size, from its own text
   flRewrapBubbles(E);
 }
-/* the face the page's tokens name (--font-sans: Manrope in the trading area), where it names one */
+/* the face the page's tokens name (--font-sans: Inter in the trading area), where it names one */
 function flFontsOf(E, host) {
   try {
     if (!host || typeof getComputedStyle !== "function") return;
@@ -1705,7 +1704,7 @@ function flFontsOf(E, host) {
 }
 /* the colours made from the palette: each mascot's tint (the page's --sg-r-<role> where it sets one, else the mint stepped toward the
    text or the surface), the desks, the wall and the floor; the glass and the shadows mix toward the page's shade (--sg-shadow), else
-   toward the deep sea darkened — never a colour of the floor's own */
+   toward the room darkened — never a colour of the floor's own */
 function flDerive(E) {
   const p = E.pal;
   for (const role of FL_ROLES) {

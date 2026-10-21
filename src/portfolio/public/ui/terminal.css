@@ -1,9 +1,10 @@
 /* The Trade terminal (ui/terminal.js) in Hyperliquid's own grammar, measured from app.hyperliquid.xyz/trade (scratchpad hl-reference.md,
-   §3 and §5), in the ocean's colours: dark glass panels (--hl-glass, radius 10, a hairline inside the edge, no shadow) six pixels apart,
-   the water showing in the gutters — the order book on the solid panel colour, its figures never over a moving blur (and its hover card,
-   a fixed box, never held inside a blurred panel); 12/15 at weight 400 almost everywhere; tabs with a 1 px line under every tab and a 1 px
-   accent under the one showing; controls 33 high with an 8 px radius; colour, fill and edge changing over .2 s ease-in-out. Every colour
-   is a token of the trading area (ui/tokens.css, :root[data-area="trade"]), never a value written here.
+   §3 and §5), in the ocean's colours and the background the Account wears (Light or Black): glass panels (--hl-glass, radius 4, a
+   hairline inside the edge, no shadow) six pixels apart, the water showing in the gutters — the order book on the solid panel colour, its
+   figures never over a moving blur (and its hover card, a fixed box, never held inside a blurred panel); 12/15 Inter at weight 400 almost
+   everywhere; tabs with a 1 px line under every tab and a 1 px red line under the one showing; controls 33 high with a 3 px radius; colour,
+   fill and edge changing over .2 s ease-in-out. Every colour is a token of the trading area (ui/tokens.css, :root[data-area="trade"]),
+   never a value written here.
 
    Laid out by the terminal's OWN width (a container, `tt`), not the window's: the rail and the page's margins take part of the window, so a
    window rule would squeeze the chart where a terminal rule does not.
@@ -180,11 +181,11 @@
 /* ---- the tabs, as every tab bar in the terminal draws them (REF §5.5): the order panel's (trade.css) and the book's (book.css) share it
    ---------------------------------------------------------------------------------------------------------------------------------------- */
 .tt-tabs button, .tt-mtabs button { flex: none; padding: 0 12px; border: 0; border-bottom: 1px solid var(--hl-tabline); border-radius: 0; margin: 0; background: transparent; color: var(--hl-dim); font: 400 12px/34px var(--font-sans); letter-spacing: normal; white-space: nowrap; cursor: pointer; transition: color var(--hl-ease); }
-.tt-tabs button[aria-selected="true"], .tt-mtabs button[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.tt-tabs button[aria-selected="true"], .tt-mtabs button[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-mark); }
 /* the line under the tab showing slides to the tab pressed (book.js bkSlideUnder, HL's .3 s): one line the bar draws, at the pressed tab's
    place and width; until it is measured the pressed tab keeps its own */
 .tt-tabs, .tt-mtabs { position: relative; }
-:is(.tt-tabs, .tt-mtabs).slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
+:is(.tt-tabs, .tt-mtabs).slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-mark); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
 :is(.tt-tabs, .tt-mtabs).slide-under button[aria-selected="true"] { box-shadow: none; }
 .tt-tabs button:focus-visible, .tt-mtabs button:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -2px; }
 @media (hover: hover) {

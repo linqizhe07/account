@@ -648,7 +648,7 @@ describe("the line under the tab showing (HL's sliding underline)", () => {
     // reduced motion
     const book = readFileSync(`${UI}book.css`, "utf8");
     const term = readFileSync(`${UI}terminal.css`, "utf8");
-    expect(book).toContain(".bk-tabs.slide-under::after { content: \"\"; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease;");
+    expect(book).toContain(".bk-tabs.slide-under::after { content: \"\"; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-mark); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease;");
     expect(book).toContain('.bk-tabs.slide-under .bk-tab[aria-selected="true"] { box-shadow: none; }');
     expect(book).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.bk-tabs\.slide-under::after \{ transition: none; \}/);
     expect(term).toContain(":is(.tt-tabs, .tt-mtabs).slide-under::after {");

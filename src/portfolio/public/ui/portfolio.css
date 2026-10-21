@@ -1,13 +1,13 @@
 /* The Portfolio pane (ui/portfolio.js), the Account drawer, Receive and Move money (ui/money.js), and the Earn and Sell many sheets
    (ui/earn.js), in the ocean look: the net worth floats on open water, every other part of the pane is a glass card over it (shell.css
-   .card, which a .sec in a pane is), what waits for the owner a warm card with a soft orange edge, the large figures in Manrope's thinnest
-   weight, labels in Geist Mono. Colours, radii and shadows only from ui/tokens.css, so Light and Black alike; up and down always with
+   .card, which a .sec in a pane is), what waits for the owner a warm card with a soft orange edge, the large figures bold and tight in
+   Inter's Display cut, labels small and bold. Colours, radii and shadows only from ui/tokens.css, so Light and Black alike; up and down always with
    their glyph. Motion: transform and opacity only (and an outline's colour), none under prefers-reduced-motion. */
 
 .pf { min-width: 0; }
 .pf-fresh { display: flex; flex-direction: column; gap: 20px; max-width: 760px; }
 
-/* the net worth: its label, the number (58, Manrope 200), ONE change line (today's, or the range's) with the ⓘ at its end, the range, and
+/* the net worth: its label, the number (60, Inter 600), ONE change line (today's, or the range's) with the ⓘ at its end, the range, and
    the curve (140 high, the line in the text colour, the area under it barely). No card: it floats on the water as the reference's headline
    does, over a fog of the ground's own colour (thick in the middle, gone at the edge) that keeps it legible while something swims under
    it — and the sharks swim round it (account.html's ocean reads [data-ocean-calm]) */

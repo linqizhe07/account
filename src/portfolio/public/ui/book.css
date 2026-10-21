@@ -19,10 +19,10 @@
 .bk-head { display: flex; flex-wrap: wrap; flex: none; height: auto; padding: 0; border-bottom: 0; min-width: 0; }
 .bk-tabs { position: relative; flex: 1 0 100%; display: grid; grid-template-columns: 1fr 1fr; min-width: 0; }
 /* the line under the tab showing slides to the tab pressed (book.js bkSlideUnder, HL's .3 s); until it is measured the tab keeps its own */
-.bk-tabs.slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-accent-soft); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
+.bk-tabs.slide-under::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--tab-w, 0px); height: 1px; background: var(--hl-mark); transform: translateX(var(--tab-x, 0px)); transition: transform .3s ease, width .3s ease; pointer-events: none; }
 .bk-tabs.slide-under .bk-tab[aria-selected="true"] { box-shadow: none; }
 .bk-tab { min-height: 0; padding: 0 8px; border: 0; border-bottom: 1px solid var(--hl-tabline); border-radius: 0; margin: 0; background: transparent; color: var(--hl-dim); font: 400 12px/40px var(--font-sans); letter-spacing: normal; box-shadow: none; cursor: pointer; white-space: nowrap; transition: color var(--hl-ease); }
-.bk-tab[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-accent-soft); }
+.bk-tab[aria-selected="true"] { color: var(--hl-text); box-shadow: inset 0 -1px 0 var(--hl-mark); }
 .bk-tab:focus-visible, .bk-group:focus-visible, .bk-row:focus-visible, .bk-ladder:focus-visible { outline: 1px solid var(--hl-muted); outline-offset: -1px; }
 /* the ladder is the book's one tab stop (its levels are reached with the arrow keys: book.js bkWire) */
 .bk-ladder { outline: none; }

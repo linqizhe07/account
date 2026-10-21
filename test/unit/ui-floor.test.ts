@@ -403,10 +403,10 @@ describe("the floor's pure parts", () => {
   it("colours a node by its change: up in the up colour, down in the down colour, stronger the larger the move, the dim colour for none", () => {
     const p = page();
     // the trading area's up green and down red, never the accent for a rise
-    expect(p.run("flNodeColor(4)")).toBe("rgba(63,207,114,0.675)");
-    expect(p.run("flNodeColor(-8)")).toBe("rgba(255,107,97,1)");
-    expect(p.run("flNodeColor(-40)")).toBe("rgba(255,107,97,1)");
-    expect(p.run("flNodeColor(0.8)")).toBe("rgba(63,207,114,0.415)");
+    expect(p.run("flNodeColor(4)")).toBe("rgba(59,179,96,0.675)");
+    expect(p.run("flNodeColor(-8)")).toBe("rgba(255,115,96,1)");
+    expect(p.run("flNodeColor(-40)")).toBe("rgba(255,115,96,1)");
+    expect(p.run("flNodeColor(0.8)")).toBe("rgba(59,179,96,0.415)");
     for (const none of ["undefined", "null", "NaN", "0", '""']) expect(p.run(`flNodeColor(${none})`), none).toBe("rgba(157,157,152,0.55)");
     // a page's own green is used where it sets one
     expect(p.run(`flNodeColor(8, { up: [1, 2, 3, 1], down: [4, 5, 6, 1], dim: [7, 8, 9, 1] })`)).toBe("rgba(1,2,3,1)");
@@ -438,24 +438,24 @@ describe("the floor's pure parts", () => {
     expect(p.run<number>("flSnap(7.9, 3, 1)")).toBeCloseTo(23.5 / 3, 12);
   });
 
-  it("reads its colours from the container's tokens where set — the floor's own deep-sea field first, then the trading area's names — and the area's values where not", () => {
+  it("reads its colours from the container's tokens where set — the floor's own dark field first, then the trading area's names — and the area's values where not", () => {
     const p = page();
     expect(p.run("flRgb('#97fce3')")).toEqual([151, 252, 227, 1]);
     expect(p.run("flRgb('#abc')")).toEqual([170, 187, 204, 1]);
     expect(p.run("flRgb(' rgba(238, 248, 244, 0.62) ')")).toEqual([238, 248, 244, 0.62]);
     expect(p.run("flRgb('rgb(1 2 3 / 50%)')")).toEqual([1, 2, 3, 0.5]);
     expect(p.run("flRgb('color-mix(in srgb, red, blue)')")).toBeNull();
-    // with nothing set: the floor's deep-sea field, and the trading area's text, dim words, accent, near-black, up, down and amber
+    // with nothing set: the floor's own dark room, its words, dim words, white accent and the black on it, its up, down and amber
     const spec = p.run<Record<string, number[]>>("flPalette(null)");
-    expect(spec.bg).toEqual([5, 9, 12, 1]);
-    expect(spec.surface).toEqual([12, 22, 27, 1]);
+    expect(spec.bg).toEqual([8, 9, 10, 1]);
+    expect(spec.surface).toEqual([18, 19, 21, 1]);
     expect(spec.text).toEqual([242, 242, 240, 1]);
     expect(spec.dim).toEqual([157, 157, 152, 1]);
-    expect(spec.line).toEqual([140, 239, 255, 0.16]);
-    expect(spec.mint).toEqual([140, 239, 255, 1]);
-    expect(spec.ink).toEqual([0, 22, 27, 1]);
-    expect(spec.up).toEqual([63, 207, 114, 1]);
-    expect(spec.down).toEqual([255, 107, 97, 1]);
+    expect(spec.line).toEqual([255, 255, 255, 0.14]);
+    expect(spec.mint).toEqual([255, 255, 255, 1]);
+    expect(spec.ink).toEqual([10, 10, 10, 1]);
+    expect(spec.up).toEqual([59, 179, 96, 1]);
+    expect(spec.down).toEqual([255, 115, 96, 1]);
     expect(spec.warn).toEqual([245, 196, 107, 1]);
     expect(spec.scan).toEqual([0, 0, 0, 0.16]);
     // the first name set wins: --sg-mint before --primary, --sg-deep before --bg; one that is not a colour is passed over
@@ -463,7 +463,7 @@ describe("the floor's pure parts", () => {
     const got = q.run<Record<string, number[]>>("flPalette({})");
     expect(got.mint).toEqual([17, 34, 51, 1]);
     expect(got.down).toEqual([9, 8, 7, 1]);
-    expect(got.bg).toEqual([5, 9, 12, 1]);
+    expect(got.bg).toEqual([8, 9, 10, 1]);
     const area = page({ css: { "--sg-deep": "#072723", "--bg": "#1b2429", "--surface": "#0f1a1f", "--text": "#f6fefd", "--dim": "#949e9c", "--sg-mint": "#97fce4", "--primary": "#50d2c1", "--on-primary": "#04060c", "--up": "#1fa67d" } });
     const a = area.run<Record<string, number[]>>("flPalette({})");
     expect(a.bg).toEqual([7, 39, 35, 1]);
@@ -780,7 +780,7 @@ describe("the floor mounted", () => {
 });
 
 describe("the floor after review: what it never says wrongly, and what it never redoes per frame", () => {
-  const MINT_CORAL = /^rgba\(255,107,97,/;
+  const MINT_CORAL = /^rgba\(255,115,96,/;
   const labelOf = (texts: string[], from: string, n: number) => texts.slice(texts.indexOf(from) + 1, texts.indexOf(from) + 1 + n).join(" ");
 
   it("lays a bubble out again from its own text after the canvas was 0 × 0: never an older line for a newer one", () => {
@@ -887,14 +887,14 @@ describe("the floor after review: what it never says wrongly, and what it never 
     expect(pal.scan).toEqual([1, 2, 3, 0.2]);
     expect(pal.shade).toEqual([1, 2, 3, 1]);
     // the glass mixes toward the page's shade, not toward a black of the floor's own
-    expect(pal.glass!.slice(0, 3).map(Math.round)).toEqual([4, 7, 9]);
-    // a role the page does not colour: the floor's own step of the mint; no shade set: the deep sea darkened
+    expect(pal.glass!.slice(0, 3).map(Math.round)).toEqual([6, 7, 8]);
+    // a role the page does not colour: the floor's own step of the mint; no shade set: the room darkened
     const q = page();
     const own = q.run<Record<string, number[]>>("(() => { const E = { pal: flPalette(null) }; flDerive(E); return E.pal; })()");
     expect(own.r_risk).not.toEqual([185, 242, 227, 1]);
     expect(own.scan).toEqual([0, 0, 0, 0.16]);
     expect(own.shade).toBeUndefined();
-    expect(own.glass!.slice(0, 3).map(Math.round)).toEqual([3, 6, 8]);
+    expect(own.glass!.slice(0, 3).map(Math.round)).toEqual([5, 6, 7]);
   });
 
   it("changes the tape seamlessly: new quotes enter from the right after the current loop, nothing on the tape changes in place", () => {
@@ -1189,7 +1189,7 @@ describe("the floor after review: what it never says wrongly, and what it never 
 
 
 describe("the floor in the trading area: its tokens, its words, and its story before its state", () => {
-  const SANS = '"Manrope", system-ui, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", sans-serif';
+  const SANS = '"Inter", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif';
   /** the words drawn after a label, in order (the shredder's count after "REJECTED") */
   const after = (texts: string[], from: string) => texts[texts.lastIndexOf(from) + 1];
   /** New York's hh:mm for a time, as the floor's clock writes it */
@@ -1268,7 +1268,7 @@ describe("the floor in the trading area: its tokens, its words, and its story be
       p.rec.clear();
       p.frame((t += 40));
       if (p.rec.texts.join(" ").includes("a line said while")) said = true;
-      if (p.rec.seq.some((x) => x.op === "fillRect" && x.style === "rgba(5,9,12,0.55)" && x.args[0] === -12)) veil = true;
+      if (p.rec.seq.some((x) => x.op === "fillRect" && x.style === "rgba(8,9,10,0.55)" && x.args[0] === -12)) veil = true;
       if (p.rec.texts.includes(`NOT READ SINCE ${nyHM(since)} NEW YORK`)) words = true;
     }
     expect(said).toBe(false);
@@ -1525,7 +1525,7 @@ describe("the floor in the trading area: its tokens, its words, and its story be
 
 describe("the floor, polished for real users: money, the brain, the empty screen, the marks, the trophy and the tray say true things plainly", () => {
   /** New York's hh:mm for a time, as the floor's clock writes it */
-  const CANDLE = /^rgba\((63,207,114|255,107,97),0\.95\)$/;
+  const CANDLE = /^rgba\((59,179,96|255,115,96),0\.95\)$/;
   /** where the candles end on the wall screen: the right edge of the rightmost wick or body drawn */
   const barsEnd = (seq: Array<{ op: string; style: string; args: unknown[] }>) =>
     Math.max(...seq.filter((x) => x.op === "fillRect" && CANDLE.test(x.style)).map((x) => Number(x.args[0]) + Number(x.args[2])));
@@ -1667,8 +1667,8 @@ describe("the floor, polished for real users: money, the brain, the empty screen
     const seq = p.rec.seq;
     const lastStroke = (re: RegExp) => seq.reduce((at, x, i) => ((x.op === "stroke" || x.op === "strokeRect") && re.test(x.style) ? i : at), -1);
     // the last price's dashed line (the up colour at 0.75) and the thread from the picked node (the accent, faint)
-    const priceLine = lastStroke(/^rgba\(63,207,114,0\.75\)$/);
-    const thread = lastStroke(/^rgba\(140,239,255,0\.32\)$/);
+    const priceLine = lastStroke(/^rgba\(59,179,96,0\.75\)$/);
+    const thread = lastStroke(/^rgba\(255,255,255,0\.32\)$/);
     expect(priceLine).toBeGreaterThan(0);
     expect(thread).toBeGreaterThan(0);
     const firstWord = seq.findIndex((x) => x.op === "fillText" && /^L-0002 (TP|SL|ENTRY)/.test(String(x.args[0])));
@@ -1704,7 +1704,7 @@ describe("the floor, polished for real users: money, the brain, the empty screen
       expect(["OF TARGET", "OF GOAL"], at).toContain(t[fig + 1]);
       // in the down colour (with its minus), the label in the fixtures' mint
       const seqFig = p.rec.seq.find((x) => x.op === "fillText" && x.args[0] === "−0.2%")!;
-      expect(seqFig.style, at).toBe("rgba(255,107,97,1)");
+      expect(seqFig.style, at).toBe("rgba(255,115,96,1)");
     }
   });
 

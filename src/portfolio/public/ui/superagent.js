@@ -58,8 +58,9 @@
    WHILE THE ACCOUNT DOES NOT ANSWER: said in the page's own words, since when; after two misses the session's clock and the countdown stop,
    the floor dims and says since when (sgFloorState stale), and the beat asks less often (1, 2, 5, then every 10 s) until it answers.
 
-   The look is Hyperliquid's trade app, on the trading area's tokens (ui/tokens.css html[data-area="trade"]): panels, controls, type and
-   motion as Regular has them, so the two modes are one screen. Only the floor keeps a green field of its own (.sg-floor, ui/superagent.css).
+   The look is Hyperliquid's trade app's grammar, on the trading area's tokens (ui/tokens.css html[data-area="trade"]): panels, controls,
+   type and motion as Regular has them, so the two modes are one screen. Only the floor keeps a field of its own, a dark screen in either
+   background (.sg-floor, ui/superagent.css).
    Every string from outside is escaped before it is drawn. The parts are built once and painted with paint(): a read that changed nothing
    writes nothing. */
 

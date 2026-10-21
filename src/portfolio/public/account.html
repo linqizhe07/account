@@ -4,13 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Account</title>
-<script>/* the background before the first paint: Cream, unless this browser chose Black; a link straight to the trading area (Trade,
-   either mode) is dark green from its first paint, whichever background (ui/tokens.css, html[data-area]) */
+<script>/* the background before the first paint: Light (stored as "cream"), unless this browser chose Black; a link straight to the trading
+   area (Trade, either mode) wears the area's grammar from its first paint, in the same background (ui/tokens.css, html[data-area]) */
 (function () { var t = "cream"; try { t = localStorage.getItem("account.theme") || t; } catch (e) {}
 document.documentElement.setAttribute("data-theme", t === "black" ? "black" : "cream");
 try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentElement.setAttribute("data-area", "trade"); } catch (e) {} })();</script>
 <!-- the page's face, from this account (ui/tokens.css names every file): asked for at once, so the first paint is already in it -->
-<link rel="preload" href="/fonts/manrope-v20-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/inter-v5-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/ui/tokens.css" />
 <link rel="stylesheet" href="/ui/shell.css" />
 <link rel="stylesheet" href="/account.css" />

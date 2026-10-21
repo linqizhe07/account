@@ -3291,7 +3291,8 @@ describe("feat/paper-live phase 4: the ticket follows the market, its summary sa
     press("bbo");
     expect(t.field("limitPrice").value).toBe("60010");
     const css = source("ui/trade.css");
-    expect(css).toContain('.tt-order [data-go][data-side="sell"] { background: var(--hl-down); color: var(--hl-on-accent); }');
+    expect(css).toContain('.tt-order [data-go][data-side="sell"] { background: var(--hl-sell); color: var(--hl-on-trade); }');
+    expect(css).toContain('.tt-order [data-go][data-side="buy"] { background: var(--hl-buy); color: var(--hl-on-trade); }');
     expect(css).toContain('.tt-order [data-go][data-side="sell"]:disabled { background: var(--hl-down-disabled);');
     expect(source("ui/tokens.css")).toContain("--hl-down-disabled:");
   });
