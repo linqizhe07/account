@@ -62,7 +62,7 @@ import { parseIntent, parseOrder } from "../intents.ts";
 import { achArrival, etDate, whenLabel } from "./calendar.ts";
 import { doorOf, plan, type Door, type Leg, type Rail, type Route, type RouteRequest, type VenueView, whyWatchOnly } from "./doors.ts";
 import { heldUsd, inFlightUsd, launch, newPayment, settleDue, type Advance, type Authority, type Money, type Payment, type PaymentKind } from "./payments.ts";
-import { actionHash, BRAIN_KEY_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, SIGN_OUT_TTL_MS, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownEnvelope, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
+import { actionHash, BRAIN_KEY_TTL_MS, GITHUB_HELLO_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, SIGN_OUT_TTL_MS, isAgentAction, isDeviceSig, isJwk, isOwnerAction, kidOf, malformed, MEMORY_TYPES, micro, MONEY_TTL_MS, MONEY_TYPES, NonceBook, ownEnvelope, ownerTypedData, shownFields, signerOf, type Action, type AgentAction, type AnySig, type Envelope, type Hex, type Jwk, type OwnerAction, type SendAsset } from "./sign.ts";
 import { deskBrainKeyProblem, fingerprintOf, setBrainKeyProblem } from "./brain-keys.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
@@ -194,6 +194,16 @@ export interface Host {
   /** what a paper account's reset or top-up would do, in words, for the dialog before it is signed (POST /api/account/prepare): its name, the
    * book it would archive, what it holds now and what it would hold — or why it cannot be done */
   paperWords?(action: Extract<OwnerAction, { type: "resetPaper" | "topUpPaper" }>): Refusal | { words: string; usd: number };
+  /** OPENING A PAPER ACCOUNT asks for a GitHub sign-in first (live/github.ts), when this server has one: the refusal while nobody is signed in
+   * and `venue` has no book on this machine yet — nothing while someone is, or the book is kept (it continues). Asked by prepare before a
+   * connectVenue to live:paper is shown to be signed, and by the host's own connect at the door (absent: no sign-in is asked for) */
+  paperGate?(venue: string): Refusal | undefined;
+  /** the hi in the project's thread as the owner would sign it: the thread and the words are the account's own (helloWords of who is
+   * signed in) — or why it cannot be said now (absent: this server has no GitHub sign-in) */
+  githubHelloDraft?(): { repo: string; discussion: number; body: string } | Refusal;
+  /** say hi, as signed: the door has checked the signature, the owner, the nonce and the ten minutes; the host posts only its own draft,
+   * once from a machine, and answers where the comment is */
+  githubHello?(action: Extract<OwnerAction, { type: "githubHello" }>): Promise<{ url: string } | Refusal>;
 }
 
 /** one way of connecting a real venue, as the page offers it */
@@ -347,12 +357,16 @@ export const wordless = (e: Envelope): Envelope => (e?.action && MEMORY_TYPES.ha
  * nothing a person could undo, but it is more than the record needs: the nonce, which a later run remembers from this row, is what keeps
  * the same signature from being taken twice */
 export const keyless = (e: Envelope): Envelope => (e?.action && e.action.type === "setBrainKey" ? { ...e, action: { ...e.action, keyHash: typeof e.action.keyHash === "string" ? fingerprintOf(e.action.keyHash) : "", salt: "" } } : e);
+/** hi in the project's thread as the ledger keeps it: who signed it, its nonce and the thread — never its words, which name who signed in
+ * with GitHub. The row is a record, never replayed (restore.ts reads no githubHello back) */
+export const helloless = (e: Envelope): Envelope => (e?.action && e.action.type === "githubHello" ? { ...e, action: { ...e.action, body: "" } } : e);
 /** An envelope as the ledger's "taken" and refusal rows carry it: its own four fields and nothing that rode in beside them (sign.ts
  * ownEnvelope — the door has reduced every envelope to that already, at its top, so every other row and the account's state hold the same
- * clean copy; done here again so that this stays true of these rows whoever calls it), memory's words and a brain key's hash left out */
+ * clean copy; done here again so that this stays true of these rows whoever calls it), memory's words, a brain key's hash and the words of a
+ * hi left out */
 export const ledgered = (e: Envelope): Envelope => {
   if (!e || typeof e !== "object") return e;
-  return keyless(wordless(ownEnvelope(e)));
+  return helloless(keyless(wordless(ownEnvelope(e))));
 };
 /** the type a refusal row names: the instruction's, when it is one this account knows — never a value sent where a type goes */
 const typeOf = (e: Envelope | undefined): string => {
@@ -633,6 +647,8 @@ export class AccountEngine {
     if (action.type === "signOut" && Math.abs(now - action.nonce) > SIGN_OUT_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a sign-out is taken within ${SIGN_OUT_TTL_MS / 60_000} minutes of signing it — sign out again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a sign-out is taken within ${SIGN_OUT_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     // a brain's key is signed and sent at once (account/brain-keys.ts): a signature kept for later is not one the owner is still waiting on
     if (action.type === "setBrainKey" && Math.abs(now - action.nonce) > BRAIN_KEY_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of signing it — sign again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: a brain's key is set within ${BRAIN_KEY_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
+    // hi in the project's thread is signed and sent at once, as the paper account it comes with is opened (live/github.ts)
+    if (action.type === "githubHello" && Math.abs(now - action.nonce) > GITHUB_HELLO_TTL_MS) return this.refused(no("E_ACCOUNT_EXPIRED", { message: now > action.nonce ? `signed ${Math.round((now - action.nonce) / 60_000)} min ago: hi is said within ${GITHUB_HELLO_TTL_MS / 60_000} minutes of signing it — sign again` : `dated ${Math.round((action.nonce - now) / 60_000)} min ahead: hi is said within ${GITHUB_HELLO_TTL_MS / 60_000} minutes of its date`, detail: { signedAt: new Date(action.nonce).toISOString() } }), envelope, signer);
     for (const who of signers) this.nonces.use(who, action.nonce);
     // taken, on the record before anything runs: a later run of the account reads this row and does not take the same instruction again,
     // whatever became of it (a money instruction is good for ten minutes, and a restart can come inside them)
@@ -803,6 +819,15 @@ export class AccountEngine {
         if (isRefusal(r)) return r;
         this.host.log({ kind: "action", venue: action.venue, tool: action.type, signer, envelope, outcome: "ok", reason: r.summary });
         return { ok: true, kind: "account", summary: r.summary };
+      }
+      case "githubHello": {
+        // one comment in the project's thread, from the owner's GitHub account (live/github.ts). The row that says it was done carries no
+        // envelope — its "taken" row above has the one the ledger keeps (ledgered: the words left out) — and names the comment, not who
+        if (!this.host.githubHello) return no("E_ACCOUNT_BAD_ACTION", { message: "this server has no GitHub sign-in" });
+        const r = await this.host.githubHello(action);
+        if (isRefusal(r)) return r;
+        this.host.log({ kind: "action", venue: "*", tool: action.type, signer, outcome: "ok", reason: `hi said in ${action.repo}'s thread: ${r.url}` });
+        return { ok: true, kind: "result", result: { url: r.url } };
       }
       case "agentOrder": {
         const order = parseOrder({ base: action.base, side: action.side, qty: action.qty });
@@ -1596,6 +1621,19 @@ export class AccountEngine {
       if (action.type === "setDesk" && typeof action.value === "string") {
         const problem = deskBrainKeyProblem(String(action.change), action.value);
         if (problem) return no("E_ACCOUNT_BAD_ACTION", { message: problem });
+      }
+      // a new paper account while nobody is signed in with GitHub: refused before it is shown to be signed, as the door would refuse it
+      if (action.type === "connectVenue" && action.connector === "live:paper") {
+        const gate = this.host.paperGate?.(String(action.venue ?? ""));
+        if (gate) return gate;
+      }
+      // hi in the project's thread: the thread and the words are the account's own, whatever the draft said — or why it cannot be said now
+      if (action.type === "githubHello") {
+        if (!this.host.githubHelloDraft) return no("E_ACCOUNT_BAD_ACTION", { message: "this server has no GitHub sign-in" });
+        const d = this.host.githubHelloDraft();
+        if (isRefusal(d)) return d;
+        action = { type: "githubHello", repo: d.repo, discussion: d.discussion, body: d.body, nonce };
+        quote = { words: `Post “${d.body}” in ${d.repo}'s pinned thread (discussion #${d.discussion}), from your GitHub account. Everyone can read it there`, feeUsd: 0, receiveUsd: 0, lands: "at once", access: "owner", final: true, legs: [] };
       }
       // a paper account started again or topped up: what it would do, in words, before the dialog shows it to be signed — or why not, as the
       // door would say it (no such paper account, a sum that is not one, an order open there)

@@ -26,6 +26,10 @@
  *                      ever issued (sk-proj-standin0000000000000000, sk-ant-api03-standin0000000000000000) — and refuse any other with a
  *                      401, as theirs would: so "Connect a key" (the Superagent's paste row, account/brain-detect.ts) can be clicked through
  *                      to the end. Nothing else of theirs answers: a desk that thinks with one meets no network, as without the flag
+ *     --github         a new paper account asks for a GitHub sign-in (live/github.ts), against a stand-in GitHub (standinGitHub): "Sign in
+ *                      with GitHub" shows the code STAN-D1N0, which counts as entered at GitHub's first check (two seconds), as
+ *                      @standin-octo; the hi in the thread is "posted" to a made-up comment. The stand-in's own paper-momentum is opened
+ *                      before the sign-in is asked for, then it signs out: the page starts signed out, with that paper account on it
  *
  * THE BRAINS. With a desk (the default, --superagent), the desk thinks with a SCRIPT — never a model — held under Claude's preset id
  * ("claude", labelled "A script (stand-in, as Claude)"), beside every other preset's real brain: so the Brains place shows every provider
@@ -89,9 +93,11 @@ import { keyRejected, present, rejectedFix } from "../../src/portfolio/account/b
 import { BRAIN_PRESETS, brainProviders } from "../../src/portfolio/account/brains.ts";
 import type { OpenAIPreset } from "../../src/portfolio/account/brain-openai.ts";
 import { agentWalletKey } from "../../src/portfolio/account/keystore.ts";
+import { keepIdentity } from "../../src/portfolio/account/github-identity.ts";
 import { NetWorthLog, networthPath } from "../../src/portfolio/account/networth.ts";
 import { isJwk, kidOf, signAgent, signDevice, simKey, type AgentAction, type OwnerAction, type SimKey } from "../../src/portfolio/account/sign.ts";
 import { isOwner } from "../../src/portfolio/account/state.ts";
+import { GITHUB_APP } from "../../src/portfolio/live/github.ts";
 import type { LiveDeps } from "../../src/portfolio/live/index.ts";
 import { isStable, type LiveBalance } from "../../src/portfolio/live/types.ts";
 import { pairingCode, startPortfolioServer, type PortfolioServerHandle } from "../../src/portfolio/server.ts";
@@ -137,6 +143,8 @@ export interface StandinOptions {
   /** the model providers answer their list of models for a stand-in key (`--providers`: providersFetch, providersClaude), so "Connect a
    * key" can be clicked through to the end; their models still answer nothing */
   providers?: boolean | undefined;
+  /** a new paper account asks for a GitHub sign-in, against a stand-in GitHub (`--github`: standinGitHub); the page starts signed out */
+  github?: boolean | undefined;
 }
 
 /** what was seeded, by id */
@@ -169,6 +177,29 @@ export interface Standin {
 
 /** every request the stand-in's connections would make, answered: there is no network here */
 const noNetwork: LiveDeps["http"] = async () => ({ status: 599, body: undefined, text: "the stand-in reaches no network" });
+
+/** the stand-in's GitHub app: its client id is no app's, and the thread is the build's own repository's (live/github.ts GITHUB_APP) */
+export const STANDIN_GITHUB = { clientId: "Iv23standin00000000", repo: GITHUB_APP.repo, discussion: 1 };
+/** A STAND-IN GITHUB (`--github`): the device flow and the thread, answered here. The code is STAN-D1N0, asked after every two seconds and
+ * entered (as if typed on GitHub's page) by the first check, as @standin-octo — whose answer carries an email, which the account never
+ * reads; the thread is open, and a hi "posted" lands on a made-up comment. Anything else meets no network */
+export function standinGitHub(): LiveDeps["http"] {
+  let codes = 0;
+  let comments = 0;
+  const json = (body: unknown) => ({ status: 200, body, text: JSON.stringify(body) });
+  return async (url, init = {}) => {
+    const method = init.method ?? "GET";
+    if (method === "POST" && url === "https://github.com/login/device/code") return json({ device_code: `standin-device-${++codes}`, user_code: "STAN-D1N0", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 2 });
+    if (method === "POST" && url === "https://github.com/login/oauth/access_token") return json({ access_token: "ghu_standin000000000000000000000000000", expires_in: 28_800, refresh_token: "ghr_standin000000000000000000000000000", token_type: "bearer", scope: "" });
+    if (method === "GET" && url === "https://api.github.com/user") return json({ login: "standin-octo", id: 4242, name: "Stand-in Octo", avatar_url: null, email: "standin-octo@example.com" });
+    if (method === "POST" && url === "https://api.github.com/graphql") {
+      const query = String((JSON.parse(String(init.body ?? "{}")) as { query?: unknown }).query ?? "");
+      if (query.startsWith("query")) return json({ data: { repository: { hasDiscussionsEnabled: true, discussion: { id: "D_standin", locked: false } } } });
+      return json({ data: { addDiscussionComment: { comment: { url: `https://github.com/${STANDIN_GITHUB.repo}/discussions/${STANDIN_GITHUB.discussion}#discussioncomment-${++comments}` } } } });
+    }
+    return noNetwork(url, init);
+  };
+}
 
 const ok = <T extends Outcome | Refusal>(what: string, o: T): Exclude<T, Refusal> => {
   if (isRefusal(o)) throw new Error(`the stand-in could not seed ${what}: ${o.code} · ${o.message}`);
@@ -209,6 +240,7 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
     // behind the hire form, each saying honestly that this home holds no key for it
     desk: { brain: o.desk === false ? realBrains(home, o.providers === true) : standinBrains(home, refusingIf(o.brainRefuses === true, o.superagent ? superagentBrain() : standinBrain(), home), o.providers === true), tickMs: o.superagent ? 10_000 : 0 },
     payHttp: async () => ({ status: 0, headers: {}, body: undefined, error: "the stand-in pays no one: it reaches no network" }),
+    ...(o.github ? { github: { ...STANDIN_GITHUB, http: standinGitHub() } } : {}),
     liveDeps: {
       http: noNetwork,
       clock,
@@ -262,8 +294,11 @@ export async function startStandin(o: StandinOptions): Promise<Standin> {
   // a paper account beside the real ones: its chip says Paper, its balance is not in the net worth, its orders are rehearsals
   if (o.paper !== false) {
     ok("Stand-in Paper", await own({ type: "connectVenue", venue: "paper", connector: "live:standin-paper", label: "Stand-in Paper", credentialRef: "" }));
-    // the account's own paper account (live:paper): paper money in the stand-in's public markets, its book in this home
+    // the account's own paper account (live:paper): paper money in the stand-in's public markets, its book in this home. With --github it is
+    // opened as someone signed in, who signs out once it is open: the page starts signed out, with this paper account on it
+    if (o.github) keepIdentity(home, { login: "standin-octo", id: 4242, name: "Stand-in Octo", at: new Date(now).toISOString() });
     ok("Paper · Momentum", await own({ type: "connectVenue", venue: "paper-momentum", connector: "live:paper", label: "Momentum", credentialRef: "25000" }));
+    if (o.github) svc.github?.signOut();
   }
   ok("the agents' leverage cap", await own({ type: "setPolicy", change: "maxLeverage", value: "5" }));
 
@@ -667,7 +702,7 @@ if (isMain) {
   if (!(capUsd > 0) || !(tickMs > 0)) throw new Error("--cap is dollars and --tick milliseconds, both more than zero");
   if (args.includes("--cards") && !args.includes("--superagent")) throw new Error("--cards goes with --superagent: it hires the superagent with its autonomy off");
   if (args.includes("--no-paper") && args.includes("--superagent")) throw new Error("--no-paper does not go with --superagent: the superagent trades a paper account");
-  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses"), paper: !args.includes("--no-paper"), providers: args.includes("--providers") }).catch((e: NodeJS.ErrnoException) => {
+  const s = await startStandin({ port, capUsd, tickMs, desk: !args.includes("--no-desk"), superagent: args.includes("--superagent"), cards: args.includes("--cards"), brainRefuses: args.includes("--brain-refuses"), paper: !args.includes("--no-paper"), providers: args.includes("--providers"), github: args.includes("--github") }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EADDRINUSE") {
       console.error(`port ${port} is already in use: is a stand-in running already? Open http://127.0.0.1:${port}, or pick another with --port`);
       process.exit(1);
@@ -688,6 +723,7 @@ if (isMain) {
       args.includes("--no-desk") ? "  brains        every preset's real brain, none with a key in this fresh home; they reach no network here" : "  brain         a script under Claude's id (no model thinks here), beside every other preset's real brain (no key, no network)",
       ...(args.includes("--brain-refuses") ? [`  brain         refuses its key, as the API does, until ${join(s.home, ANTHROPIC_KEY_REF)} holds something else (or a key is saved for Claude on the page)`] : []),
       ...(args.includes("--providers") ? ['  providers     answer their list of models for a stand-in key — one that holds "standin", like sk-proj-standin0000000000000000 — and refuse any other with a 401; their models answer nothing'] : []),
+      ...(args.includes("--github") ? ["  github        a new paper account asks for a GitHub sign-in, against a stand-in GitHub: the code STAN-D1N0 counts as entered after two seconds, as @standin-octo; a hi lands on a made-up comment. Signed out at the start"] : []),
       `  prices move every ${tickMs / 1000} s · Ctrl-C to stop`,
     ].join("\n"),
   );

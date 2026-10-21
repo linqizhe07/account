@@ -49,6 +49,7 @@ Gravit has no server in the middle, and no analytics: your computer reads public
 - **Guard or Beast.** In Guard, whatever an agent asks for waits for your yes on a card. In Beast, agents act at once — but only inside the limits you signed.
 - **Hard caps.** No order or movement is worth more than `--live-cap`, and money leaves a venue only for a place shown to be yours.
 - **A record of everything** in a hash-chained log on your computer, and a Statement you can filter and export.
+- **Signing in with GitHub.** When Gravit asks you to sign in with GitHub before a new paper account, you type a short code on GitHub's own page. It reads your GitHub username, name and avatar — never your email — keeps them on your computer, and keeps GitHub's token in memory only. Saying hi in the project's GitHub thread is a box you tick yourself; it is never ticked for you. A paper account already on your computer opens without signing in.
 
 ## Bring your own agent
 
