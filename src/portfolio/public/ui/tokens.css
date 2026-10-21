@@ -2,18 +2,19 @@
    typography: the page's ground is a field of character cells where sharks hunt schools of fish, drawn in type (ui/ocean.js, after
    stackedlol's ascii-sharks: Light as its video shows it, Black as its source draws it); everything else floats over it as frosted glass —
    a translucent fill, a hairline and a blur of what swims under it — set in a neo-grotesque (Inter) on a square, ruled grid. Black and
-   white, and one pair of colours that carry a meaning: the accent red (#DA291C, Pantone 485 C) for down, a sell and the marks of what is
-   chosen, and the green that matches it (#00843D, Pantone 348 C: the red's own luminance, 4.9:1 on white like it, the most chroma the
-   gamut gives at that lightness) for up, a buy and yes; amber stays for what waits. The two are filled as they are in both backgrounds; on
-   Black, small words in them take a lighter tint of the same hue (#FF7360, #3BB360), so they stay legible.
+   white, and one pair of colours: the green (#00843D, Pantone 348 C) is the Account's own — its mark, the marks of what is chosen, up, a
+   buy and yes — and the accent red (#DA291C, Pantone 485 C) only ever means down, a sell or a loss, never a decoration; the two have one
+   luminance (4.9:1 on white each, the green the most chroma the gamut gives at that lightness). Amber stays for what waits. The two are
+   filled as they are in both backgrounds; on Black, small words in them take a lighter tint of the same hue (#3BB360, #FF7360), so they
+   stay legible.
    account.html sets html[data-theme] before the first paint ("cream" is Light's name in this browser's storage and the attribute, kept from
    before the ocean; Light unless this browser chose Black); with no script the system's own light or dark decides. The trading area
    follows the same choice (its block at the foot). Below them, the names the page used before (portfolio.css: --paper --ink --line --sage
    --orange …) point at these, so every earlier class still renders in either background. The ocean reads its own colours here too
    (--oc-*): the ground, the grid, the blocks from shadow to light, the inks of their glyphs, a shark's markings and spots, the fish, the
-   wake, a burst, and the glints.
+   wake, a burst, the glints, and how much of the water shows through a shark (--oc-shark-opacity).
    Contrast (WCAG AA, 4.5:1 for words), measured on glass at its worst — a shark's lit back under it, its blocks covering 84% of the
-   water, blurred: Light text 17.6, dim 6.6, up 4.5, down 4.5, warn-text on warn-fill 5.8, white on the green 4.8 and on the red 4.9; Black
+   water, blurred (a bound now: no shark is drawn behind a pane or a word, ui/ocean.js's clear water): Light text 17.6, dim 6.6, up 4.5, down 4.5, warn-text on warn-fill 5.8, white on the green 4.8 and on the red 4.9; Black
    text 13.3, dim 5.9, up 5.5, down 5.6, warn-text on warn-fill 6.3. Light's glass is 95% white for it: the brand's red and green are
    4.9:1 on white and no more. */
 /* the two faces, served from this account (fonts/, SIL Open Font License: fonts/OFL.txt): Inter — a neo-grotesque in the line of
@@ -39,8 +40,9 @@
 :root[data-theme="cream"] {
   color-scheme: light;
   --bg: #fbfbfa;
-  /* glass: the panes' cards, the top bar, the sheets, the menus — what swims under it shows through, blurred (shell.css backdrop-filter).
-     95% white, so the red and the green read on it at 4.5:1 over the darkest shark */
+  /* glass: the panes' cards, the top bar, the sheets, the menus — the fish and the wake under it show through, blurred (shell.css
+     backdrop-filter); a shark swims on out of sight under it (ui/ocean.js, the clear water). 95% white, so the red and the green would read
+     on it at 4.5:1 even over the darkest shark */
   --surface: rgba(255, 255, 255, 0.95);
   --surface-2: rgba(17, 17, 17, 0.055);
   --glass: blur(20px) saturate(1.1);
@@ -56,10 +58,10 @@
   --primary: #111111;
   --on-primary: #ffffff;
   /* the Swiss pair, filled as they are in both backgrounds; the mark of what is chosen (a tab's underline, the rail's current item, the
-     Account's own mark) is the red */
+     Account's own mark) is the green, the Account's colour — the red only says down, a sell or a loss */
   --red: #da291c;
   --green: #00843d;
-  --mark: var(--red);
+  --mark: var(--green);
   --warn: #d97a1e;
   --warn-text: #8a4706;
   --warn-fill: rgba(253, 239, 224, 0.94);
@@ -94,7 +96,9 @@
   --on-accent: #ffffff;
   /* the ocean (ui/ocean.js): as the reference's video — a near-white ground and a grid you barely see, blocks from light grey in shadow
      to a dark grey where the light falls, dark glyphs on the light blocks and pale ones on the dark, a shark's markings darker still and its
-     spots paler, dark dashes for fish, a grey wake; the glints the reference's colours, with the Swiss pair among them */
+     spots paler, dark dashes for fish, a grey wake; the glints the reference's colours with the Account's green among them (never the
+     red: it means a loss), a burst in the green. A shark is half see-through — the grid and the wake show through it — and never swims
+     behind a word (ui/ocean.js: the clear water) */
   --oc-ground: #fbfbfa;
   --oc-grid: rgba(17, 17, 17, 0.05);
   --oc-shadow: #e7e7e3;
@@ -108,8 +112,9 @@
   --oc-spot: #f4f4f0;
   --oc-fish: #2a2a27;
   --oc-wake: #8a8a85;
-  --oc-spark: #da291c;
-  --oc-glints: #e8912d #da291c #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+  --oc-spark: #00843d;
+  --oc-glints: #e8912d #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+  --oc-shark-opacity: 0.5;
 }
 
 :root[data-theme="black"] {
@@ -128,7 +133,7 @@
   --on-primary: #0a0a0a;
   --red: #da291c;
   --green: #00843d;
-  --mark: var(--red);
+  --mark: var(--green);
   --warn: #f0a040;
   --warn-text: #f5b866;
   --warn-fill: rgba(56, 38, 14, 0.86);
@@ -156,7 +161,8 @@
   --accent: var(--green);
   --on-accent: #ffffff;
   /* the ocean as the reference's source draws it: black, the grid at a twentieth of white, grey blocks lit from the upper left with dark
-     glyphs pressed into them, markings near black and spots near white, pale fish and a cyan wake */
+     glyphs pressed into them, markings near black and spots near white, pale fish and a cyan wake; a burst in the green, the sharks half
+     see-through */
   --oc-ground: #000000;
   --oc-grid: rgba(255, 255, 255, 0.055);
   --oc-shadow: #2e2e2e;
@@ -170,8 +176,9 @@
   --oc-spot: #ececea;
   --oc-fish: #e6eeff;
   --oc-wake: #6ee6ff;
-  --oc-spark: #ff7360;
-  --oc-glints: #e8912d #da291c #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+  --oc-spark: #3bb360;
+  --oc-glints: #e8912d #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+  --oc-shark-opacity: 0.5;
 }
 
 /* no script to read the choice: the system's own dark gets Black */
@@ -192,7 +199,7 @@
     --on-primary: #0a0a0a;
     --red: #da291c;
     --green: #00843d;
-    --mark: var(--red);
+    --mark: var(--green);
     --warn: #f0a040;
     --warn-text: #f5b866;
     --warn-fill: rgba(56, 38, 14, 0.86);
@@ -232,8 +239,9 @@
     --oc-spot: #ececea;
     --oc-fish: #e6eeff;
     --oc-wake: #6ee6ff;
-    --oc-spark: #ff7360;
-    --oc-glints: #e8912d #da291c #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+    --oc-spark: #3bb360;
+    --oc-glints: #e8912d #a855f7 #2cc4c9 #00843d #3b5cf0 #d6b84a;
+    --oc-shark-opacity: 0.5;
   }
 }
 
@@ -270,8 +278,8 @@
    it before the first paint for a link straight there). It keeps the grammar it was built in — Hyperliquid's trade screen: dense panels
    side by side, one small size, one weight, tabs with a line under the chosen one — and wears the background the Account wears, Light or
    Black: glass panels with the water showing in the gutters between them, black and white for what is chosen (a pressed toggle, a link,
-   a light that is on), the red line under a chosen tab, Buy in the green and Sell in the red with white words on both, up and down in the
-   same pair, caution in amber.
+   a light that is on), the Account's green line under a chosen tab, Buy in the green and Sell in the red with white words on both, up and
+   down in the same pair, caution in amber.
    Three blocks. The area's own names (--hl-*) are given to the whole page while the area shows — html itself, so the rail beside the area,
    the page's own background under it and everything the area draws take them alike — Light's in the first block, with the Account's names
    pointed at them, and Black's in the second (the chosen background, and the system's dark where no script chose). Leaving the area takes
@@ -323,11 +331,12 @@
   --hl-accent-deep: #ffffff;
   --hl-badge: rgba(17, 17, 17, 0.07);
   --hl-online-fill: rgba(0, 132, 61, 0.12);
-  /* a buy and a sell (the order's button, the Buy | Sell toggle), the Swiss pair with white words on both; the red line under a chosen tab */
+  /* a buy and a sell (the order's button, the Buy | Sell toggle), the Swiss pair with white words on both; the green line under a chosen
+     tab (the Account's colour: the red only says a sell, down or a loss) */
   --hl-buy: #00843d;
   --hl-sell: #da291c;
   --hl-on-trade: #ffffff;
-  --hl-mark: #da291c;
+  --hl-mark: #00843d;
   /* up and down: words, the book's depth bars, a level's flash, a figure's first colour as it changes, the leverage warning's box */
   --hl-up: #00843d;
   --hl-down: #da291c;
@@ -445,7 +454,7 @@
   --hl-buy: #00843d;
   --hl-sell: #da291c;
   --hl-on-trade: #ffffff;
-  --hl-mark: #da291c;
+  --hl-mark: #00843d;
   --hl-up: #3bb360;
   --hl-down: #ff7360;
   --hl-up-bar: rgba(59, 179, 96, 0.15);
@@ -498,7 +507,7 @@
     --hl-buy: #00843d;
     --hl-sell: #da291c;
     --hl-on-trade: #ffffff;
-    --hl-mark: #da291c;
+    --hl-mark: #00843d;
     --hl-up: #3bb360;
     --hl-down: #ff7360;
     --hl-up-bar: rgba(59, 179, 96, 0.15);

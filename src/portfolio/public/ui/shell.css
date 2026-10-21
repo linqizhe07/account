@@ -1,11 +1,11 @@
 /* The Account's desktop shell, in the ocean look with Swiss typography: the page's ground is ui/ocean.js's field of character cells
    (sharks hunting schools of fish, drawn in type), and everything floats over it as frosted glass — a translucent fill, a hairline, and
    what swims under it blurred — set like a Swiss page: one neo-grotesque (Inter) in a few sizes and weights, the large figures bold and
-   tight, flush left, nearly square corners, a heavy rule over each card, no shadows, black and white with the red for what is chosen.
-   A glass rail on the left (the Account's red mark, Markets · Trade, Agents, and at its foot the status and the Account), a main column
-   under a top bar (the lens, a search, the Statement), and the shared pieces every pane draws with: buttons and toggles (pressed in ink),
-   glass cards, tables inside cards, small labels, chips, avatars, ups and downs, the one sheet, the drawer, the small asking dialog,
-   toasts, skeletons. Colours only from ui/tokens.css, so Light and Black alike. */
+   tight, flush left, nearly square corners, a heavy rule over each card, no shadows, black and white with the Account's green for what
+   is chosen (the red only for down, a sell or a loss). A glass rail on the left (the Account's green mark, Markets · Trade, Agents, and at
+   its foot the status and the Account), a main column under a top bar (the lens, a search, the Statement), and the shared pieces every
+   pane draws with: buttons and toggles (pressed in ink), glass cards, tables inside cards, small labels, chips, avatars, ups and downs,
+   the one sheet, the drawer, the small asking dialog, toasts, skeletons. Colours only from ui/tokens.css, so Light and Black alike. */
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -110,12 +110,14 @@ button.ink { background: var(--primary); color: var(--on-primary); }
    resizes it), taking no pointer; the app over it */
 #ocean { position: fixed; left: 0; top: 0; width: 100%; height: 100lvh; display: block; z-index: 0; pointer-events: none; }
 .app { display: flex; align-items: stretch; min-height: 100vh; position: relative; z-index: 1; }
-/* GLASS: every surface that floats over the ocean blurs what swims under it, at the strength the background gives (ui/tokens.css --glass).
+/* GLASS: every surface that floats over the ocean blurs what swims under it — the fish and the wake; a shark swims on out of sight under
+   a pane (ui/ocean.js, the clear water) — at the strength the background gives (ui/tokens.css --glass).
    A blur repaints with the water every frame, so it is given to the surfaces themselves and never to what is inside them (a part of a
    card is no surface of its own: .card .sec and its kin set it back). Under :where(), so any rule for a part outweighs it */
 :where(.rail, .topbar, .card, .pane .sec, .box, .panel, .banner, .callout, .choice, .quick-card, .search, .menu, .toast, .mk-peek, #modal, #drawer, #ask) { -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
 .rail { flex: 0 0 var(--rail); position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; padding: 24px 16px; background: var(--rail-bg); border-right: 1px solid var(--card-border); display: flex; flex-direction: column; gap: 22px; }
-/* the name with its mark — a red square with the letter on it, as a Swiss page signs itself — the rail's items, and the Account at its foot */
+/* the name with its mark — a green square with the letter on it (the Account's colour), as a Swiss page signs itself — the rail's items,
+   and the Account at its foot */
 .brand { font-family: var(--font-sans); font-size: 21px; font-weight: 700; padding: 0 12px; letter-spacing: -0.035em; display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
 .brand-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 0; background: var(--mark); color: #ffffff; font: 700 16px/1 var(--font-sans); letter-spacing: 0; }
 .rail-nav { display: flex; flex-direction: column; gap: 4px; position: relative; }

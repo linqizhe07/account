@@ -114,7 +114,8 @@
    The classes the panes draw with (ui/shell.css; colours, radii, shadows and fonts only from ui/tokens.css, Light and Black alike). The
    look is the ocean with Swiss type: Inter everywhere, labels small and bold in sentence case, numbers bold and tight with tabular figures
    (.num .num-m), Geist Mono (.mono) only for a hash, an address or a line that is signed; content in glass cards over the ocean, a heavy
-   rule across each card's top, nearly square buttons and toggles (a pressed one in ink), the red for what is chosen.
+   rule across each card's top, nearly square buttons and toggles (a pressed one in ink), the Account's green for what is chosen (the red
+   only for down, a sell or a loss).
      a card         .card — glass, a hairline of its own (--card-border) and a 2 px rule across its top (--rule), radius 4
                     (--radius-m), padding 18–20, no shadow (--shadow-card), its parts 14 apart; cards sit 20 apart in a column (.col-main .col-side). A .sec drawn
                     in a pane IS a card (the same look), so `class="sec"` and `class="card"` are one; inside a card, a sheet or the drawer a
