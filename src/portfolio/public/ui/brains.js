@@ -2,7 +2,8 @@
    names its model, tests it, and switches the desk over. Loaded before ui/desk.js and ui/superagent.js, which both open it, so the three
    ways in are the same sheet:
      the Superagent's header     its Brain stat is always a button ("Brain ›", the model, the calls, what they cost — or, when the brain
-                                 cannot think, why, in amber); the sheet opens on the brain the desk uses now
+                                 cannot think, why, in amber); the sheet opens on the brain the desk uses now, its paste row (Connect a
+                                 key, below) at the top — in focus while that brain cannot think
      the Superagent's setup      "3 · The brain" has "Brains: add a key, pick a model ›" (and each brain not ready its own "Type its key ›"):
                                  a key typed there shows at once in the setup's checklist, and "Pick it for the desk" puts the provider,
                                  the model, the effort and the price into the setup's form — what was typed there stays (core formKeep)
@@ -37,6 +38,16 @@
                                  or none: then the tokens are counted, not their cost)
    What it asks without a signature: POST /api/account/brain-test { provider } — "Test the saved key": one call the provider bills nothing
    for where it allows one (its model list), answered ok or in the provider's own words.
+
+   CONNECT A KEY (brConnect): the paste row at the top of the sheet — and the same row in the Superagent's setup checklist, under "A brain
+   key" — is one field for ANY provider's key and Connect, with no provider to pick. POST /api/account/brain-detect { apiKey }
+   (account/brain-detect.ts) says whose the key is, by its shape and then by that provider's own answer to its list of models (which bills
+   nothing; a plain sk- key may be asked of DeepSeek, Kimi and OpenAI in turn, which the row says before Connect is pressed), and the model
+   the desk would think with — or why not, in plain words: a key it does not recognise (or the example from a how-to, a key starred out, a
+   key that manages an account, another service's secret), the provider refused it, no answer in time, no usable model. Then one yes that
+   shows all of it (brConfirmConnect), and the same signatures as by hand: setBrainKey, the key beside it, to /api/account/brain-key — and,
+   a desk hired, setDesk change "brain"; or, where a form opened it, the pick put into that form. The key rides in those two requests only.
+   Under the row, the brain in use: its model, the key's masked tail, Replace key and Remove key.
 
    THE KEY, which is a secret: it is typed (pasted) into one input, which has no name and sits in no form, so nothing that sweeps a form into
    a draft (formFields, quoteDialog, core formKeep) can ever take it into a /api/account/prepare or /api/exchange body. The input is
@@ -140,6 +151,29 @@ const BR_PRESETS = {
 
 /* a key as the account takes one: 8 to 512 printable characters, no space */
 const BR_KEY_SHAPE = /^[\x21-\x7e]{8,512}$/;
+/* a brain's id as the account names one (account/brain-key.ts BRAIN_ID) */
+const BR_ID = /^[a-z][a-z0-9-]{0,31}$/;
+
+/* A KEY THAT IS ONLY AN EXAMPLE — account/brain-key.ts exampleKey and starredKey, mirrored (test/unit/ui-brains-connect.test.ts holds the
+   two to the same answers): what a how-to, a template or a dashboard shows in a key's place, never a key a provider issued — an elision
+   ("sk-ant-...", "sk-…"), a placeholder's brackets or a space, a key starred out as a dashboard shows one it keeps, a run of x's where the
+   key's own characters go, or words that say what goes there ("your-api-key", "YOUR_API_KEY") */
+const brStarredKey = (s) => /[*•]{4,}/.test(String(s ?? ""));
+function brExampleKey(s) {
+  const t = String(s ?? "").trim();
+  if (!t) return false;
+  if (/…|\.\.\.|[<>{}[\]\s]/.test(t) || brStarredKey(t)) return true;
+  if (/(?:^|[-_]|^AIza)(?:x{6,}|X{6,})(?:$|[-_])/.test(t)) return true;
+  return /your[-_ ]?(?:api[-_ ]?)?(?:key|token|secret)|api[-_]?key[-_]?here|paste[-_ ]?(?:your|the)?[-_ ]?key|replace[-_ ]?me|change[-_ ]?me|insert[-_ ]?(?:your[-_ ]?)?key/i.test(t);
+}
+/* the words for one, which never repeat it */
+const brExampleWords = (k) => (brStarredKey(k) ? "That is a key as a dashboard shows it, with most of it hidden behind stars: copy the whole key where you make it (most providers show it once)." : "That is the example from a how-to, not a key: paste the key itself, as the provider gave it.");
+/* WHAT A WALLET HOLDS — account/brain-detect.ts walletSecret, mirrored: a private key (64 hex characters, with or without 0x) or a recovery
+   phrase (twelve to twenty-four plain words). The paste row never sends one anywhere, not even to the account */
+function brWalletSecret(s) {
+  const t = String(s ?? "").trim();
+  return /^(?:0x)?[0-9a-fA-F]{64}$/.test(t) || /^(?:[a-z]{3,8}\s+){11,23}[a-z]{3,8}$/.test(t.toLowerCase());
+}
 /* a model id as the desk takes one (account/desk.ts parseBrain) */
 const BR_MODEL_SHAPE = /^[A-Za-z0-9][\w.\-:/]{0,79}$/;
 
@@ -627,9 +661,9 @@ function brDraft(x, box) {
 const brKeyDraft = (provider, baseUrl, model, keyHash, salt) => ({ type: "setBrainKey", provider, baseUrl, model, keyHash, salt });
 
 /* a line under a part of the form: what Save, Test or Use said — kept by provider, so a form built again (after a save, on coming back to
-   it) says it still */
+   it) says it still; a paste row's (what Connect said) kept as "connect:<where>", so a checklist drawn again says it still */
 function brSay(box, which, text, tone = "") {
-  const id = box && box.dataset ? box.dataset.brForm : "";
+  const id = box && box.dataset ? box.dataset.brForm || (box.dataset.brConnect ? `connect:${box.dataset.brConnect}` : "") : "";
   if (id) BR.said[id] = { ...(BR.said[id] || {}), [which]: { text: text || "", tone } };
   const m = box && box.querySelector(`[data-br-msg="${which}"]`);
   if (!m) return;
@@ -716,6 +750,8 @@ async function brSave(x, box) {
   // from here the key is only in `typed`, for the one request; the input is empty whatever happens next
   if (keyEl) keyEl.value = "";
   if (!BR_KEY_SHAPE.test(typed)) return void brSay(box, "key", "A key is 8 to 512 characters, with no spaces: paste it again.", "no");
+  // the example from a how-to ("sk-ant-..."), or a key starred out: never signed as a key (the account refuses it too)
+  if (brExampleKey(typed)) return void brSay(box, "key", `${brExampleWords(typed)} Nothing was signed or sent.`, "no");
   BR.busy = true;
   brHold(box, true);
   brSay(box, "key", "Asking you first…", "wait");
@@ -824,12 +860,17 @@ async function brRun(box, which, run, done) {
   return r;
 }
 
-/* after anything the sheet changed: the desk's reads (its catalog among them) dropped, the opener told, the catalog read again */
+/* after anything the sheet changed: the desk's reads (its catalog among them) dropped, the opener told, the catalog read again (own() hands
+   it the answer, which it does not read) */
 function brAfter() {
+  brAfterFor(BR.ctx);
+}
+/* …told to `ctx`, what opened the place the change was made in: the sheet's opener, or the Superagent's setup for its own paste row */
+function brAfterFor(ctx) {
   forget("/api/account/desk");
-  if (BR.ctx && typeof BR.ctx.after === "function") {
+  if (ctx && typeof ctx.after === "function") {
     try {
-      BR.ctx.after();
+      ctx.after();
     } catch (err) {
       console.error(err);
     }
@@ -947,11 +988,193 @@ function brPutInForm(form, d) {
   set(`[name="out-${d.provider}"]`, d.price ? String(d.price.outUsd) : "");
 }
 
+// ---- connect a key: one field, no provider to pick -------------------------------------------------------------------------------------
+
+/** where a Connect's pick goes, from what opened it (openBrains' ctx, or the Superagent's setup): a desk hired (its brain is switched by a
+ * signed setDesk), or a form that takes the pick (the setup's, the hiring form's), or neither (the key is saved, nothing more) */
+function brCtxNow(ctx) {
+  const c = ctx || {};
+  const desk = typeof c.desk === "function" && !!c.desk();
+  const form = !desk && typeof c.form === "function" ? c.form() : null;
+  return { desk, form: form || null };
+}
+/* what Connect does after the check, in the words of the line under the field */
+function brConnectThen(ctx) {
+  const c = ctx || {};
+  return typeof c.desk === "function" && c.desk() ? "switch the desk to the best model it can use" : typeof c.form === "function" ? "pick its best model for the desk" : "save it";
+}
+
+/** THE PASTE ROW: one field for any provider's key, Connect, and in a line what happens — the account tells the provider from the key and
+ * checks it with them before anything is signed, and a plain sk- key may be asked of three providers in turn, each of which then sees it
+ * (said here, before Connect is pressed). The field is the key's own kind (brFormHtml): type="text" drawn as dots, with no name, in no form,
+ * nothing that remembers, corrects or completes it. `where`: "sheet" (the top of the Brains sheet, with its own heading) or "setup" (the
+ * Superagent's checklist, under its "A brain key"); `cls`, the buttons' classes where the strip sits */
+function brPasteHtml(where, ctx = {}, cls = "btn btn-sm btn-primary") {
+  const w = where === "setup" ? "setup" : "sheet";
+  const id = `br-paste-${w}`;
+  const off = owns() ? "" : ' disabled title="This browser can look but not sign"';
+  const head = w === "setup" ? "" : `<div class="br-c-h"><h3 class="label" id="${id}-h">Paste an API key</h3><span class="dim small">No provider to pick: the account tells it from the key.</span></div>`;
+  return `<section class="br-connect" data-br-connect="${w}"${head ? ` aria-labelledby="${id}-h"` : ' aria-label="Paste an API key"'}>${head}<div class="br-key-row"><input id="${id}" type="text" data-br-paste aria-label="API key" aria-describedby="${id}-d" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" placeholder="Paste a key from Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Groq, OpenRouter, Meta"${off} /><button type="button" class="${esc(cls)}" data-br-act="connect"${off}>Connect</button></div><p class="dim small br-c-d" id="${id}-d">${esc(`It is checked with its provider first (their list of models, which costs nothing), then you sign to ${brConnectThen(ctx)}. A plain sk- key may be checked with DeepSeek, Kimi and OpenAI in turn: each one asked sees it.`)}</p>${brMsgHtml(`connect:${w}`, "key")}${w === "setup" ? "" : '<div class="br-inuse-w" data-br-p="inuse"></div>'}</section>`;
+}
+
+/** The brain in use, under the paste row of the sheet: its standing's dot, who, the model, the key's masked tail and where it is read from
+ * — and the way to change it: Replace key (the field above, focused) and Remove key (its key file taken away, after a yes: brForget), the
+ * latter only for a key saved here. "In use" for the desk's brain, "Picked" where a form opened the sheet. Nothing when none is named */
+function brInUseHtml(catalog, cur, forForm = false) {
+  if (!cur || !cur.provider) return "";
+  const x = brAll(catalog).find((y) => y.id === cur.provider);
+  if (!x) return "";
+  const listed = x.listed.find((m) => m.id === cur.model);
+  const model = listed ? listed.name || listed.id : String(cur.model || "");
+  const tone = x.ok ? "ok" : brStanding(x)[1];
+  const word = `${forForm ? "Picked" : "In use"}${x.ok ? "" : " · not ready"}`;
+  const from = x.keyFrom === "env" ? " (from the account's environment)" : x.keyFrom === "older-file" ? " (from the older key file)" : "";
+  const off = owns() ? "" : " disabled";
+  const replace = x.hasKey || x.keySet ? `<button type="button" class="btn btn-sm" data-br-act="replace"${off}>Replace key</button>` : "";
+  const remove = x.keyFrom === "file" && x.hasKey ? `<button type="button" class="btn btn-sm btn-ghost" data-br-act="remove" data-br-for="${esc(x.id)}"${off}>Remove key</button>` : "";
+  return `<div class="br-inuse"><span class="br-st" data-s="${tone}"><i aria-hidden="true"></i>${esc(word)}</span><span class="br-inuse-t"><b>${esc(x.name)}</b>${model ? ` · ${esc(model)}` : ""}${x.tail ? ` · key <span class="br-nw">…${esc(x.tail)}</span>` : x.ok || x.keySet ? "" : " · no key yet"}${esc(from)}</span>${replace || remove ? `<span class="br-inuse-a">${replace}${remove}</span>` : ""}</div>`;
+}
+
+/** what a provider's model costs, as far as the page knows: a model the brain lists, at its listed price (counted); else the price the
+ * provider's own page gave on the day it was read (shown with that day, never counted); else nothing */
+function brPriceWords(x, model, who = x.name) {
+  const listed = x.listed.find((m) => m.id === model);
+  if (listed && Number.isFinite(Number(listed.inUsd)) && listed.inUsd !== undefined) return `$${listed.inUsd}/$${listed.outUsd} per M tokens`;
+  const hint = (x.suggest.find(([id]) => id === model) || [])[1] || "";
+  const m = /\$[\d.]+\/\$[\d.]+ per M tokens/.exec(hint);
+  return m ? `${m[0]} by ${who}'s page${x.asOf ? ` (read ${x.asOf})` : ""}` : "";
+}
+
+/** The yes asked before a pasted key is saved: who took it and how many models it lists, then exactly what the owner's device signs — the
+ * provider, the model (and why that one), the key's masked tail and fingerprint, never the key — and, where a desk is hired, the desk's brain
+ * switched (a second signature), or, where a form opened it, the pick put into that form; where the key goes from then on, and who bills it.
+ * Several providers asked (a plain sk- key): what each said. True only for the yes */
+function brConfirmConnect(x, d, s) {
+  const row = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
+  const name = d.modelName || d.model;
+  const how = d.picked === "best" ? "the best it lists for this key" : d.picked === "suggested" ? "one it lists for this key" : "the newest-looking model it lists: none of the ones this account knows for it";
+  const price = brPriceWords(x, d.model, d.who || x.name);
+  const then = s.desk ? row("The desk", `thinks with ${x.name} · ${name}, from its next call`) : s.form ? row("The setup", `picks ${x.name} · ${name}, for Start to sign`) : "";
+  const asked = Array.isArray(d.asked) && d.asked.length > 1 ? `<p class="dim small">${esc(d.asked.map((a) => `${a.who}: ${a.outcome === "taken" ? "took it" : a.outcome === "refused" ? `refused it${a.status ? ` (${a.status})` : ""}` : a.outcome === "unreachable" ? "no answer" : `answered ${a.status || "an error"}`}`).join(" · "))}.</p>` : "";
+  const two = s.desk ? "two things" : "this";
+  return asking(`<form method="dialog" class="ask-f br-sign"><h2 id="ask-title">${esc(`Connect ${d.who || x.name}?`)}</h2><p>${esc(`${d.who || x.name} took the key${d.listed ? ` and lists ${d.listed} model${d.listed === 1 ? "" : "s"} for it` : ""}. Your device signs ${two}, never the key:`)}</p><dl>${row("Provider", x.name)}${row("Model", `${name} · ${how}${price ? ` · ${price}` : ""}`)}${row("Key", `${d.tail || "…"} · fingerprint ${s.print}`)}${then}</dl>${asked}<p class="dim small">${esc(`The key goes once more, beside the signature, to the account on this machine, which keeps it in its own file${x.keyFile ? ` (${x.keyFile}, readable by you alone)` : ""} and sends it to ${d.host || d.who || x.name} only. Its calls are billed to your key at ${d.who || x.name}.`)}</p><div class="end"><button type="submit" value="" class="btn">Cancel</button><button type="submit" value="yes" class="btn btn-primary">Sign and connect</button></div></form>`, (v) => v === "yes");
+}
+
+/** The answer of POST /api/account/brain-detect as this page will act on it, or null: a brain's id the catalog offers, a model's name that
+ * is one (never one shaped like a key), and the rest as words */
+function brDetected(b, catalog) {
+  if (!b || b.ok !== true || !BR_ID.test(String(b.provider || "")) || !brModelOk(b.model)) return null;
+  const x = brAll(catalog).find((y) => y.id === b.provider) || null;
+  return x ? { x, d: b } : null;
+}
+
+/** CONNECT: the paste row's one button. In order, and nothing is saved until the owner signs:
+ *   - the key read once from its field, which is emptied at once — from then on it is only in `key`, for this run
+ *   - its shape checked here (8 to 512 printable characters, not the example from a how-to, not starred out): nothing is sent then
+ *   - POST /api/account/brain-detect { apiKey }: the account says whose it is (by its shape, then by that provider's own answer to its list
+ *     of models, which bills nothing) and the model the desk would think with — or why not, in its own plain words, shown as they are
+ *   - the yes (brConfirmConnect): a "no" sends nothing more
+ *   - setBrainKey { provider, baseUrl "" (the provider's own address), model, keyHash, salt } prepared and signed, and the key sent once
+ *     more, beside the signature, to POST /api/account/brain-key — the very route, checks and file of "Save the key" (brSave)
+ *   - a desk hired: setDesk change "brain" { provider, model, effort } signed (the effort the desk has where the provider takes it, else the
+ *     provider's own; the price left as the account counts it); a form that takes the pick: put into it (brPutInForm), for its Start or Hire
+ * The key is in exactly two requests, the check and the save — never in a draft, /prepare, /exchange, storage or the page's reads. Said
+ * after: the provider, the model, the key's masked tail, and a variable in the account's environment that is used before it, if one is */
+async function brConnect(box, ctx = BR.ctx || {}) {
+  if (!box || BR.busy) return;
+  if (!owns()) return void brSay(box, "key", "This browser can look but not sign.", "no");
+  const el = box.querySelector("[data-br-paste]");
+  const key = el ? String(el.value || "").trim() : "";
+  // from here the key is only in `key`, for this run: the field is empty whatever happens next
+  if (el) el.value = "";
+  if (!key) return void brSay(box, "key", "Paste a key first.", "no");
+  // what a wallet holds, never sent anywhere — before the shape, which a recovery phrase's spaces would fail in other words
+  if (brWalletSecret(key)) return void brSay(box, "key", "That looks like what a wallet holds — a private key (64 hex characters) or a recovery phrase — not an API key. It was not sent anywhere. Never paste either into a page: whoever has one has the wallet.", "no");
+  // a space inside is a paste gone wrong more often than an example: said as the shape (the account's order, brain-detect.ts recogniseKey)
+  const shape = "A key is 8 to 512 characters with no spaces: paste it again. It was not sent anywhere.";
+  if (!brStarredKey(key) && /\s/.test(key)) return void brSay(box, "key", shape, "no");
+  if (brExampleKey(key)) return void brSay(box, "key", `${brExampleWords(key)} It was not sent anywhere.`, "no");
+  if (!BR_KEY_SHAPE.test(key)) return void brSay(box, "key", shape, "no");
+  BR.busy = true;
+  brHold(box, true);
+  let sent = false;
+  try {
+    brSay(box, "key", "Checking the key with its provider…", "wait");
+    const asked = await postJson("/api/account/brain-detect", { apiKey: key });
+    const b = (asked && asked.body) || {};
+    if (!asked || asked.status !== 200 || b.ok !== true) return void brSay(box, "key", String(b.words || b.error || "") || "The account did not answer. Try again.", "no");
+    const catalog = BR.catalog || ctx.catalog;
+    const got = brDetected(b, catalog);
+    if (!got) return void brSay(box, "key", "The account named a brain this page does not offer: open Brains again and try once more. Nothing was saved.", "no");
+    const { x, d } = got;
+    const where = brCtxNow(ctx);
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keyHash = await brHash(salt, key);
+    brSay(box, "key", "Asking you first…", "wait");
+    if (!(await brConfirmConnect(x, d, { print: keyHash.slice(0, 8), desk: where.desk, form: !!where.form }))) return void brSay(box, "key", "Nothing was signed or saved. The field is empty: paste the key again to connect it.");
+    brSay(box, "key", "Signing and saving…", "wait");
+    sent = true;
+    const p = await Owner.prepare(brKeyDraft(x.id, "", d.model, keyHash, brHex(salt)));
+    if (p.status !== 200 || !p.body || p.body.ok === false || !Array.isArray(p.body.shown)) return void brSay(box, "key", Owner.why(p) || "Refused.", "no");
+    const r = await Owner.submitTo("/api/account/brain-key", p.body, { apiKey: key });
+    if (refusedAt(r)) return void brSay(box, "key", Owner.why(r) || "Refused.", "no");
+    const s = r.body || {};
+    const tail = String(s.tail || d.tail || "");
+    BR.saved[x.id] = { print: keyHash.slice(0, 8), tail, env: s.envWins ? String(s.envWins) : "" };
+    // the brain the desk (or the form) takes: the provider and the model, and the effort the desk has where the provider takes it (else the
+    // last it takes, as its form offers; none where it takes none: the provider's own)
+    // the brain as the place Connect was pressed in has it: the sheet's (with a brain "Use this brain" just signed), or the setup's own
+    const curNow = ctx === BR.ctx ? brCur() : ctx && typeof ctx.cur === "function" ? ctx.cur() : null;
+    const effort = x.efforts.includes(String((curNow && curNow.effort) || "medium")) ? String((curNow && curNow.effort) || "medium") : x.efforts[x.efforts.length - 1];
+    const brain = { provider: x.id, model: d.model, ...(effort ? { effort } : {}) };
+    const blocks = brOf({ id: x.id, envBlocks: s.envBlocks, envWins: s.envWins, keyFrom: s.keyFrom }).envBlocks || x.envBlocks;
+    const env = blocks ? ` ${blocks} is set where the account runs and blocks a saved key: unset it and ANTHROPIC_BASE_URL, then restart.` : s.envWins ? ` ${s.envWins} in the account's environment is still used before it.` : "";
+    const said = `Connected · ${x.name} · ${d.modelName || d.model}${tail ? ` · key ${tail.startsWith("…") ? tail : `…${tail}`}` : ""}.`;
+    if (where.desk) {
+      brSay(box, "key", `${said} Switching the desk…`, "wait");
+      const u = await own({ type: "setDesk", desk: "desk", change: "brain", value: JSON.stringify(brain) });
+      if (!u || refusedAt(u)) return void brSay(box, "key", `${said} The desk still thinks with its brain before: ${(u && Owner.why(u)) || "the switch was not signed"}. Use this brain, below, switches it.${env}`, "no");
+      BR.cur = brain;
+      brSay(box, "key", `${said} The desk thinks with it from its next call.${env}`, "ok");
+    } else if (where.form) {
+      brPutInForm(where.form, brain);
+      brSay(box, "key", `${said} Picked for the desk: Start signs it.${env}`, "ok");
+    } else brSay(box, "key", `${said}${env}`, "ok");
+    // the sheet's form below shows the provider just connected, built again with the catalog's next read
+    BR.pick = x.id;
+    BR.formFor = "";
+  } catch {
+    brSay(box, "key", sent ? "It could not be finished here: open Brains to see what was saved." : "The key could not be checked here: nothing was signed or saved.", "no");
+  } finally {
+    BR.busy = false;
+    brHold(box, false);
+    if (sent) brAfterFor(ctx);
+  }
+}
+
+/** The paste row's other buttons: Replace key (the field focused, the line saying what to do) and Remove key (the in-use provider's key
+ * file taken away, after the same yes as the form's: brForget) */
+function brConnectAct(act, box, ctx = BR.ctx || {}) {
+  if (!box) return;
+  if (act === "connect") return void brConnect(box, ctx);
+  if (act === "replace") {
+    const el = box.querySelector("[data-br-paste]");
+    if (el && el.focus) el.focus();
+    return void brSay(box, "key", "Paste the new key above, then Connect: the key in use stays until you sign the new one.");
+  }
+  if (act === "remove") {
+    const cur = brCur();
+    const x = cur && brAll(BR.catalog).find((y) => y.id === cur.provider);
+    if (x) brForget(x, box);
+  }
+}
+
 // ---- the sheet -------------------------------------------------------------------------------------------------------------------------
 
 /** Open the Brains sheet. ctx: { where ("superagent" | "setup" | "agents" | "hire"), catalog (what the opener read already, drawn at
  * once), cur() → the brain the desk (or the form) uses now, desk() → whether a desk is hired ("Use this brain"), form() → the form a pick
- * goes into ("Pick it for the desk"), after() → what the opener reads again after a change, pick (a provider to open on) } */
+ * goes into ("Pick it for the desk"), after() → what the opener reads again after a change, pick (a provider to open on), focus ("paste":
+ * the paste row takes the focus — the Superagent's header opens it so while its brain cannot think) } */
 function openBrains(ctx = {}) {
   BR.ctx = ctx;
   BR.cur = null;
@@ -964,7 +1187,9 @@ function openBrains(ctx = {}) {
   const cur = brCur();
   BR.pick = String(ctx.pick || (cur && cur.provider) || "");
   BR.formFor = "";
-  const body = openSheet(`<div class="br" data-br data-where="${esc(ctx.where || "")}"${BR.pick ? ' data-picked="1"' : ""}><p class="dim small br-lede">What the desk's house seats think with: a model reached with your own key and billed by its provider, asked one structured question at a time. The limits you signed stay the authority.</p><div class="br-split"><div class="br-pickers" data-br-p="cards"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div><div class="br-side" data-br-p="form"></div></div><div data-br-p="agents"></div></div>`, { title: "Brains", wide: true, redraw: brDraw });
+  // the paste row first — one key, no provider to pick (brConnect) — then the providers one by one, for a key with its own address or
+  // model, a test, or a switch back
+  const body = openSheet(`<div class="br" data-br data-where="${esc(ctx.where || "")}"${BR.pick ? ' data-picked="1"' : ""}><p class="dim small br-lede">What the desk's house seats think with: a model reached with your own key and billed by its provider, asked one structured question at a time. The limits you signed stay the authority.</p>${brPasteHtml("sheet", ctx)}<h3 class="label br-or">Or pick a provider: its own address or model, a test, a switch</h3><div class="br-split"><div class="br-pickers" data-br-p="cards"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div><div class="br-side" data-br-p="form"></div></div><div data-br-p="agents"></div></div>`, { title: "Brains", wide: true, redraw: brDraw });
   BR.body = body;
   if (body && body.addEventListener) {
     body.addEventListener("click", brClick);
@@ -974,14 +1199,25 @@ function openBrains(ctx = {}) {
       if (t && t.matches && t.matches("[data-br-model], [data-br-base]")) brFieldWarn(t.closest("[data-br-form]"));
     });
     body.addEventListener("keydown", (e) => {
-      // Enter in the key's field saves it
-      if (e.key !== "Enter" || !e.target || !e.target.matches || !e.target.matches("[data-br-key]")) return;
+      if (e.key !== "Enter" || !e.target || !e.target.matches) return;
+      // Enter in the paste row connects; in a provider's key field, saves it
+      if (e.target.matches("[data-br-paste]")) {
+        e.preventDefault();
+        return void brConnectAct("connect", e.target.closest("[data-br-connect]"));
+      }
+      if (!e.target.matches("[data-br-key]")) return;
       e.preventDefault();
       brAct("save", e.target.closest("[data-br-form]"));
     });
   }
+  brMasked(body && body.querySelector ? body.querySelector("[data-br-connect]") : null, "[data-br-paste]");
   brDraw();
   brRead();
+  // opened to take a key (the Superagent's header while its brain cannot think): the paste row has the focus
+  if (ctx.focus === "paste" && body && body.querySelector) {
+    const el = body.querySelector("[data-br-paste]");
+    if (el && el.focus && !el.disabled) el.focus({ preventScroll: true });
+  }
   return body;
 }
 /** the warning lines beside the model and the base URL (data-br-warn), from what those fields hold now: shown, with BR_KEY_WORDS, while one
@@ -1008,7 +1244,8 @@ function brFieldWarn(box) {
  * a page */
 function brWipeKeys() {
   if (typeof document === "undefined" || !document.querySelectorAll) return;
-  for (const el of document.querySelectorAll("[data-br-key]")) el.value = "";
+  // a provider's key field, and the paste row's (the sheet's, and the Superagent setup's)
+  for (const sel of ["[data-br-key]", "[data-br-paste]"]) for (const el of document.querySelectorAll(sel)) el.value = "";
   for (const el of document.querySelectorAll("[data-br-model], [data-br-base]")) if (!el.readOnly && el.tagName !== "SELECT" && (brKeyShaped(el.value) || brBaseKeyShaped(el.value))) el.value = "";
 }
 function brWipeWire() {
@@ -1053,6 +1290,7 @@ function brDraw() {
     else delete root.dataset.picked;
   }
   paint(root.querySelector('[data-br-p="cards"]'), brCardsHtml(c, cur, BR.pick, !!(BR.ctx && typeof BR.ctx.form === "function")));
+  paint(root.querySelector('[data-br-p="inuse"]'), brInUseHtml(c, cur, !!(BR.ctx && typeof BR.ctx.form === "function")));
   paint(root.querySelector('[data-br-p="agents"]'), brAgentsHtml(c));
   const side = root.querySelector('[data-br-p="form"]');
   if (!side) return;
@@ -1110,18 +1348,20 @@ function brPutBack(side, kept) {
     el.value = value;
   }
 }
-/* the key field drawn as dots (brains.css -webkit-text-security). A browser that cannot draw a text field so is given a password field
-   instead: the key is never shown in the clear */
-function brMasked(side) {
-  const el = side && side.querySelector && side.querySelector("[data-br-key]");
+/* the key field drawn as dots (brains.css -webkit-text-security) — a provider's own, or the paste row's (`sel`). A browser that cannot draw a
+   text field so is given a password field instead: the key is never shown in the clear */
+function brMasked(side, sel = "[data-br-key]") {
+  const el = side && side.querySelector && side.querySelector(sel);
   if (!el || typeof CSS === "undefined" || typeof CSS.supports !== "function") return;
   if (!CSS.supports("-webkit-text-security", "disc")) el.type = "password";
 }
 
-/* the sheet's clicks: a card (its form), back to the cards, an action of the form, a Copy */
+/* the sheet's clicks: the paste row's (Connect, Replace key, Remove key), a card (its form), back to the cards, an action of the form, a Copy */
 function brClick(e) {
   const t = e.target && e.target.closest && e.target.closest("[data-br-pick], [data-br-back], [data-br-act], [data-br-copy]");
   if (!t || t.disabled) return;
+  const strip = t.dataset.brAct !== undefined && t.closest ? t.closest("[data-br-connect]") : null;
+  if (strip) return void brConnectAct(t.dataset.brAct, strip);
   if (t.dataset.brCopy !== undefined) return void copyText(t.dataset.brCopy, t);
   if (t.dataset.brBack !== undefined) {
     const was = BR.pick;

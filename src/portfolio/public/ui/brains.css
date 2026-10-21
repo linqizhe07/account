@@ -68,6 +68,24 @@
 .br-sign dt { color: var(--dim); }
 .br-sign dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; color: var(--text); }
 
+/* CONNECT A KEY: the paste row at the sheet's top — its heading, one field and Connect, a line saying what happens, what it said, and the
+   brain in use with Replace and Remove. The field is drawn as dots wherever it is (the Superagent's checklist holds one too), as the key
+   fields are */
+[data-br-paste] { -webkit-text-security: disc; }
+.br-connect { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.br-connect p { margin: 0; }
+.br-connect .msg:empty { display: none; }
+.br-connect .msg { overflow-wrap: anywhere; }
+.br > .br-connect { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); }
+.br-c-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
+.br-c-h .label { margin: 0; }
+.br-inuse-w:empty { display: none; }
+.br-inuse { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.br-inuse-t { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.br-inuse-t b { font-weight: 600; }
+.br-inuse-a { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.br-or { margin: 0; }
+
 /* the agents: who they are, in a line each */
 .br-agents { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .br-agents .label, .br-agents p { margin: 0; }
@@ -87,6 +105,8 @@
   .br-ag li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .br-key-row { flex-wrap: wrap; }
   .br-key-row input { flex-basis: 100%; }
+  .br > .br-connect { padding: 12px; }
+  .br-inuse-a { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .br-card { transition: none; }

@@ -101,7 +101,8 @@ import { Desk, type Brain, type BrainStatus, type BrainTest, type DeskWorld } fr
 import { AccountStream } from "./account/stream.ts";
 import { BOOK_TOP, joinHubs, StreamHub, type HubTick, type HubVenue, type MarketHub } from "./live/stream-hub.ts";
 import { applyBrainKey, BrainKeyStage, envBlocksOf, envWinsOf, type BrainKeyDone } from "./account/brain-keys.ts";
-import { brainProviders, testBrain } from "./account/brains.ts";
+import { DETECT_BODY_WORDS, detectBrain, type Detected } from "./account/brain-detect.ts";
+import { brainProviders, presetBest, presetHost, testBrain } from "./account/brains.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const FIXTURES = join(ROOT, "fixtures", "home", "portfolio");
@@ -2016,6 +2017,23 @@ export class PortfolioService {
     return asked;
   }
   private readonly brainTests = new Map<string, Promise<BrainTest>>();
+
+  /** "Connect a key" (POST /api/account/brain-detect, account/brain-detect.ts): whose a pasted key is — by its shape, then by the provider's
+   * own answer to the one call that bills nothing, its list of models — and the model the desk would think with. Nothing is written and
+   * nothing is signed: saving it is the owner's signed setBrainKey, as ever. One key at a time: a second ask while one is out is told to
+   * wait (the asking can take a provider or three, fifteen seconds each at most), so nothing local can make a run of calls of it.
+   * Undefined: no desk */
+  async brainDetect(apiKey: string): Promise<Detected | undefined> {
+    if (!this.desk) return undefined;
+    if (this.detecting) return { ok: false, code: "busy", words: DETECT_BODY_WORDS.busy };
+    this.detecting = true;
+    try {
+      return await detectBrain(apiKey, this.desk.brains, { best: presetBest, host: presetHost });
+    } finally {
+      this.detecting = false;
+    }
+  }
+  private detecting = false;
 
   /** the real server runs the desk's clock (never in tests, which tick it themselves) */
   watchDesk(): () => void {

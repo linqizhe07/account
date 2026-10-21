@@ -150,6 +150,25 @@ export function prefixedKey(s: string): boolean {
   return t !== "" && (PREFIXED_KEY.test(t) || KEY_BLOCK.test(t) || JWT.test(t));
 }
 
+/** a key as a dashboard shows one it keeps: most of it hidden behind a run of "*" or "•" (four or more) */
+export const starredKey = (s: string): boolean => /[*•]{4,}/.test(String(s ?? ""));
+
+/** A KEY THAT IS ONLY AN EXAMPLE — what a how-to, a template or a dashboard shows in a key's place, never a key a provider issued: text
+ * that elides ("sk-ant-...", "sk-…"), holds a placeholder's brackets or a space ("<your key>", "{API_KEY}", "[key]"), is starred out the way
+ * a dashboard shows a key it keeps ("sk-proj-****abcd", "••••"), is a run of x's where the key's own characters go ("sk-xxxxxxxx",
+ * "AIzaXXXXXXXXXXXX"), or says what goes there ("your-api-key", "YOUR_API_KEY", "api_key_here", "paste-your-key", "changeme"). A provider's
+ * key is random letters and digits and holds none of these. The readiness checks have always called the elided and bracketed kinds "the
+ * example" (brain-claude.ts, brain-openai.ts looksLikeKey); this names the rest too, for the key route (brain-keys.ts) and "Connect a key"
+ * (brain-detect.ts), which refuse one before anything is staged, written or sent — in fixed words that never repeat it. The dashboard's
+ * kind is also told apart (starredKey), to be said in words of its own */
+export function exampleKey(s: string): boolean {
+  const t = String(s ?? "").trim();
+  if (!t) return false;
+  if (/…|\.\.\.|[<>{}[\]\s]/.test(t) || starredKey(t)) return true;
+  if (/(?:^|[-_]|^AIza)(?:x{6,}|X{6,})(?:$|[-_])/.test(t)) return true;
+  return /your[-_ ]?(?:api[-_ ]?)?(?:key|token|secret)|api[-_]?key[-_]?here|paste[-_ ]?(?:your|the)?[-_ ]?key|replace[-_ ]?me|change[-_ ]?me|insert[-_ ]?(?:your[-_ ]?)?key/i.test(t);
+}
+
 /** a field's name as a refusal may say it back: a plain identifier (a letter, then letters, digits and "_", 32 at most) that keyShaped does
  * not call a key. Anything else — a key sent as a field's name, text with quotes or spaces in it — is said as "a field", never by name */
 export function plainFieldName(name: string): boolean {

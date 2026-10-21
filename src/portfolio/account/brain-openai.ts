@@ -45,12 +45,20 @@
  * "Test the key" (test): GET <base>/models, the one call every one of these endpoints answers without billing a token — the key taken or
  * refused in the endpoint's own words (scrubbed), the models it lists (for the owner's model field), and whether the model the owner means
  * is among them. Nothing is sent anywhere but the base URL the brain would call.
+ *
+ * "Connect a key" (probe, asked by brain-detect.ts): the same GET <base>/models, with a key the owner PASTED and has not saved, at the
+ * preset's own address — never the key file's or the environment's, which may point anywhere: a pasted key goes only to the provider it
+ * was recognised as. A model API's alone (a local server, a custom endpoint and Qwen's per-workspace address have none of their own). Where
+ * the list is public (OpenRouter's), or a key may be taken and still call no model (xAI's, until its access list allows one), the preset's
+ * keyCheck is asked first. A refusal is a 401 or a 403 — or a 400 that says it is about the key, as xAI's and Gemini's layer answer one. A
+ * redirect is not followed here either; a list is read in either shape (Together's is a bare array); a model id is kept only when it
+ * looks like one and holds no piece of the key.
  */
 import { z } from "zod";
 import { isRefusal } from "../../core/errors.ts";
 import { loadKeyFile, type KeyShape } from "../live/credentials.ts";
 import { baseUrlKeyShaped, brainKeyRef, emptyField, envFix, exampleFix, fileProblem, holdsPieceOf, hostKeyShaped, hostSaid, isLoopback, keyFileAt, keyRejected, keyShaped, keyTail, noKeyFix, pathKeyShaped, present, rejectedFix, scrubbed, unusableFix } from "./brain-key.ts";
-import { MODEL_ID, type Brain, type BrainAbout, type BrainAnswer, type BrainConfig, type BrainFix, type BrainRequest, type BrainStatus, type BrainSuggestions, type BrainTest } from "./desk.ts";
+import { MODEL_ID, type Brain, type BrainAbout, type BrainAnswer, type BrainConfig, type BrainFix, type BrainProbe, type BrainRequest, type BrainStatus, type BrainSuggestions, type BrainTest } from "./desk.ts";
 
 /** the older key file of the "openai" preset, read while credentials/brains/openai.json is not there */
 export const OPENAI_KEY_REF = "credentials/openai/api-key.json";
@@ -64,6 +72,8 @@ export const OPENAI_LABEL = "OpenAI API";
 const REASONING_ROOM = 8192;
 /** "Test the key" waits this long for the list of models, at most */
 const TEST_TIMEOUT_MS = 15_000;
+/** the most model ids "Connect a key" reads from one list (OpenRouter lists several hundred) */
+export const PROBE_MODELS_MAX = 1000;
 const EFFORTS: ReadonlyArray<BrainConfig["effort"]> = ["low", "medium", "high"];
 
 /** How an endpoint differs from OpenAI's own, as its provider's docs say (brains.ts names them per preset; a base URL's host may bring its
@@ -128,7 +138,26 @@ export interface OpenAIPreset {
   docs?: string | undefined;
   keyPage?: string | undefined;
   note?: string | undefined;
+  /** "Connect a key" (brain-detect.ts): the models a pasted key is connected with, best first — the first one the provider lists for the
+   * key is the one chosen. Read from the provider's own pages on the day brains.ts says (BEST_READ) */
+  best?: ReadonlyArray<string> | undefined;
+  /** the path that says whether a key is taken, asked before the list of models — for a provider whose list is PUBLIC (OpenRouter's answers
+   * without a key, so a 200 there says nothing of one), or whose key may be taken and still call no model (xAI's, until its access list
+   * allows one) — and what its answer may say against the key (`judge`): one that manages the account and runs no model ("manages"), or
+   * one that is blocked or may call no model yet ("blocked"), in a phrase that follows "<provider> took the key, but …" */
+  keyCheck?: { path: string; judge?: ((json: unknown) => { kind: "manages" | "blocked"; words: string } | undefined) | undefined } | undefined;
 }
+
+/** the ids of a list of models as an endpoint answers it — OpenAI's {object: "list", data: [{id}]}, or, as Together's does, the bare array
+ * — each as the chat endpoint names it (Gemini's list may say "models/<id>", and is asked "<id>") */
+export function listedIds(json: unknown): string[] {
+  const data = Array.isArray(json) ? json : json && typeof json === "object" ? (json as { data?: unknown }).data : undefined;
+  if (!Array.isArray(data)) return [];
+  return data.map((x) => (x && typeof x === "object" ? (x as { id?: unknown }).id : undefined)).filter((x): x is string => typeof x === "string").map((x) => x.replace(/^models\//, ""));
+}
+/** a 400 whose words are about the key ("Incorrect API key provided" — xAI; "Please pass a valid API key" — Gemini's layer): a refusal of
+ * the key, as a 401 is elsewhere */
+const keyWords400 = (status: number, message: string): boolean => status === 400 && /api[ _-]?key|credential|authenticat|unauthori/i.test(message);
 
 /** OpenAI's own: what openaiBrain is when no preset is named (the brain this file always was), the base for the "openai" preset */
 export const OPENAI_PRESET: OpenAIPreset = {
@@ -162,7 +191,7 @@ export function presetOf(o: Partial<OpenAIPreset>): OpenAIPreset {
   const given = Object.fromEntries(Object.entries(o).filter(([k, v]) => v !== undefined && k in PRESET_KEYS)) as Partial<OpenAIPreset>;
   return { ...base, ...given };
 }
-const PRESET_KEYS: Record<keyof OpenAIPreset, true> = { id: true, label: true, kind: true, defaultBase: true, baseHint: true, keyRef: true, legacyKeyRef: true, envPrefix: true, keyOptional: true, suggestedModels: true, efforts: true, quirks: true, docs: true, keyPage: true, note: true };
+const PRESET_KEYS: Record<keyof OpenAIPreset, true> = { id: true, label: true, kind: true, defaultBase: true, baseHint: true, keyRef: true, legacyKeyRef: true, envPrefix: true, keyOptional: true, suggestedModels: true, efforts: true, quirks: true, docs: true, keyPage: true, note: true, best: true, keyCheck: true };
 
 /** the key file's empty template for a preset: one line, the key and the model empty, the base URL the preset's own (empty where the owner
  * names it) */
@@ -509,13 +538,49 @@ export function openaiBrain(o: OpenAIBrainOptions): Brain {
       if (r.status === 401 || r.status === 403) return { ok: false, provider: p.id, status: r.status, words: `${host} did not accept the key${said}` };
       if (r.status === 404) return { ok: false, provider: p.id, status: r.status, words: `nothing answers at ${host}${new URL(reach.baseUrl).pathname.replace(/\/$/, "")}/models: the base URL's path may be wrong (it ends /v1 for most), or the endpoint keeps no list of models — the desk's first call will tell` };
       if (r.status < 200 || r.status >= 300) return { ok: false, provider: p.id, status: r.status, words: `${host} answered ${r.status}${said}` };
-      const data = r.json && typeof r.json === "object" ? (r.json as { data?: unknown }).data : undefined;
-      // each id checked to look like a model's name, and to hold no piece of the key in use, before the page is shown it (at most 200)
-      const models = Array.isArray(data) ? [...new Set(data.map((x) => (x && typeof x === "object" ? (x as { id?: unknown }).id : undefined)).filter((x): x is string => typeof x === "string" && MODEL_ID.test(x) && !keyShaped(x) && !holdsPieceOf(x, reach.apiKey)))].slice(0, 200) : [];
+      // each id (from a list in either shape: listedIds) checked to look like a model's name, and to hold no piece of the key in use, before
+      // the page is shown it (at most 200)
+      const models = [...new Set(listedIds(r.json).filter((x) => MODEL_ID.test(x) && !keyShaped(x) && !holdsPieceOf(x, reach.apiKey)))].slice(0, 200);
       const want = (model ?? "").trim() || reach.model;
       const among = !want ? "" : models.includes(want) ? `; ${want} is among them` : models.length ? `; "${want.slice(0, 80)}" is not among them — check the model's name` : "";
       const took = reach.apiKey ? `${host} accepted the key` : `${host} answered (no key sent: a local server)`;
       return { ok: true, provider: p.id, status: r.status, words: `${took}${models.length ? ` and lists ${models.length} model${models.length === 1 ? "" : "s"}` : ""}${among}.`, models };
+    },
+    async probe(key: string): Promise<BrainProbe> {
+      // the provider's own address, and no other: a pasted key goes only to the provider it was recognised as — never to a base URL in the
+      // key file or the environment, which may name any host
+      const base = p.kind === "model-api" && p.defaultBase ? parseBaseUrl(undefined, p.defaultBase) : undefined;
+      if (!base || !base.ok) return { outcome: "error", words: `${p.label} has no address of its own to ask a pasted key at` };
+      const reach = { ok: true as const, how: "", apiKey: key, baseUrl: base.url, model: "", file: "", ref: "" };
+      const host = hostSaid(base.url);
+      const ask = (path: string): Promise<Answered> => call(reach, path, { method: "GET", timeoutMs: o.timeoutMs ?? TEST_TIMEOUT_MS });
+      const said = (r: Answered) => (r.message ? { said: r.message } : {});
+      const refused = (r: Answered): BrainProbe => ({ outcome: "refused", status: r.status, words: `${host} did not accept the key`, ...said(r) });
+      const other = (r: Answered): BrainProbe => ({ outcome: "error", status: r.status, words: `${host} answered ${r.status}`, ...said(r) });
+      // the key refused: 401, 403, or a 400 that says so (xAI's, Gemini's layer)
+      const keyNo = (r: Answered): boolean => r.status === 401 || r.status === 403 || keyWords400(r.status, r.message);
+      try {
+        // the provider's own word on the key first, where its list of models says nothing of it (a public list) or says too little (a key
+        // that may call no model yet)
+        if (p.keyCheck) {
+          const k = await ask(p.keyCheck.path);
+          if (keyNo(k)) return refused(k);
+          if (k.status < 200 || k.status >= 300) return other(k);
+          const against = p.keyCheck.judge?.(k.json);
+          if (against) return { outcome: "refused", kind: against.kind, status: k.status, words: against.words };
+        }
+        const r = await ask("/models");
+        if (keyNo(r)) return refused(r);
+        if (r.status < 200 || r.status >= 300) return other(r);
+        // each id as the chat endpoint names it, from a list in either shape (listedIds), checked to look like a model's name and to hold no
+        // piece of the key before anything else reads it
+        const models = [...new Set(listedIds(r.json).filter((x) => MODEL_ID.test(x) && !keyShaped(x) && !holdsPieceOf(x, key)))].slice(0, PROBE_MODELS_MAX);
+        return { outcome: "taken", status: r.status, words: `${host} accepted the key${models.length ? ` and lists ${models.length} model${models.length === 1 ? "" : "s"}` : " and lists no model"}`, models };
+      } catch (err) {
+        // no answer, none in time, or a redirect (call() says which): the words name the host, never the key
+        const m = String((err as Error)?.message ?? err);
+        return { outcome: "unreachable", words: /redirect/i.test(m) ? `${host} answered with a redirect, which the account does not follow` : `no answer from ${host}${/in time/.test(m) ? " in time" : ""}` };
+      }
     },
     async decide<T>(req: BrainRequest<T>): Promise<BrainAnswer<T>> {
       const reach = openaiReach(o, req.brain.model);

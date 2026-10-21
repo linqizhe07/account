@@ -799,9 +799,26 @@ describe("honesty: empty seats say so, a brain that cannot think says why, nothi
     expect(p.out(`sgFloorState(${JSON.stringify(feed({ brain: no }))}, null, null).brain`)).toEqual({ ok: false, why: "the API did not accept the key" });
     const none = { ...CATALOG, brain: { ...CATALOG.brain, ok: false, why: "no key" }, brains: CATALOG.brains.map((b) => ({ ...b, ok: false, why: b.why || "no key", fix: { ...FIX, code: "no-key", words: `No key for ${b.label} yet.` } })) };
     const setup = p.run<string>(`sgSetupHtml(true, ${JSON.stringify(none)}, sgPaperVenues(), "")`);
-    // where each brain's key goes, said once, in its own block of 3 · The brain; the checklist points there
+    // where each brain's key goes, said once, in its own block of 3 · The brain; the checklist takes a key from any provider right there
+    // (ui/brains.js brPasteHtml: the account tells whose it is) — outside the setup's form, so no draft ever sweeps it up — and points to
+    // the brain's own block too
     expect(setup.match(/No key for Claude yet\./g)).toHaveLength(1);
-    expect(setup).toContain("Not yet for Claude: type its key under 3 · The brain, below.");
+    expect(setup).toContain("Not yet for Claude. Paste a key from any provider: the account tells whose it is.");
+    expect(setup).toContain('<section class="br-connect" data-br-connect="setup" aria-label="Paste an API key">');
+    expect(setup).toContain('<button type="button" class="sg-btn sg-btn-p sg-btn-s" data-br-act="connect">Connect</button>');
+    expect(setup).toContain("then you sign to pick its best model for the desk.");
+    expect(setup).toContain('<span class="sg-dim">Or type its key under 3 · The brain, below.</span>');
+    expect(setup.indexOf('data-br-connect="setup"')).toBeLessThan(setup.indexOf('<form class="sg-setup-f"'));
+    // a browser that cannot sign is shown no field to paste into
+    expect(p.run<string>(`sgCheckHtml(false, ${JSON.stringify(none)}, sgPaperVenues(), null, true)`)).toContain("Not yet for Claude: type its key under 3 · The brain, below.");
+    expect(p.run<string>(`sgCheckHtml(false, ${JSON.stringify(none)}, sgPaperVenues(), null, true)`)).not.toContain("data-br-paste");
+    // once a key is in: the key's masked tail, and the way to replace or remove it (the Brains sheet, on that brain) — no paste field then
+    const keyed = { ...CATALOG, brains: CATALOG.brains.map((b) => ({ ...b, ok: true, how: "the key file credentials/brains/claude.json", tail: "…7890" })) };
+    const done = p.run<string>(`sgCheckHtml(true, ${JSON.stringify(keyed)}, sgPaperVenues(), { provider: "claude" }, true)`);
+    expect(done).toContain("Claude is ready, through the key file credentials/brains/claude.json · key …7890. Its calls are billed to your key.");
+    expect(done).toContain('<button type="button" class="sg-link" data-sg-act="brains" data-v="claude" data-fk="sg:brains:claude">Replace or remove the key ›</button>');
+    expect(done).not.toContain("data-br-paste");
+    expect(p.run<string>(`sgCheckHtml(false, ${JSON.stringify(keyed)}, sgPaperVenues(), { provider: "claude" }, true)`)).not.toContain("Replace or remove the key");
     // the brain step opens the Brains sheet; each brain that is not ready has its own way there, at its own card
     expect(setup).toContain('<button type="button" class="sg-link" data-sg-act="brains" data-fk="sg:brains">Brains: add a key, pick a model ›</button>');
     expect(setup).toContain('data-sg-act="brains" data-v="openai" data-fk="sg:brains:openai">Type its key ›</button><details class="sg-fix-d"><summary>Not ready — or put the key in its key file</summary>');

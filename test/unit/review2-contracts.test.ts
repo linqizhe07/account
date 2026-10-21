@@ -131,12 +131,14 @@ describe("the docs' flags and scripts exist", () => {
 describe("a brain's key typed on the page: the route, the server's parser, the docs", () => {
   // the route's path is written out literally where it is registered (so the header check above sees it); the parser's skip is the module's
   // constant: the two must be the same path, or the server's JSON parser would read — and could log — the one body that carries a key
-  it("POST /api/account/brain-key is registered under the path the JSON parser skips, and brain-test beside it", () => {
+  it("POST /api/account/brain-key — and brain-detect, the other route a key is sent to — are registered under the paths the JSON parser skips, and brain-test beside them", () => {
     const keys = read("src/portfolio/account/brain-keys.ts");
     const constant = /export const BRAIN_KEY_PATH = "([^"]+)"/.exec(keys)?.[1];
     expect(constant).toBe("/api/account/brain-key");
-    expect(registeredRoutes()).toEqual(expect.arrayContaining([constant!, "/api/account/brain-test"]));
-    expect(server).toMatch(/app\.use\(\(req, res, next\) => \(isBrainKeyPath\(req\.path\) \? next\(\) : json\(req, res, next\)\)\)/);
+    const detect = /export const BRAIN_DETECT_PATH = "([^"]+)"/.exec(read("src/portfolio/account/brain-detect.ts"))?.[1];
+    expect(detect).toBe("/api/account/brain-detect");
+    expect(registeredRoutes()).toEqual(expect.arrayContaining([constant!, detect!, "/api/account/brain-test"]));
+    expect(server).toMatch(/app\.use\(\(req, res, next\) => \(isBrainKeyPath\(req\.path\) \|\| isBrainDetectPath\(req\.path\) \? next\(\) : json\(req, res, next\)\)\)/);
     // no JSON parser runs before the guard: the first app.use(express.json…) is gone, and the one there is comes after the 403
     expect(server).not.toMatch(/app\.use\(express\.json\(/);
     expect(server.indexOf("const json = express.json({ inflate: false })")).toBeGreaterThan(server.indexOf("this server answers only its own pages on this machine"));
