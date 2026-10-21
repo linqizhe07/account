@@ -122,7 +122,7 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
     <section class="pane" data-pane="trade" aria-labelledby="h-trade" hidden><h1 class="sr" id="h-trade">Trade</h1><div id="pane-trade"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     <!-- the desk: the account's own agents (ui/desk.js), opened from the rail's Agents -->
     <section class="pane" data-pane="desk" aria-labelledby="h-desk" hidden><h1 class="sr" id="h-desk">Agents</h1><div id="pane-desk"><div class="skel-rows" aria-hidden="true"><span class="skel big"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
-    <!-- the superagent: the desk trading a paper account by itself, as a live floor (ui/floor.js draws it, ui/superagent.js reads it) -->
+    <!-- the superagent: the desk trading a paper account by itself, shown on the market it trades (ui/superagent.js; ui/chart.js draws its trades) -->
     <section class="pane" data-pane="superagent" aria-labelledby="h-superagent" hidden><h1 class="sr" id="h-superagent">Superagent</h1><div id="pane-superagent"><div class="skel-rows" aria-hidden="true"><span class="skel big"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div></section>
     </div>
   </main>
@@ -157,7 +157,6 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <!-- the Brains sheet (ui/brains.js): one place for every brain the desk can think with, opened from the Superagent and the Agents pane -->
 <script defer src="/ui/brains.js"></script>
 <script defer src="/ui/desk.js"></script>
-<script defer src="/ui/floor.js"></script>
 <script defer src="/ui/superagent.js"></script>
 <script defer src="/ui/statement.js"></script>
 <script defer src="/ui/agents-mount.js"></script>

@@ -1,32 +1,19 @@
-/* THE SUPERAGENT (ui/superagent.js): Trade's second mode, the desk on a paper account as a live trading floor. Its chrome is Hyperliquid's
-   trade app's grammar on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]), in the background the Account wears, the
-   same as Regular's — so switching modes changes what the screen shows, never how it looks: glass panels 6 px apart over the water, radius
-   4, a hairline inside the edge and no shadow; one face (Inter) at 12 on 15, one weight; labels in the dim colour over their values;
-   controls 33 high with 3 px corners; ink for what is on, the brightest ink under the pointer; up, down and the area's amber for waiting.
-   .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, the book, chg(), the
-   toggles) is the area's too.
-   THE FLOOR keeps a room of its own, in the page's background: light on Light, dark on Black, declared on its panel (.sg-floor) for
-   ui/floor.js, which reads its colours from there (and again when the page switches) — its room, lines, scanlines and accent (--sg-*:
-   the Account's green on Light, white on Black); its words, ups, downs and amber are the area's. The seats' tints (--sg-r-<role>) are
-   a grey ramp, each seat at a lightness of its own — dark greys on Light, light greys on Black: each is a mascot's colour and a room
-   chip's, never alone (the seat's name is always beside it).
-   The --sg-* names the floor and the older rules know are kept as aliases of the area's: mint is the accent, coral is down, amber is the
-   area's caution.
+/* THE SUPERAGENT (ui/superagent.js): Trade's second mode, the desk trading a paper account by itself, shown on the market it trades. Its
+   chrome is Hyperliquid's trade app's grammar on the trading area's own tokens (ui/tokens.css, html[data-area="trade"]), in the background
+   the Account wears, the same as Regular's — so switching modes changes what the screen shows, never how it looks: glass panels 6 px apart
+   over the water, radius 4, a hairline inside the edge and no shadow; one face (Inter) at 12 on 15, one weight; labels in the dim colour
+   over their values; controls 33 high with 3 px corners; ink for what is on, the brightest ink under the pointer; up, down and the area's
+   amber for waiting.
+   .sg defines none of the Account's names: it inherits them from the area, and whatever is reused inside it (the chart, chg(), the
+   toggles) is the area's too. The seats' tints (--sg-r-<role>) are a grey ramp, each seat at a lightness of its own — dark greys on Light,
+   light greys on Black: each is a face's colour and a room chip's, never alone (the seat's name is always beside it).
    MOTION in the chrome is HL's: colour, background and edge over 0.2 s ease-in-out; a card or a room line comes in from 5 px above, fading,
-   in 0.3 s; a figure that changes starts in the up colour (or down) and settles to its own in 1.8 s. Springs are the canvas's alone.
-   Hover rules sit inside (hover: hover); a coarse pointer gets 44 px targets. Under prefers-reduced-motion nothing moves (the last rule). */
+   in 0.3 s; a figure that changes starts in the up colour (or down) and settles to its own in 1.8 s. What the desk did is played louder
+   (ui/superagent.js sgPlay): a banner drops over the chart, the lead's chip slides along the seats' line, the seat at work hops, a new row
+   lands lit, and the chart's own dots, lines and results land with it (chart.css). Hover rules sit inside (hover: hover); a coarse pointer
+   gets 44 px targets. Under prefers-reduced-motion nothing moves (the last rule). */
 
 .sg {
-  /* the names the floor's script and the older rules know, as the area's */
-  --sg-mint: var(--hl-accent);
-  --sg-on: var(--hl-text);
-  --sg-on-60: var(--hl-dim);
-  --sg-coral: var(--hl-down);
-  --sg-amber: var(--hl-warn);
-  --sg-line: var(--hl-inset);
-  --sg-line-2: var(--hl-tabline);
-  --sg-ink: var(--hl-on-accent);
-  --sg-deep-2: var(--hl-panel);
   /* the seats' tints on Light: dark greys, white words on them at 4.5:1 or better (the lightest, Exit's, 5.3:1) */
   --sg-r-head: #111111;
   --sg-r-search: #2e2e2b;
@@ -164,7 +151,7 @@
   .sg-tools { justify-content: flex-start; flex-wrap: wrap; }
 }
 
-/* ---- the next step: a panel edged in the accent between the header and the floor — what it is in a line (its few words in the ink, the rest
+/* ---- the next step: a panel edged in the accent between the header and the chart — what it is in a line (its few words in the ink, the rest
    dim), and its buttons at the end; under 760 the buttons go under the words ------------------------------------------------------------ */
 .sg-next { display: flex; align-items: center; justify-content: space-between; gap: 8px 24px; box-shadow: inset 2px 0 0 var(--hl-accent-soft), inset 0 0 0 1px var(--card-border); }
 .sg-next[hidden] { display: none; }
@@ -194,55 +181,107 @@
   .sg-wr-k { grid-column: 1 / -1; }
 }
 
-/* ---- the floor: a room in the page's own background — light on Light, dark on Black (ui/floor.js reads these again when the page
-   switches) — the canvas filling the panel, the frame rate in its corner, a caption under it. Its own names are set here: the room and
-   its desks, its lines and scanlines, and what is on (the Account's green on Light, white on Black) with the words on it; its words, ups,
-   downs, amber and the seats' tints are the area's, as every panel's ------------------------------------------------------------------ */
-.sg-floor {
-  --sg-deep: #f1f1ee;
-  --sg-deep-2: #ffffff;
-  --sg-line: rgba(17, 17, 17, 0.13);
-  --sg-scan: rgba(17, 17, 17, 0.035);
-  --sg-mint: #00843d;
-  --sg-ink: #ffffff;
-  padding: 0;
-  overflow: hidden;
-  background: var(--sg-deep);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-/* on Black (chosen, or the system's dark where no script chose): the dark room — its two near-blacks, white lines, white for what is on */
-:root[data-theme="black"] .sg-floor {
-  --sg-deep: #08090a;
-  --sg-deep-2: #121315;
-  --sg-line: rgba(255, 255, 255, 0.14);
-  --sg-scan: rgba(0, 0, 0, 0.16);
-  --sg-mint: #ffffff;
-  --sg-ink: #0a0a0a;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .sg-floor {
-    --sg-deep: #08090a;
-    --sg-deep-2: #121315;
-    --sg-line: rgba(255, 255, 255, 0.14);
-    --sg-scan: rgba(0, 0, 0, 0.16);
-    --sg-mint: #ffffff;
-    --sg-ink: #0a0a0a;
-  }
-}
-.sg-canvas { display: block; width: 100%; aspect-ratio: 16 / 7; max-height: min(560px, 60vh); border-radius: var(--hl-r-panel) var(--hl-r-panel) 0 0; background: var(--sg-deep); }
-/* tall enough on a tablet that the floor's own scale stays at 0.6 or more (its words never under its smallest size) */
-@container (min-width: 480px) { .sg-canvas { min-height: 350px; } }
-/* a phone: taller than 16:7, the floor's own narrow layout (ui/floor.js) given the room its words need */
-@container (max-width: 479px) { .sg-canvas { min-height: 300px; } }
-/* the floor's own frame rate: in the panel's foot-right corner, on the caption's line (the tape runs along its top) */
-.sg-hud { position: absolute; bottom: 8px; right: 12px; color: var(--hl-dim); pointer-events: none; font-variant-numeric: tabular-nums; }
-.sg-hud:empty { display: none; }
-.sg-cap { margin: 0; padding: 6px 170px 8px 12px; color: var(--hl-dim); overflow-wrap: anywhere; }
-@container (max-width: 559px) { .sg-cap { padding-right: 12px; padding-bottom: 26px; } }
+/* ---- the chart, and beside it what the desk is doing: one row on a wide pane (the chart takes what the side leaves), the side under the
+   chart on a narrow one --------------------------------------------------------------------------------------------------------------- */
+.sg-main { display: flex; flex-wrap: wrap; gap: var(--hl-gap); align-items: stretch; }
+.sg-chartp { flex: 999 1 640px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sg-side { flex: 1 1 340px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* over the chart: the market, why it is the one shown, the other markets the desk holds one press away */
+.sg-chart-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.sg-chart-h .sg-lab { color: var(--hl-text); }
+.sg-chart-h b { font-weight: 400; color: var(--hl-text); }
+.sg-mkts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
+.sg-mkt { min-height: 24px; padding: 0 8px; border: 0; border-radius: var(--hl-r); background: var(--hl-inset); color: var(--hl-text); font: inherit; cursor: pointer; transition: background-color var(--hl-ease), color var(--hl-ease); }
+.sg-mkt[aria-pressed="true"] { background: var(--hl-accent-soft); color: var(--hl-on-accent); }
+/* the stage: the chart as tall as a trading screen's, and the banner laid over its top (under the chart's own toolbar, clear of its price
+   axis) — out of the flow, so a banner coming and going never moves the chart */
+.sg-stage { position: relative; min-width: 0; }
+.sg-chart { display: flex; flex-direction: column; height: clamp(380px, 58vh, 620px); min-width: 0; }
+/* the chart's open-high-low-close on a line of its own above the bars, never over them */
+.sg-chart .ch-plot { margin-top: 19px; overflow: visible; }
+.sg-chart .ch-ohlc { top: -19px; left: 0; }
+.sg-wait-w { margin: auto; max-width: 40ch; text-align: center; color: var(--hl-dim); }
+/* THE BANNER: what the desk just did, in a line — the seat that did it (its face), the words in bold, a few more under them — in the buy
+   colour for a buy, the sell colour for a sell, ink for a close, a turn-down or a pick, amber for what waits for the owner; it drops in */
+.sg-banner { position: absolute; top: 46px; left: 8px; right: 84px; z-index: 2; display: flex; justify-content: center; pointer-events: none; }
+.sg-banner:empty { display: none; }
+.sg-bn { display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 8px 14px 8px 8px; border-radius: var(--hl-r); background: var(--hl-text); color: var(--hl-panel); animation: sg-bn-in 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.25) both; }
+.sg-bn[data-tone="up"] { background: var(--hl-buy); color: var(--hl-on-trade); }
+.sg-bn[data-tone="down"] { background: var(--hl-sell); color: var(--hl-on-trade); }
+.sg-bn[data-tone="wait"] { background: var(--hl-warn-fill); color: var(--hl-warn); box-shadow: inset 0 0 0 1px var(--hl-warn); }
+.sg-bn-a { display: inline-flex; flex: none; padding: 3px; border-radius: 50%; background: var(--hl-panel); }
+.sg-bn-a .sg-blob { width: 28px; height: 28px; }
+.sg-bn-w { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sg-bn-w b { font: 600 15px/19px var(--font-sans); overflow-wrap: anywhere; }
+.sg-bn-w span { font-size: 12px; line-height: 15px; overflow-wrap: anywhere; }
+@keyframes sg-bn-in { from { opacity: 0; transform: translateY(-12px) scale(0.96); } }
+@container (max-width: 559px) { .sg-banner { top: 42px; right: 8px; } .sg-bn-w b { font-size: 13px; line-height: 17px; } }
 
-/* ---- under the floor: one panel of tabs — Seats, Balance, Chart, Room, Rules — its tab bar Regular's (terminal.css .tt-tabs: dim words, the
-   one showing in the ink with its line under it, sliding to the next one pressed) along the panel's top edge, one tab's panel under it ---- */
+/* NOW: what the desk is doing in one sentence, its cycle and the next one's countdown at the right, a line under it, and the way out where
+   it can do nothing (Connect a brain) */
+.sg-now { display: flex; flex-direction: column; gap: 6px; }
+.sg-now-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sg-now-c { color: var(--hl-dim); white-space: nowrap; }
+.sg-now-big { margin: 0; font: 600 18px/24px var(--font-sans); color: var(--hl-title); overflow-wrap: anywhere; }
+.sg-now-big[data-tone="warn"] { color: var(--hl-warn); }
+.sg-now-big[data-tone="down"] { color: var(--hl-down); }
+.sg-now-big[data-tone="dim"] { color: var(--hl-dim); }
+.sg-now-sub { margin: 0; color: var(--hl-text-2); line-height: 17px; overflow-wrap: anywhere; }
+.sg-now .sg-btn { align-self: flex-start; margin-top: 2px; }
+
+/* THE SEATS' LINE: four seats in a row, each its face, its name and its count, an arrow between; the one at work lit in the green and
+   hopping; the newest bubble over the seat that said it; the lead's chip under them, moving from step to step (its place is --at: a
+   transition of where it stands) — ink and struck through where it was turned down, amber while it waits for the owner */
+.sg-relay-l { position: relative; list-style: none; margin: 0; padding: 0 0 30px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.sg-rs { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; padding: 8px 4px; border-radius: var(--hl-r); background: var(--hl-inset); text-align: center; transition: background-color var(--hl-ease), box-shadow var(--hl-ease); }
+.sg-rs + .sg-rs::before { content: "›"; position: absolute; left: -4px; top: 22px; transform: translateX(-50%); color: var(--hl-dim); }
+.sg-rs[data-on] { background: var(--hl-online-fill); box-shadow: inset 0 0 0 1.5px var(--hl-mark); }
+.sg-rs-a { display: inline-flex; }
+.sg-rs-a .sg-blob { width: 36px; height: 36px; }
+.sg-rs[data-on] .sg-rs-a { animation: sg-hop 0.9s ease-in-out infinite; }
+.sg-rs-n { color: var(--hl-text); overflow-wrap: anywhere; }
+.sg-rs-c { color: var(--hl-dim); font-size: 11px; line-height: 14px; overflow-wrap: anywhere; }
+.sg-rs-b { position: absolute; bottom: calc(100% + 8px); left: 50%; z-index: 3; width: max-content; max-width: 230px; padding: 6px 9px; border-radius: var(--hl-r); background: var(--hl-panel); color: var(--hl-text); box-shadow: inset 0 0 0 1px var(--hl-tabline); text-align: left; line-height: 16px; transform: translateX(-50%); animation: sg-pop 0.3s ease-out both; }
+.sg-rs:first-child .sg-rs-b { left: 0; transform: none; }
+.sg-rs:nth-child(4) .sg-rs-b { left: auto; right: 0; transform: none; }
+.sg-chipl { position: absolute; bottom: 2px; left: calc((var(--at, 0) + 0.5) * 25%); padding: 2px 8px; border-radius: 999px; background: var(--hl-buy); color: var(--hl-on-trade); font: 600 11px/16px var(--font-sans); white-space: nowrap; transform: translateX(-50%); transition: left 0.7s cubic-bezier(0.3, 0.9, 0.3, 1), background-color var(--hl-ease), color var(--hl-ease); animation: sg-pop 0.3s ease-out both; }
+.sg-chipl[data-tone="no"] { background: var(--hl-text); color: var(--hl-panel); text-decoration: line-through; }
+.sg-chipl[data-tone="done"] { background: var(--hl-text); color: var(--hl-panel); }
+.sg-chipl[data-tone="down"] { background: var(--hl-sell); }
+.sg-chipl[data-tone="wait"] { background: var(--hl-warn-fill); color: var(--hl-warn); box-shadow: inset 0 0 0 1px var(--hl-warn); }
+@keyframes sg-hop { 50% { translate: 0 -3px; } }
+@keyframes sg-pop { from { opacity: 0; translate: 0 4px; scale: 0.92; } }
+
+/* WHAT IT DID: one row a step, newest first — its mark (done in the buy colour, or the sell colour for a sell or a loss; turned down in ink;
+   amber for what waits and for a warning), its words in bold with a line under them, its time and the seat that took it; the list scrolls
+   inside the side, its rows edge to edge; a row that just happened lands lit */
+.sg-did-h { margin: 0; }
+.sg-did { list-style: none; margin: 0 -12px -10px; padding: 0; display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--hl-scroll-thumb) transparent; }
+.sg-di { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 2px 10px; align-items: start; padding: 9px 12px; border-top: 1px solid var(--hl-tabline); animation: sg-in 0.3s ease both; transition: background-color 1.2s ease; }
+.sg-di[data-new] { background: var(--hl-online-fill); animation: sg-land 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.sg-di-i svg { display: block; }
+.sg-di-i path { fill: none; stroke: var(--hl-on-trade); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sg-di[data-i="ok"] .sg-di-i circle { fill: var(--hl-buy); }
+.sg-di[data-i="ok"][data-tone="down"] .sg-di-i circle { fill: var(--hl-sell); }
+.sg-di[data-i="no"] .sg-di-i rect { fill: var(--hl-text); }
+.sg-di[data-i="no"] .sg-di-i path { stroke: var(--hl-panel); }
+.sg-di[data-i="wait"] .sg-di-i circle { fill: none; stroke: var(--hl-warn); stroke-width: 1.5; }
+.sg-di[data-i="wait"] .sg-di-i path { stroke: var(--hl-warn); stroke-width: 1.5; }
+.sg-di[data-i="warn"] .sg-di-i path:first-child { fill: var(--hl-warn); stroke: none; }
+.sg-di[data-i="warn"] .sg-di-i path:last-child { stroke: var(--hl-panel); }
+.sg-di-w { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sg-di-w b { font: 600 13px/17px var(--font-sans); color: var(--hl-title); overflow-wrap: anywhere; }
+.sg-di-w span { color: var(--hl-dim); overflow-wrap: anywhere; }
+.sg-di-t { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--hl-dim); white-space: nowrap; }
+.sg-di-none { padding: 10px 12px; color: var(--hl-dim); border-top: 1px solid var(--hl-tabline); }
+@keyframes sg-land { from { opacity: 0; transform: translateY(-8px); } }
+
+/* ---- the open positions: HL's positions table under the chart, its count and the day's closes over it ---------------------------------- */
+.sg-pos .sg-sec-h { margin-bottom: 4px; }
+.sg-pos-none { margin: 0; }
+
+/* ---- under the positions: one panel of tabs — Equity, Seats, Room, Rules — its tab bar Regular's (terminal.css .tt-tabs: dim words, the
+   one showing in the ink with its line under it, sliding to the next one pressed) along the panel's top edge, one tab's panel under it --- */
 .sg-low { padding-top: 0; }
 .sg-low > [role="tabpanel"] { min-width: 0; padding-top: 10px; }
 .sg-low > [role="tabpanel"][hidden] { display: none; }
@@ -265,7 +304,6 @@
 .sg-card:focus-visible { box-shadow: inset 0 0 0 2px var(--hl-accent-soft); }
 /* the seat whose brain call is under way: HL's active-tab line, at the card's foot */
 .sg-card[data-s="thinking"] { box-shadow: inset 0 0 0 1px var(--hl-tabline), inset 0 -2px 0 var(--hl-accent-soft); }
-.sg-card.sg-picked { box-shadow: inset 0 0 0 1px var(--hl-accent-soft); }
 .sg-card-h { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 /* the name whole, wrapping where it must (never cut), the standing under it — a light and always its word */
 .sg-card-n { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; flex: 1; }
@@ -302,7 +340,7 @@
   .sg-card-h .sg-blob { display: none; }
 }
 
-/* the mascots: a soft blob in its seat's tint, its name always beside it; breathing and blinking are decoration */
+/* the seats' faces: a soft blob in its seat's tint, its name always beside it; breathing and blinking are decoration */
 .sg-blob { width: 28px; height: 28px; flex: none; overflow: visible; }
 .sg-blob-b, .sg-blob-f { fill: var(--sg-role, var(--hl-accent)); }
 .sg-blob-f { opacity: 0.8; }
@@ -311,13 +349,13 @@
 .sg-blob-e { transform-box: view-box; transform-origin: 22px 20px; animation: sg-blink var(--sg-bl, 4s) infinite; animation-delay: var(--sg-ph, 0s); }
 .sg-blob-t { opacity: 0; }
 .sg-blob-t circle { fill: var(--hl-accent-soft); }
-.sg-card[data-s="thinking"] .sg-blob-t { opacity: 1; }
-.sg-card[data-s="thinking"] .sg-blob-t circle { animation: sg-dot 1.05s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; }
-.sg-card[data-s="thinking"] .sg-blob-t circle:nth-child(2) { animation-delay: 0.15s; }
-.sg-card[data-s="thinking"] .sg-blob-t circle:nth-child(3) { animation-delay: 0.3s; }
-.sg-card[data-s="empty"] .sg-blob-b, .sg-card[data-s="empty"] .sg-blob-f, .sg-card[data-s="reading"] .sg-blob-b, .sg-card[data-s="reading"] .sg-blob-f { fill: none; stroke: var(--hl-inset-hover); stroke-width: 1.2; stroke-dasharray: 3 3; }
-.sg-card[data-s="empty"] .sg-blob-e, .sg-card[data-s="reading"] .sg-blob-e { display: none; }
-.sg-card[data-s="empty"] .sg-blob-g, .sg-card[data-s="reading"] .sg-blob-g { animation: none; }
+:is(.sg-card, .sg-rs)[data-s="thinking"] .sg-blob-t { opacity: 1; }
+:is(.sg-card, .sg-rs)[data-s="thinking"] .sg-blob-t circle { animation: sg-dot 1.05s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; }
+:is(.sg-card, .sg-rs)[data-s="thinking"] .sg-blob-t circle:nth-child(2) { animation-delay: 0.15s; }
+:is(.sg-card, .sg-rs)[data-s="thinking"] .sg-blob-t circle:nth-child(3) { animation-delay: 0.3s; }
+:is(.sg-card, .sg-rs):is([data-s="empty"], [data-s="reading"]) :is(.sg-blob-b, .sg-blob-f) { fill: none; stroke: var(--hl-inset-hover); stroke-width: 1.2; stroke-dasharray: 3 3; }
+:is(.sg-card, .sg-rs):is([data-s="empty"], [data-s="reading"]) .sg-blob-e { display: none; }
+:is(.sg-card, .sg-rs):is([data-s="empty"], [data-s="reading"]) .sg-blob-g { animation: none; }
 @keyframes sg-breathe { 50% { transform: scaleY(1.02) scaleX(0.992); } }
 @keyframes sg-blink { 0%, 94%, 100% { transform: none; } 96.5% { transform: scaleY(0.12); } }
 @keyframes sg-dot { 0%, 100% { transform: translateY(0); opacity: 0.45; } 40% { transform: translateY(-2.5px); opacity: 1; } }
@@ -334,11 +372,10 @@
 /* a card or a room line coming in: HL's popover entrance, 5 px from above, fading, no overshoot */
 @keyframes sg-in { from { opacity: 0; transform: translateY(-5px); } }
 
-/* ---- the tabs' panels: the balance, the chart (the analysis), the room ---------------------------------------------------------------- */
-.sg-ana { display: flex; flex-direction: column; gap: 8px; }
+/* ---- the tabs' panels: the equity, the room ------------------------------------------------------------------------------------------ */
 .sg-room { display: flex; flex-direction: column; min-height: 0; }
 
-/* the balance: the figure, its change, the target; the curve beside them */
+/* the equity: the figure, its change, the target; the curve beside them */
 .sg-livew { display: inline-flex; align-items: center; gap: 6px; color: var(--hl-accent-soft); }
 .sg-livew i { width: 6px; height: 6px; border-radius: 50%; background: var(--hl-accent-soft); animation: sg-pulse 1.6s ease-in-out infinite; }
 .sg-bal-g { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr); gap: 18px; align-items: end; }
@@ -364,22 +401,7 @@
 .sg-bars rect.up { fill: var(--hl-up); }
 .sg-bars rect.down { fill: var(--hl-down); }
 
-/* the analysis: the chart and the book side by side (the book at HL's width), the focus market's leads as HL's positions table under them */
-.sg-ana-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.sg-ana-h .sg-lab { color: var(--hl-text); }
-.sg-ana-h b { font-weight: 400; color: var(--hl-text); }
-.sg-ana-g { display: grid; grid-template-columns: minmax(0, 1fr) 278px; gap: var(--hl-gap); min-height: 300px; }
-@container (max-width: 759px) { .sg-ana-g { grid-template-columns: minmax(0, 1fr); } }
-.sg-chart { display: flex; flex-direction: column; min-height: 300px; min-width: 0; }
-/* the chart's open-high-low-close on a line of its own above the bars, never over them */
-.sg-chart .ch-plot { margin-top: 19px; overflow: visible; }
-.sg-chart .ch-ohlc { top: -19px; left: 0; }
-.sg-book { display: flex; flex-direction: column; height: 340px; min-width: 0; overflow: hidden; border-left: 1px solid var(--hl-tabline); }
-/* a book of its best bid and ask only (ui/book.js .bk-top): as tall as it is */
-.sg-book:has(.bk-top) { height: auto; }
-.sg-book:empty { display: none; }
-@container (max-width: 759px) { .sg-book { border-left: 0; border-top: 1px solid var(--hl-tabline); height: 300px; } }
-.sg-wait-w { margin: auto; max-width: 40ch; text-align: center; color: var(--hl-dim); }
+/* the open positions as HL's positions table */
 .sg-mt { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .sg-mt th { padding: 0 8px; line-height: var(--hl-h-row); color: var(--hl-dim); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--hl-tabline); }
 .sg-mt td { padding: 4px 8px; line-height: 16px; color: var(--hl-text); white-space: nowrap; }
@@ -452,7 +474,7 @@
   .sg-setup-g { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "hd" "ck" "form" "about"; }
   .sg-setup-bare { grid-template-areas: "hd" "ck" "about"; }
 }
-/* the seats, each with its mascot (still here: the floor is where they breathe), its name and its duty */
+/* the seats, each with its mascot (the face it wears on the seats' line and over the banner once the desk runs), its name and its duty */
 .sg-seats-l { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .sg-seats-l li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: start; }
 .sg-seats-l li > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }

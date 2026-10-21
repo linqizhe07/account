@@ -5,7 +5,7 @@
    The look is round 7's (the Demo v2 canvas, F1 and F5): a white rail with Markets · Trade and the agents, and the Account at its foot —
    a wallet button with the net worth and the mode — which opens Portfolio · Venues · Memory under the Account's own header (the mode,
    trading on or off, Settings). Markets and Trade keep the search in their top bar.
-   THE TRADING AREA (core TRADE_AREA): Trade in its two modes, Regular (the terminal) and Superagent (the desk's floor), is one item on the
+   THE TRADING AREA (core TRADE_AREA): Trade in its two modes, Regular (the terminal) and Superagent (the desk trading by itself), is one item on the
    rail, current in both. While it shows, html[data-area="trade"] gives the area Hyperliquid's dark green (ui/tokens.css) — the rail
    beside it too, in colour only, like HL's own nav (shell.css) — and the top bar carries the Regular · Superagent switch (account.html
    #trade-mode): drawn once, never redrawn, so it stands in the same place in both modes and keeps the focus; one click swaps the pane with
@@ -184,7 +184,7 @@ function drawPane(L, owner) {
     draw({ el, owner, lens: lensNow(), params: ROUTE.params });
   } catch (err) {
     console.error(err);
-    // the floor listens on the window and the document while it is mounted: a pane that failed to draw lets it go before it is written over
+    // the superagent's chart reads and listens while it is mounted: a pane that failed to draw lets it go before it is written over
     if (tab === "superagent" && typeof sgUnmount === "function") {
       try {
         sgUnmount();

@@ -3,7 +3,7 @@
 /* THE CONTRACT. The page is plain scripts sharing one global scope, run in this order after owner.js (the device key: Owner.prepare ·
    Owner.submit · Owner.act · Owner.why · Owner.role):
      core (this file) · stream · connect · money · asset · intent · live · portfolio · memory · earn · markets · trade · chart · book ·
-     terminal · brains · desk · floor · superagent · statement · agents-mount · shell (draws and starts it).
+     terminal · brains · desk · superagent · statement · agents-mount · shell (draws and starts it).
    Each top-level name is declared once across them all (test/unit/page-scripts.test.ts). Declare what the shell calls as top-level
    `function` declarations.
 
@@ -17,7 +17,7 @@
                   desk are the Account (ACCOUNT_TABS), the first three opened from the rail's foot. Trade and the superagent are the
                   TRADING AREA (TRADE_AREA), one place in two modes the owner switches in one click from the top bar's Regular ·
                   Superagent: Regular is the terminal where you place your own orders (#/trade), Superagent the desk on a paper account
-                  as a live floor (ui/superagent.js), #/trade?mode=superagent — "mode" never reaches the pane's params. #/superagent
+                  trading by itself (ui/superagent.js), #/trade?mode=superagent — "mode" never reaches the pane's params. #/superagent
                   (?venue=…) is kept as an alias: routed() rewrites it to the canonical hash in place. Inside the page the two keep their
                   own pane ids, "trade" and "superagent", so ROUTE.tab says which is showing
      tradeModeLast()              the mode the viewer used last ("regular" | "superagent", kept under TRADE_MODE_KEY in this browser):
@@ -1185,7 +1185,7 @@ const TABS = ["portfolio", "venues", "memory", "markets", "trade", "desk", "supe
 /* the Account's own three, opened from the rail's foot (round 7), and the desk (the rail's Agents), under the Account's header too: the
    mode matters to the desk */
 const ACCOUNT_TABS = ["portfolio", "venues", "memory", "desk"];
-/* the trading area: Trade's two modes, Regular (the terminal, pane "trade") and Superagent (the desk's floor, pane "superagent"). One
+/* the trading area: Trade's two modes, Regular (the terminal, pane "trade") and Superagent (the desk trading by itself, pane "superagent"). One
    place on the rail, one URL path (#/trade, the mode in its query), two panes the shell cross-fades between */
 const TRADE_AREA = ["trade", "superagent"];
 /* the mode the viewer used last, kept in this browser so the rail's Trade opens it: "regular" | "superagent" */

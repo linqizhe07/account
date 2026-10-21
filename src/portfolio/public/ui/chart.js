@@ -77,6 +77,14 @@
                     it would go to, and let go it is handed to onDrag(line, price) — the page opens the order's change at that price, to be
                     SIGNED (an amend, as the Change button opens it): nothing is moved by the drag itself, and the line goes back to its own
                     price until the order is changed. Lines are drawn again with every frame the chart draws; nothing is asked for them
+     chMarks(el, marks)
+                    THE DESK'S TRADES on the chart (ui/superagent.js): each { id, t (the moment, ms), price, side (buy · sell), kind (in ·
+                    out), label, short (what a narrow plot says), tone (up · down · ink), lead (an entry and an exit of one lead are
+                    joined), fresh (it just happened: a ring pulses round its dot), float (an exit's result, floating up beside it once
+                    while it is fresh), quiet (a dot alone: its words only on hover) } — a dot at the bar its moment falls in and at its
+                    price, its words in a tag beside it (an entry's under it, an exit's over it, kept inside the pane and off one another),
+                    the entry and the exit of one lead joined by a dashed line. A moment no bar holds (before the first, after the last
+                    bar's end) and a price outside the pane are not drawn. Drawn with the lines, every frame; nothing is asked for them
      chRelease(el)  the polling, the listeners and the size observer stopped; what is drawn stays until the page draws over it
      chInterval(el) the bar size the chart on el shows ("" when none is mounted there) · chRange(el) its range
    Pure, and what the tests read
@@ -84,7 +92,7 @@
      · chTimeLabels(bars, interval, zone) · chThin(labels, cx, w) · chReadout(bar, prevClose, fmt) · chReadoutLines(wide, width, small)
      · chFmt(dec, ev) · chDecimals(bars, ev, step) · chApplyQuote(bars, quote, intervalMs) · chApplyTick(bars, tick, intervalMs, opens,
      startOf) · chBarStart(t, interval, clock) · chRegular(session, at) · chWhen(t, interval, zone) · chOrd(label, kind, unit)
-     · chLinesSvg(s, L) · chLineAt(s, y) · chSnap(price, step)
+     · chLinesSvg(s, L) · chLineAt(s, y) · chSnap(price, step) · chBarOf(bars, t, ms) · chMarksSvg(s, L)
 
    Drawing. The plot is five layers in one box: the picture (.ch-draw: the grid, the candles but the newest, the volume, the time axis, the
    break lines and seams), the live layer over it (.ch-live: the newest candle, the price axis's figures, the last price's line and tag — what a live
@@ -975,6 +983,8 @@ function chMount(el, opts = {}) {
     onLine: null,
     lineDrag: null,
     lineHover: false,
+    // the desk's trades over the plot (chMarks)
+    marks: [],
   };
   CH.set(el, s);
   paint(el, chShell(s));
@@ -1022,7 +1032,7 @@ function chLines(el, lines, { onDrag } = {}) {
   const s = el ? CH.get(el) : null;
   if (!s) return;
   const kinds = new Set(CH_LINE_KINDS);
-  s.lines = (Array.isArray(lines) ? lines : []).filter((l) => l && Number(l.price) > 0).slice(0, CH_LINES_MOST).map((l) => ({ id: String(l.id || ""), price: Number(l.price), label: String(l.label || ""), ...(l.short ? { short: String(l.short) } : {}), kind: kinds.has(l.kind) ? l.kind : "entry", ...(typeof onDrag === "function" && (l.drag === "limitPrice" || l.drag === "stopPrice") ? { drag: l.drag } : {}), ...(l.ref !== undefined ? { ref: l.ref } : {}) }));
+  s.lines = (Array.isArray(lines) ? lines : []).filter((l) => l && Number(l.price) > 0).slice(0, CH_LINES_MOST).map((l) => ({ id: String(l.id || ""), price: Number(l.price), label: String(l.label || ""), ...(l.short ? { short: String(l.short) } : {}), kind: kinds.has(l.kind) ? l.kind : "entry", ...(typeof onDrag === "function" && (l.drag === "limitPrice" || l.drag === "stopPrice") ? { drag: l.drag } : {}), ...(l.ref !== undefined ? { ref: l.ref } : {}), ...(l.fresh === true ? { fresh: true } : {}) }));
   s.onLine = typeof onDrag === "function" ? onDrag : null;
   // a line being pulled that is gone (its order filled or canceled meanwhile) is let go
   if (s.lineDrag && !s.lines.some((l) => l.id === s.lineDrag.line.id)) s.lineDrag = null;
@@ -1111,9 +1121,90 @@ function chLinesSvg(s, L) {
     const words = `${name}${pulled !== null ? ` → ${fmt(pulled)}` : axisOn ? "" : ` · ${fmt(price)}`}`;
     const tw = Math.ceil(words.length * 6.2) + 10;
     const axisTag = axisOn ? `<rect class="ch-lnr" x="${plotW + 1}" y="${it.ay - 8}" width="${axisW - 1}" height="16" rx="3"/><text class="ch-lnt" x="${plotW + 6}" y="${it.ay + 4}">${esc(fmt(price))}</text>` : "";
-    out += `<g class="ch-ln ${esc(l.kind)}${l.drag ? " drag" : ""}${pulled !== null ? " pulled" : ""}" data-ln="${esc(l.id)}"><title>${esc(`${l.label} · ${fmt(price)}`)}</title><path class="ch-lnl" d="M0 ${y + 0.5}H${plotW}"/><rect class="ch-lnr" x="2" y="${it.ly - 8}" width="${tw}" height="16" rx="3"/><text class="ch-lnt" x="7" y="${it.ly + 4}">${esc(words)}</text>${axisTag}</g>`;
+    out += `<g class="ch-ln ${esc(l.kind)}${l.drag ? " drag" : ""}${pulled !== null ? " pulled" : ""}${l.fresh ? " fresh" : ""}" data-ln="${esc(l.id)}"><title>${esc(`${l.label} · ${fmt(price)}`)}</title><path class="ch-lnl" d="M0 ${y + 0.5}H${plotW}"/><rect class="ch-lnr" x="2" y="${it.ly - 8}" width="${tw}" height="16" rx="3"/><text class="ch-lnt" x="7" y="${it.ly + 4}">${esc(words)}</text>${axisTag}</g>`;
   }
   return out ? `<svg class="ch-svg ch-lnsvg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true" focusable="false">${out}</svg>` : "";
+}
+
+/** THE DESK'S TRADES on the chart mounted on el (see the head of this file): kept, and drawn in the next frame. A trade with no price or no
+ * moment is none */
+function chMarks(el, marks) {
+  const s = el ? CH.get(el) : null;
+  if (!s) return;
+  const tones = new Set(["up", "down", "ink"]);
+  s.marks = (Array.isArray(marks) ? marks : []).filter((m) => m && Number(m.price) > 0 && Number.isFinite(Number(m.t))).slice(0, CH_MARKS_MOST).map((m) => ({ id: String(m.id || ""), t: Number(m.t), price: Number(m.price), side: m.side === "sell" ? "sell" : "buy", kind: m.kind === "out" ? "out" : "in", label: String(m.label || ""), ...(m.short ? { short: String(m.short) } : {}), tone: tones.has(m.tone) ? m.tone : m.side === "sell" ? "down" : "up", lead: String(m.lead || ""), fresh: m.fresh === true, quiet: m.quiet === true, ...(m.float ? { float: String(m.float), floatTone: m.floatTone === "down" ? "down" : "up" } : {}) }));
+  chSoon(s);
+}
+const CH_MARKS_MOST = 60;
+/* a trade's tag: its height, how far from its dot, and the room kept between two tags that would meet */
+const CH_MARK_TAG_H = 20;
+const CH_MARK_GAP = 12;
+/** the bar a moment falls in: the last bar that starts at or before it — the last bar only while the moment is before its end (a later
+ * moment is a bar not read yet). -1 where no bar holds it */
+function chBarOf(bars, t, ms) {
+  const n = Array.isArray(bars) ? bars.length : 0;
+  if (!n || !Number.isFinite(t)) return -1;
+  let lo = 0;
+  let hi = n - 1;
+  let at = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].t <= t) {
+      at = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  if (at < 0) return -1;
+  return at === n - 1 && t >= bars[at].t + (Number(ms) > 0 ? Number(ms) : 0) ? -1 : at;
+}
+/** THE TRADES' LAYER, as one small SVG string over the lines: each trade whose bar is in view and whose price is in the pane — its dot, its
+ * tag (an entry's under the dot, an exit's over it, flipped where the pane's edge is near, moved off a tag it would cover), a lead's entry
+ * and exit joined; a narrow plot says each by its `short` */
+function chMarksSvg(s, L) {
+  if (!L || !Array.isArray(s.marks) || !s.marks.length || !Array.isArray(s.bars) || !s.bars.length) return "";
+  const { sc, plotW, W, H } = L;
+  const ms = CH_MS[s.biv] || CH_MS[s.interval] || 0;
+  const narrow = plotW < CH_LINES_NARROW_W;
+  const placed = [];
+  const at = new Map();
+  for (const m of s.marks) {
+    const i = chBarOf(s.bars, m.t, ms);
+    if (i < sc.from || i >= sc.to) continue;
+    const x = sc.cx(i) + 0.5;
+    const y = Math.round(sc.y(m.price)) + 0.5;
+    if (!Number.isFinite(y) || y < 0 || y > sc.bottom) continue;
+    placed.push({ m, x, y });
+    if (m.lead) at.set(`${m.lead}|${m.kind}`, { x, y });
+  }
+  if (!placed.length) return "";
+  let out = "";
+  for (const p of placed) {
+    const a = p.m.kind === "out" && p.m.lead ? at.get(`${p.m.lead}|in`) : null;
+    if (a) out += `<path class="ch-mkj" d="M${a.x} ${a.y}L${p.x} ${p.y}"/>`;
+  }
+  const h = CH_MARK_TAG_H;
+  const boxes = [];
+  for (const p of placed.sort((a, b) => a.x - b.x)) {
+    const words = p.m.quiet ? "" : narrow && p.m.short ? p.m.short : p.m.label;
+    let tag = "";
+    if (words) {
+      const w = Math.ceil(words.length * 6.6) + 14;
+      let below = p.m.kind === "in";
+      const x = Math.round(Math.min(plotW - w - 2, Math.max(2, p.x - w / 2)));
+      let y = below ? p.y + CH_MARK_GAP : p.y - CH_MARK_GAP - h;
+      if (below && y + h > sc.bottom) below = false;
+      else if (!below && y < 2) below = true;
+      y = below ? p.y + CH_MARK_GAP : p.y - CH_MARK_GAP - h;
+      for (let k = 0; k < 4 && boxes.some((b) => x < b.x + b.w && b.x < x + w && y < b.y + b.h + 2 && b.y < y + h + 2); k++) y += below ? h + 4 : -(h + 4);
+      y = Math.round(Math.min(sc.bottom - h, Math.max(2, y)));
+      boxes.push({ x, y, w, h });
+      tag = `<path class="ch-mks" d="M${p.x} ${below ? p.y + 5 : p.y - 5}V${below ? y : y + h}"/><rect class="ch-mkr" x="${x}" y="${y}" width="${w}" height="${h}" rx="3"/><text class="ch-mkt" x="${x + 7}" y="${y + 14}">${esc(words)}</text>`;
+    }
+    // one that just happened: a ring pulsing round its dot, and an exit's result floating up beside it once
+    const fresh = p.m.fresh ? `<circle class="ch-mkp" cx="${p.x}" cy="${p.y}" r="6"/>${p.m.float ? `<text class="ch-mkf ${p.m.floatTone}" x="${Math.round(p.x + 12)}" y="${Math.round(p.y + 5)}">${esc(p.m.float)}</text>` : ""}` : "";
+    out += `<g class="ch-mk ${p.m.tone} ${p.m.kind}${p.m.fresh ? " fresh" : ""}" data-k="mk:${esc(p.m.id)}" data-mk="${esc(p.m.id)}"><title>${esc(p.m.label)}</title>${fresh}${tag}<circle class="ch-mkd" cx="${p.x}" cy="${p.y}" r="5"/></g>`;
+  }
+  return `<svg class="ch-svg ch-mksvg" data-k="marks" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true" focusable="false">${out}</svg>`;
 }
 
 /* the frame: the head (a box of fixed height), the plot (the picture, the live layer over it, the readout laid over its corner, the hint at
@@ -1954,7 +2045,8 @@ function chDraw(s) {
     paint(P.draw, chSvg(s, L));
   }
   paint(P.live, chLiveSvg(s, L));
-  if (P.lines) paint(P.lines, chLinesSvg(s, L));
+  // the account's own lines, and the desk's trades over them
+  if (P.lines) paint(P.lines, chLinesSvg(s, L) + chMarksSvg(s, L));
   // the readout's box: over the price pane's corner, as wide as the pane (its words wrap inside it; nothing outside it moves)
   if (P.ohlc.style) P.ohlc.style.width = `${Math.max(40, L.plotW - CH_RO_LEFT - 4)}px`;
   if (paint(P.cross, chCrossSvg(L)) || !s.x) {
