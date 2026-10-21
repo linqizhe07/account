@@ -147,6 +147,8 @@ function tileSaysOwn(connector) {
   if (!connector) return null;
   const r = REACH.get(connector);
   const v = typeof VENUES !== "undefined" ? VENUES.get(connector) : undefined;
+  // a paper account wanting a GitHub sign-in first: its form signs in (ghPanelHtml), so it stays open, and its tile says so plainly
+  if (connector === "live:paper" && ((r && r.state === "setup") || (!r && v && v.verdict === "setup"))) return { word: "Sign in with GitHub", state: "github", said: (r || v).said || "", at: r ? r.at : v.asked, shut: false };
   if ((r && r.state === "close-only") || (!r && v && v.verdict === "close-only")) return { word: "Close only here", state: "close-only", said: (r || v).said || "", at: r ? r.at : v.asked, shut: false };
   if (r && REACH_WORD[r.state]) return { word: REACH_WORD[r.state], state: r.state, said: r.said || "", at: r.at, shut: SHUTS.has(r.state) };
   if (!r && v && VENUE_NO[v.verdict]) {
@@ -162,8 +164,13 @@ function markTiles() {
     const t = tileSays(tileConnector(b.dataset.kind, b.dataset.extra));
     // a tile saying Connected, or whose connection is on the account (waiting, or refused by the venue), keeps what the list drew
     if (!t || b.querySelector("em.on") || waitingOf(b.dataset.kind, b.dataset.extra)) continue;
-    b.classList.add("tile-off");
     b.title = t.said;
+    // a sign-in the form itself asks for is no venue's no: the tile stays as it is, and says what comes first
+    if (t.state === "github") {
+      b.querySelector("span").textContent = t.word;
+      continue;
+    }
+    b.classList.add("tile-off");
     b.querySelector("span").innerHTML = `<em class="off">${esc(t.word)}</em>`;
   }
 }
@@ -182,7 +189,9 @@ function catalog(owner, wide = "") {
     const w = on ? null : waitingOf(kind, extra);
     const t = on || w ? null : tileSays(tileConnector(kind, extra));
     const word = t && t.word;
-    const own = `<button type="button" class="tile${word ? " tile-off" : ""}" data-kind="${esc(kind)}" data-extra="${esc(extra)}"${word ? ` title="${esc(t.said)}"` : w ? ` title="${esc(w.said)}"` : ""}${owner ? "" : " disabled"}><b>${esc(name)}</b><span>${on ? '<em class="on">Connected</em> · add another' : w ? (w.stopped ? '<em class="off">Not connected</em> · connect it again' : '<em class="on">Connected</em> · waiting for it to answer this network') : word ? `<em class="off">${esc(word)}</em>` : esc(edition ? `${how} · serves where you are` : how)}</span></button>`;
+    // a sign-in the paper form asks for first is said as what comes first, not as a venue's no
+    const first = !!t && t.state === "github";
+    const own = `<button type="button" class="tile${word && !first ? " tile-off" : ""}" data-kind="${esc(kind)}" data-extra="${esc(extra)}"${word ? ` title="${esc(t.said)}"` : w ? ` title="${esc(w.said)}"` : ""}${owner ? "" : " disabled"}><b>${esc(name)}</b><span>${on ? '<em class="on">Connected</em> · add another' : w ? (w.stopped ? '<em class="off">Not connected</em> · connect it again' : '<em class="on">Connected</em> · waiting for it to answer this network') : first ? esc(word) : word ? `<em class="off">${esc(word)}</em>` : esc(edition ? `${how} · serves where you are` : how)}</span></button>`;
     // beside a venue that cannot be used from here: its edition for where the user is, as a tile of its own
     const ed = !edition && t && t.edition && !shown.has(t.edition.connector) ? tileOf(t.edition.connector) : null;
     return own + (ed ? tile([ed[0], ed[1], t.edition.name], true) : "");
@@ -262,6 +271,42 @@ function cnBookWords(b) {
   return `<div><b>Connecting continues the paper account kept on this machine as “${esc(b.name)}”</b> — ${esc(money(b.cashUsd))} paper cash${held ? `, ${esc(held)}` : ""}, started with ${esc(money(b.startCashUsd))} on ${esc(nyDay(b.createdAt))}${b.addedUsd ? `, ${esc(money(b.addedUsd))} added since` : ""}. The starting money above is not used.</div><label class="chk1"><input type="checkbox" name="fresh" /> Start it again instead, with the starting money above. Its book is archived beside it, not deleted.</label>`;
 }
 
+/* THE GITHUB SIGN-IN a new paper account asks for, when the server asks for one (GET /api/account/github, live/github.ts): GitHub's device
+   flow — a short code, typed on GitHub's own page in the owner's own browser; this page never sees a GitHub password or token. It reads the
+   GitHub username, name and avatar, never the email. A book kept on this machine continues without it. Saying hi in the project's thread is
+   the owner's choice: a box, unticked, with its exact words; ticked, it is signed (githubHello) once the paper account is open. Null until
+   read; a read that failed keeps what was read before */
+let GH = null;
+async function ghRead() {
+  const got = await api("/api/account/github");
+  if (got && got.ok !== false && typeof got.on === "boolean") GH = got;
+  return GH;
+}
+/* opening a NEW paper account waits for a GitHub sign-in: the server asks for one, and nobody is signed in */
+const ghGate = () => !!(GH && GH.on && !GH.signedIn);
+const GH_DEVICE = "https://github.com/login/device";
+/* the panel, as the sign-in stands: signed out (the books kept here can still be continued), a code waiting, or signed in with the hi */
+function ghPanelHtml(g, books) {
+  if (!g || !g.on) return "";
+  const ended = g.ended ? `<div class="msg no" role="status">${esc(g.ended.said)}</div>` : "";
+  if (g.waiting) {
+    const left = Math.max(0, Math.round((g.waiting.expiresAt - Date.now()) / 60_000));
+    return `<div class="gh" data-gh-state="waiting"><div class="gh-h"><b>Enter this code on GitHub</b><span class="dim small">On GitHub's own page, signed in there: this account never sees your GitHub password.</span></div><div class="gh-code"><code data-gh-code>${esc(g.waiting.code)}</code><button type="button" class="link" data-gh="copy">Copy</button></div><div class="gh-row"><a class="btn btn-sm" href="${GH_DEVICE}" target="_blank" rel="noopener">Open github.com/login/device</a><span class="msg wait" role="status">Waiting for GitHub…${left ? ` <span class="dim">(the code lasts ${plural(left, "more minute")})</span>` : ""}</span><button type="button" class="link" data-gh="again">Get a new code</button></div></div>`;
+  }
+  if (g.signedIn) {
+    const who = g.signedIn;
+    const h = g.hello;
+    const hi = !h ? "" : h.said ? `<div class="dim small">You said hi in <a href="${esc(h.said.url)}" target="_blank" rel="noopener">the project's thread</a>.</div>` : h.can && h.words ? `<label class="chk1 gh-hi"><input type="checkbox" name="hello" /> <span>Say hi in the project's GitHub thread, from your account: “${esc(h.words)}”${g.thread ? ` · <a href="${esc(g.thread)}" target="_blank" rel="noopener">see the thread</a>` : ""}</span></label>` : h.words ? `<div class="dim small">To say hi in ${g.thread ? `<a href="${esc(g.thread)}" target="_blank" rel="noopener">the project's thread</a>` : "the project's thread"}, sign in again: a sign-in from before the account restarted cannot post. <button type="button" class="link" data-gh="again">Sign in again</button></div>` : "";
+    return `<div class="gh" data-gh-state="in"><div class="gh-who">${avatar(who.login, "", who.avatarUrl || "")}<span>Signed in with GitHub as <b>@${esc(who.login)}</b>${who.name ? ` <span class="dim">· ${esc(who.name)}</span>` : ""}</span><button type="button" class="link" data-gh="out">Sign out</button></div>${hi}${ended}</div>`;
+  }
+  const keep = (books || []).slice(0, 3).map((b) => `<button type="button" class="btn btn-sm" data-gh-keep="${esc(b.venue)}">Continue “${esc(b.name)}” · ${esc(money(b.cashUsd))}</button>`).join("");
+  return `<div class="gh" data-gh-state="out"><div class="gh-h"><b>Sign in with GitHub to open a paper account</b><span class="dim small">It reads your GitHub username, name and avatar — never your email — and keeps them on this machine. Nothing is posted unless you choose to.</span></div><div class="gh-row"><button type="button" class="btn btn-primary btn-sm" data-gh="start">Sign in with GitHub</button></div>${ended}${keep ? `<div class="dim small">Or continue one kept on this machine — no sign-in needed:</div><div class="gh-keep">${keep}</div>` : ""}</div>`;
+}
+
+/* a book kept on this machine, continued as it stands: under its own id and name (Trade's card names it so too: tkPaperless), with no
+   starting money signed — the account refuses one named for a book it would only continue (service.ts paperKeptRule) */
+const cnContinueDraft = (b) => ({ type: "connectVenue", venue: b.venue, connector: "live:paper", label: typeof tkPaperless === "function" ? tkPaperless(b.name) : b.name, credentialRef: "" });
+
 /** every way of connecting an account, as tiles, in the dialog */
 function openPicker() {
   if (!A.connectLive) return;
@@ -338,7 +383,9 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
   const showReach = () => {
     const note = $("reach-note");
     if (!note || body.isConnected === false) return;
-    const t = tileSays(connNow());
+    const said = tileSays(connNow());
+    // the paper form's GitHub sign-in is said by its own panel, not as a venue's answer
+    const t = said && said.state === "github" ? null : said;
     const was = reachShut;
     reachShut = !!(t && t.shut);
     note.hidden = !t;
@@ -520,11 +567,79 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
     // the name gives (a paper account connected before, then disconnected) would be CONTINUED by connecting — its cash and holdings, not
     // the sum typed here: the form says so plainly, and offers to start it again instead (a signed resetPaper: the old book archived
     // beside it, never deleted), as the account's own words (GET /api/account/paper/books)
-    $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><div class="row">${field("Name", '<input name="label" maxlength="40" autocomplete="off" placeholder="Momentum" />')}${field("Starting paper money", '<input name="ref" maxlength="14" inputmode="decimal" autocomplete="off" placeholder="10000" />')}</div><div class="msg wait cn-book" data-cn-book hidden></div>`;
+    $("live-body").innerHTML = `<div data-gh-slot hidden></div><div class="path dim small" data-paper-fields>${esc(o.example)}</div><div class="row" data-paper-fields>${field("Name", '<input name="label" maxlength="40" autocomplete="off" placeholder="Momentum" />')}${field("Starting paper money", '<input name="ref" maxlength="14" inputmode="decimal" autocomplete="off" placeholder="10000" />')}</div><div class="msg wait cn-book" data-cn-book hidden></div>`;
     form.elements.label.value = shownAs || "";
     const note = body.querySelector("[data-cn-book]");
+    /* the GitHub sign-in, when the server asks for one: drawn as it stands; asked again every 1.5 s while a code waits (this form's own
+       timer, stopped with the form); the fields and Connect only once someone is signed in */
+    const slot = body.querySelector("[data-gh-slot]");
+    let ghShown = "";
+    const ghPaint = () => {
+      if (!slot || body.isConnected === false) return;
+      const html = ghPanelHtml(GH, CN_BOOKS);
+      // drawn again only when it changed, so a ticked box stays ticked
+      if (html !== ghShown) {
+        ghShown = html;
+        slot.innerHTML = html;
+      }
+      slot.hidden = !html;
+      const gated = ghGate();
+      for (const el of body.querySelectorAll("[data-paper-fields]")) el.hidden = gated;
+      if (gated) note.hidden = true;
+      $("modal-go").disabled = gated || Owner.role !== "owner";
+      // one poll at a time: a code got while a poll was on its way never starts a second
+      clearTimeout(CONNECT_TIMER);
+      if (GH && GH.waiting && $("modal").open) CONNECT_TIMER = setTimeout(ghPoll, 1500);
+    };
+    const ghPoll = async () => {
+      if (!$("modal").open || body.isConnected === false) return;
+      const was = GH && GH.signedIn ? GH.signedIn.login : "";
+      await ghRead();
+      if (body.isConnected === false) return;
+      // signed in or out: the paper connection's answer is asked afresh the next time the tiles are drawn
+      if ((GH && GH.signedIn ? GH.signedIn.login : "") !== was) REACH.delete("live:paper");
+      ghPaint();
+      if (!was && GH && GH.signedIn) say(`Signed in as @${GH.signedIn.login}. Name the paper account and connect it.`, "ok");
+    };
+    const ghPost = async (path, payload) => {
+      const r = await postJson(path, payload);
+      if (body.isConnected === false) return;
+      if (r.status >= 400) return void say(Owner.why(r) || "GitHub did not answer: try again.", "no");
+      say("", "");
+      if (r.body && typeof r.body.on === "boolean") GH = r.body;
+      clearTimeout(CONNECT_TIMER);
+      REACH.delete("live:paper");
+      ghPaint();
+    };
+    slot.addEventListener("click", async (e) => {
+      const b = e.target.closest("button");
+      if (!b || b.disabled) return;
+      if (b.dataset.gh === "copy") return void copyText(GH && GH.waiting ? GH.waiting.code : "", b);
+      if (b.dataset.gh === "start" || b.dataset.gh === "again") {
+        b.disabled = true;
+        say("Asking GitHub for a code…", "wait");
+        await ghPost("/api/account/github/start", { again: b.dataset.gh === "again" });
+        return void (b.disabled = false);
+      }
+      if (b.dataset.gh === "out") return void ghPost("/api/account/github/signout", {});
+      // a book kept here, continued: no sign-in, no starting money signed (it continues as it stands)
+      const kept = b.dataset.ghKeep ? cnBookOf(b.dataset.ghKeep) : null;
+      if (!kept || Owner.role !== "owner") return;
+      b.disabled = true;
+      say(`Continuing ${kept.name}…`, "wait");
+      const r = await Owner.act(cnContinueDraft(kept));
+      b.disabled = false;
+      if (r.status >= 400) return void say(Owner.why(r) || "Refused", "no");
+      $("modal").close();
+      flash = "";
+      said = r.body.summary || "";
+      await load();
+    });
+
     const draw = () => {
       if (!note || body.isConnected === false) return;
+      // the fields wait for a GitHub sign-in: so does what they would continue
+      if (ghGate()) return void (note.hidden = true);
       const b = cnBookOf(venueId());
       note.hidden = !b;
       // the choice is kept across a redraw: drawn again only when the book it is about changed
@@ -534,7 +649,10 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
       note.innerHTML = cnBookWords(b);
     };
     form.elements.label.addEventListener("input", draw);
-    cnReadBooks().then(draw);
+    Promise.all([ghRead(), cnReadBooks()]).then(() => {
+      draw();
+      ghPaint();
+    });
   } else {
     $("live-body").innerHTML = `<div class="path dim small">${esc(o.example)}</div><input type="hidden" name="ref" value="" /><input type="hidden" name="label" value="" />`;
   }
@@ -568,10 +686,21 @@ async function openConnect(o, { exchange = "", watch = false, name = "", back = 
     const r = await Owner.act({ type: "connectVenue", venue: venueId(), connector: o.kind === "exchange" ? `live:exchange:${exchangeId()}` : `live:${o.kind}`, label, credentialRef: continues ? "" : ref });
     $("modal-go").disabled = Owner.role !== "owner";
     if (r.status >= 400) return say(Owner.why(r) || "Refused", "no");
+    // the hi in the project's thread, only when its box was ticked: signed on its own, once the paper account is open — and the account is
+    // open whatever GitHub answers. Said in a toast of its own, with the comment's link: the connection's own toast folds its long words away
+    let hi = null;
+    if (o.kind === "paper" && form.elements.hello && form.elements.hello.checked) {
+      say("Open. Saying hi on GitHub…", "wait");
+      const h = await Owner.act({ type: "githubHello" });
+      const url = h.status < 400 && h.body && h.body.result ? String(h.body.result.url || "") : "";
+      hi = h.status >= 400 ? { no: `The paper account is open; hi was not said: ${Owner.why(h) || "refused"}` } : { url };
+      GH = null;
+    }
     $("modal").close();
     flash = "";
     said = r.body.summary || "";
     await load();
+    if (hi) toast(hi.no || { html: `You said hi in ${/^https:\/\/github\.com\//.test(hi.url) ? `<a href="${esc(hi.url)}" target="_blank" rel="noopener">the project's GitHub thread</a>` : "the project's GitHub thread"}.` }, hi.no ? "no" : "ok");
   };
   if (!$("modal").open) $("modal").showModal();
 }
