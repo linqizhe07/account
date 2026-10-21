@@ -2131,3 +2131,93 @@ describe("the account's own lines on the chart, pulled to change an order — si
     p.run("chRelease(EL)");
   });
 });
+
+describe("the desk's trades on the chart (the superagent's desk: chMarks)", () => {
+  it("finds the bar a moment falls in: the last bar that starts at or before it — the last bar only until its end — and none before the first", () => {
+    const p = page();
+    p.run("var BARS = [{ t: 0 }, { t: 100 }, { t: 200 }]");
+    expect(p.run("[chBarOf(BARS, 0, 100), chBarOf(BARS, 150, 100), chBarOf(BARS, 299, 100), chBarOf(BARS, 300, 100), chBarOf(BARS, -1, 100), chBarOf([], 5, 100), chBarOf(BARS, NaN, 100)]")).toEqual([0, 1, 2, -1, -1, -1, -1]);
+  });
+
+  it("draws each trade in view at its bar and its price — an entry's words under its dot, an exit's over it, the two joined — an older one a dot with its words on hover, and what just happened ringing with its result floating up; nothing out of view, out of the pane, or with no price or moment", async () => {
+    const bars = hourly(30);
+    const p = page((path) => (path.startsWith("/api/account/candles") ? candles(bars) : new Promise(() => {})));
+    p.run('chMount(EL, { venue: "okx", symbol: "BTC/USDT", kind: "spot", quote: "USDT", priceStep: 0.5 })');
+    await settle();
+    // ten minutes into bar k
+    const at = (k: number) => bars[k]!.t + 10 * 60_000;
+    p.run(`chMarks(EL, [
+      { id: "L-1:in", t: ${at(20)}, price: ${bars[20]!.c}, side: "buy", kind: "in", label: "BUY 0.002 BTC · 83,212", short: "BUY", tone: "up", lead: "L-1" },
+      { id: "L-1:out", t: ${at(26)}, price: ${bars[26]!.c}, side: "sell", kind: "out", label: "SOLD · take-profit · +$1.50", short: "+$1.50", tone: "ink", lead: "L-1", fresh: true, float: "+$1.50", floatTone: "up" },
+      { id: "L-0:in", t: ${at(12)}, price: ${bars[12]!.c}, side: "buy", kind: "in", label: "BUY 0.001 BTC · 83,132", tone: "up", lead: "L-0", quiet: true },
+      { id: "before", t: ${bars[0]!.t - 5 * HOUR}, price: 83000, kind: "in", label: "before the bars" },
+      { id: "after", t: ${bars[29]!.t + 2 * HOUR}, price: 83000, kind: "in", label: "after the bars" },
+      { id: "over", t: ${at(10)}, price: 99999, kind: "in", label: "over the pane" },
+      { id: "x", t: ${at(10)}, price: 0, kind: "in", label: "no price" },
+      { id: "y", t: NaN, price: 83000, kind: "in", label: "no moment" },
+    ])`);
+    await settle();
+    const html = p.el.querySelector(".ch-lines").innerHTML;
+    // a layer of its own over the account's lines, keyed so a repaint keeps it (and the animations of what is in it)
+    expect(html).toContain('<svg class="ch-svg ch-mksvg" data-k="marks" width="640" height="360" viewBox="0 0 640 360" aria-hidden="true" focusable="false">');
+    expect([...html.matchAll(/data-mk="([^"]+)"/g)].map((m) => m[1])).toEqual(["L-0:in", "L-1:in", "L-1:out"]);
+    for (const gone of ["before", "after", "over", "no price", "no moment"]) expect(html, gone).not.toContain(gone);
+    // each at its bar's middle and at its price
+    const cx = (k: number) => p.run<number>(`CH.get(EL).L.sc.cx(${k}) + 0.5`);
+    const cy = (price: number) => p.run<number>(`Math.round(CH.get(EL).L.sc.y(${price})) + 0.5`);
+    expect(html).toContain(`<circle class="ch-mkd" cx="${cx(20)}" cy="${cy(bars[20]!.c)}" r="5"/>`);
+    expect(html).toContain(`<circle class="ch-mkd" cx="${cx(26)}" cy="${cy(bars[26]!.c)}" r="5"/>`);
+    // the lead's entry and its exit joined
+    expect(html).toContain(`<path class="ch-mkj" d="M${cx(20)} ${cy(bars[20]!.c)}L${cx(26)} ${cy(bars[26]!.c)}"/>`);
+    // the entry's words under its dot, the exit's over it
+    const tagY = (id: string) => Number((new RegExp(`data-mk="${id}">[^]*?<rect class="ch-mkr" x="-?\\d+" y="(-?\\d+)"`).exec(html) || [])[1]);
+    expect(tagY("L-1:in")).toBeGreaterThan(cy(bars[20]!.c));
+    expect(tagY("L-1:out")).toBeLessThan(cy(bars[26]!.c));
+    expect(html).toContain(">BUY 0.002 BTC · 83,212</text>");
+    expect(html).toContain('<g class="ch-mk up in" data-k="mk:L-1:in" data-mk="L-1:in"><title>BUY 0.002 BTC · 83,212</title>');
+    // the exit just happened: a ring round its dot, its result floating up beside it
+    expect(html).toContain('<g class="ch-mk ink out fresh" data-k="mk:L-1:out" data-mk="L-1:out">');
+    expect(html).toContain(`<circle class="ch-mkp" cx="${cx(26)}" cy="${cy(bars[26]!.c)}" r="6"/><text class="ch-mkf up" x="${Math.round(cx(26) + 12)}" y="${Math.round(cy(bars[26]!.c) + 5)}">+$1.50</text>`);
+    // an older trade: its dot alone, its words on hover
+    const quiet = (/<g class="ch-mk up in" data-k="mk:L-0:in" data-mk="L-0:in">([^]*?)<\/g>/.exec(html) || [])[1] || "";
+    expect(quiet).toBe(`<title>BUY 0.001 BTC · 83,132</title><circle class="ch-mkd" cx="${cx(12)}" cy="${cy(bars[12]!.c)}" r="5"/>`);
+    // three closes a bar apart at one price: their words stack, none over another
+    p.run(`chMarks(EL, [0, 1, 2].map((k) => ({ id: "c" + k, t: ${at(22)} + k * ${HOUR}, price: 83150, kind: "out", label: "SOLD · stop · −$0.40", tone: "ink" })))`);
+    await settle();
+    const rects = [...p.el.querySelector(".ch-lines").innerHTML.matchAll(/<rect class="ch-mkr" x="(-?\d+)" y="(-?\d+)" width="(\d+)" height="(\d+)"/g)].map((m) => m.slice(1).map(Number));
+    expect(rects).toHaveLength(3);
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const [ax, ay, aw, ah] = rects[i]!;
+        const [bx, by, bw, bh] = rects[j]!;
+        expect(ax! < bx! + bw! && bx! < ax! + aw! && ay! < by! + bh! && by! < ay! + ah!, `${i} and ${j}`).toBe(false);
+      }
+    }
+    // none: the layer goes
+    p.run("chMarks(EL, [])");
+    await settle();
+    expect(p.el.querySelector(".ch-lines").innerHTML).not.toContain("ch-mksvg");
+    p.run("chRelease(EL)");
+  });
+
+  it("turns an entry's words over its dot where the pane's foot is near, and on a narrow plot says each trade by its short words — the whole of it on hover", async () => {
+    const bars = hourly(30);
+    const q = page((path) => (path.startsWith("/api/account/candles") ? candles(bars) : new Promise(() => {})), { size: { w: 330, h: 360 } });
+    q.run('chMount(EL, { venue: "okx", symbol: "BTC/USDT", kind: "spot", quote: "USDT", priceStep: 0.5 })');
+    await settle();
+    // a price just over the price pane's foot
+    const low = q.run<number>("CH.get(EL).L.sc.price(CH.get(EL).L.sc.bottom - 10)");
+    q.run(`chMarks(EL, [{ id: "a", t: ${bars[15]!.t + 60_000}, price: ${bars[15]!.c}, kind: "in", label: "BUY 0.002 BTC · 83,162", short: "BUY", tone: "up" }, { id: "b", t: ${bars[1]!.t + 60_000}, price: ${low}, kind: "in", label: "BUY 0.001 BTC · low", short: "BUY", tone: "up" }])`);
+    await settle();
+    const html = q.el.querySelector(".ch-lines").innerHTML;
+    expect(html).toMatch(/<text class="ch-mkt"[^>]*>BUY<\/text>/);
+    expect(html).not.toMatch(/<text class="ch-mkt"[^>]*>BUY 0\.00/);
+    expect(html).toContain("<title>BUY 0.002 BTC · 83,162</title>");
+    // the low entry: under its dot there is no room above the pane's foot, so its words go over it
+    const y = q.run<number>(`Math.round(CH.get(EL).L.sc.y(${low})) + 0.5`);
+    expect(y + 12 + 20).toBeGreaterThan(q.run<number>("CH.get(EL).L.sc.bottom"));
+    const tag = Number((/data-mk="b">[^]*?<rect class="ch-mkr" x="-?\d+" y="(-?\d+)"/.exec(html) || [])[1]);
+    expect(tag).toBeLessThan(y);
+    q.run("chRelease(EL)");
+  });
+});

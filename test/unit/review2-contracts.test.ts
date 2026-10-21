@@ -17,6 +17,8 @@ const server = read("src/portfolio/server.ts");
 const mcp = read("src/portfolio/mcp.ts");
 const cookbook = read("COOKBOOK.md");
 const readme = read("README.md");
+// the long description (the README in Chinese, kept whole when README.md became a short English one): what the contracts below pin
+const longReadme = read("docs/README.zh.md");
 const UI = "src/portfolio/public/ui";
 const pageScripts = readdirSync(join(ROOT, UI)).filter((f) => f.endsWith(".js")).map((f) => read(`${UI}/${f}`)).join("\n");
 
@@ -49,10 +51,10 @@ describe("MCP tools: the header comment, the registry, the docs", () => {
   it("the header comment names every registered tool (F7)", () => {
     expect(registered.filter((t) => !header.includes(t))).toEqual([]);
   });
-  it("every tool README and COOKBOOK name is registered, and README names every tool", () => {
-    const inDocs = matches(`${readme}\n${cookbook}`, /(portfolio_[a-z_]+)/g);
+  it("every tool the READMEs and COOKBOOK name is registered, and the long README names every tool", () => {
+    const inDocs = matches(`${readme}\n${longReadme}\n${cookbook}`, /(portfolio_[a-z_]+)/g);
     expect(inDocs.filter((t) => !registered.includes(t))).toEqual([]);
-    const inReadme = matches(readme, /(portfolio_[a-z_]+)/g);
+    const inReadme = matches(longReadme, /(portfolio_[a-z_]+)/g);
     expect(registered.filter((t) => !inReadme.includes(t))).toEqual([]);
   });
   it("a tool the header files under --classic is not one that refuses without the account layer (F7)", () => {
@@ -118,13 +120,13 @@ describe("the docs' flags and scripts exist", () => {
   });
   it("every npm script the docs run is in package.json", () => {
     const scripts = Object.keys((JSON.parse(read("package.json")) as { scripts: Record<string, string> }).scripts);
-    const named = matches(`${readme}\n${cookbook}`, /npm run ([a-z:-]+)/g);
+    const named = matches(`${readme}\n${longReadme}\n${cookbook}`, /npm run ([a-z:-]+)/g);
     expect(named.filter((s) => !scripts.includes(s))).toEqual([]);
   });
   // F15: README and COOKBOOK count the attack files; the count once said 26 when the folder held 29
   it("the attack folder has as many files as the docs say (F15)", () => {
     const n = readdirSync(join(ROOT, "test/attack")).filter((f) => f.endsWith(".test.ts")).length;
-    expect(/二十六个文件/.test(cookbook) && /二十六个文件/.test(readme) ? 26 : n).toBe(n);
+    expect(/二十六个文件/.test(cookbook) && /二十六个文件/.test(longReadme) ? 26 : n).toBe(n);
   });
 });
 
@@ -145,7 +147,7 @@ describe("a brain's key typed on the page: the route, the server's parser, the d
   });
   it("setBrainKey is an owner action, and the docs say where a typed key goes and that the older key files are still read", () => {
     expect((OWNER_TYPES as readonly string[]).includes("setBrainKey")).toBe(true);
-    for (const doc of [readme, cookbook, read("docs/account.md")]) {
+    for (const doc of [longReadme, cookbook, read("docs/account.md")]) {
       expect(doc).toContain("credentials/brains/");
       expect(doc).toContain("/api/account/brain-key");
       expect(doc).toContain("credentials/anthropic/api-key.json");
@@ -154,7 +156,7 @@ describe("a brain's key typed on the page: the route, the server's parser, the d
   });
   // round 2 of the brains review: what the docs say matches what the code does
   it("the docs say a key never goes in the model field, the gateway rule, that a local server needs no file — and what Test the key's check is (not authentication)", () => {
-    for (const doc of [readme, cookbook, read("docs/account.md")]) {
+    for (const doc of [longReadme, cookbook, read("docs/account.md")]) {
       expect(doc).toContain("keyShaped");
       expect(doc).toContain("ANTHROPIC_BASE_URL");
       expect(doc).toMatch(/Ollama、vLLM 不用文件|\*\*不用文件\*\*/);
@@ -181,8 +183,8 @@ describe("a brain's key typed on the page: the route, the server's parser, the d
     // the brain says a gateway's variable blocks a saved key: a field of what it says of itself, which the catalog spreads to the page
     expect(read("src/portfolio/account/desk.ts")).toMatch(/envBlocks\?: string \| undefined;/);
   });
-  it("the README's Grok Bot sentence says what xAI's docs say (dated): no API, webhook or MCP entry point, and not whether grok.com's connectors reach Grok Bot", () => {
-    const para = readme.split("\n").find((l) => l.includes("**Muse、Grok Bot、Instinct**"))!;
+  it("the long README's Grok Bot sentence says what xAI's docs say (dated): no API, webhook or MCP entry point, and not whether grok.com's connectors reach Grok Bot", () => {
+    const para = longReadme.split("\n").find((l) => l.includes("**Muse、Grok Bot、Instinct**"))!;
     expect(para).toContain("2026-10-15");
     expect(para).toMatch(/Grok Bot（2026-08-11 beta）的文档没有写任何 API、webhook 或 MCP 入口/);
     expect(para).toMatch(/xAI 的文档没说这些 connector 到不到得了 Grok Bot/);

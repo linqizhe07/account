@@ -98,6 +98,39 @@
 .ch-ln.entry .ch-lnr { fill: var(--hl-text-2); }
 .ch-ln.liq .ch-lnl { stroke: var(--hl-warn); }
 .ch-ln.liq .ch-lnr { fill: var(--hl-warn); }
+/* the desk's trades (chMarks): a dot at the bar and the price, ringed in the panel's colour, its words in a tag beside it — a buy's in the
+   buy colour, a sell's in the sell colour (the Swiss pair, white words on both, 4.9:1), an exit's in ink — an entry and its exit joined by
+   a dashed line; one that just happened rings outward a moment (still under reduced motion) */
+.ch-mkj { fill: none; stroke: var(--hl-text-2); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.6; }
+.ch-mks { fill: none; stroke-width: 1.2; }
+.ch-mkd { stroke: var(--hl-panel); stroke-width: 2; }
+.ch-svg .ch-mkt { fill: var(--hl-on-trade); font-size: 12px; font-weight: 600; }
+.ch-mk.up :is(.ch-mkd, .ch-mkr) { fill: var(--hl-buy); }
+.ch-mk.up :is(.ch-mks, .ch-mkp) { stroke: var(--hl-buy); }
+.ch-mk.down :is(.ch-mkd, .ch-mkr) { fill: var(--hl-sell); }
+.ch-mk.down :is(.ch-mks, .ch-mkp) { stroke: var(--hl-sell); }
+.ch-mk.ink :is(.ch-mkd, .ch-mkr) { fill: var(--hl-text); }
+.ch-mk.ink :is(.ch-mks, .ch-mkp) { stroke: var(--hl-text); }
+.ch-svg .ch-mk.ink .ch-mkt { fill: var(--hl-panel); }
+.ch-mkp { fill: none; stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ch-mk-ring 1.6s ease-out infinite; }
+@keyframes ch-mk-ring { from { transform: scale(1); opacity: 0.9; } to { transform: scale(3.2); opacity: 0; } }
+/* a trade that just happened arrives: its dot pops in, its tag drops into place after it, an exit's result floats up and fades; the plan's
+   lines of an entry just filled draw across from the left */
+.ch-mk.fresh .ch-mkd { transform-box: fill-box; transform-origin: center; animation: ch-mk-pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both; }
+.ch-mk.fresh :is(.ch-mkr, .ch-mkt, .ch-mks) { animation: ch-mk-tag 0.35s ease-out 0.2s both; }
+.ch-svg .ch-mkf { font-size: 16px; font-weight: 700; animation: ch-mk-float 2.8s ease-out 0.3s both; }
+.ch-svg .ch-mkf.up { fill: var(--hl-up); }
+.ch-svg .ch-mkf.down { fill: var(--hl-down); }
+.ch-ln.fresh .ch-lnl { transform-box: fill-box; transform-origin: 0 50%; animation: ch-ln-in 0.9s ease-out both; }
+@keyframes ch-mk-pop { from { transform: scale(0); } }
+@keyframes ch-mk-tag { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes ch-mk-float { 0% { opacity: 0; transform: translateY(8px); } 15% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; transform: translateY(-28px); } }
+@keyframes ch-ln-in { from { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .ch-mkp { animation: none; opacity: 0.45; transform: scale(1.8); }
+  .ch-mk.fresh :is(.ch-mkd, .ch-mkr, .ch-mkt, .ch-mks), .ch-ln.fresh .ch-lnl { animation: none; }
+  .ch-svg .ch-mkf { animation: none; }
+}
 .ch-plot.ln-hover { cursor: ns-resize; }
 
 /* the crosshair */

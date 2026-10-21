@@ -162,7 +162,7 @@ export function evaluate(i: EvaluateInput): Verdict {
   return { ok: true, capability: cap, usd, card };
 }
 
-// ---- the three-layer table the UI and the README show -------------------------
+// ---- the three-layer table the UI and the long README (docs/README.zh.md) show -
 
 export interface OpennessRow {
   account: string;
