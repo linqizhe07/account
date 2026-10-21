@@ -65,13 +65,24 @@
 @keyframes dk-rise { from { opacity: 0; transform: translateY(8px); } }
 @media (max-width: 1319px) { .dk-slots { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); } }
 
-/* the room */
-.dk-funnel { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+/* the room: it lays its lines out on its own width (it sits in the side column on a wide window, where no media query sees it narrow) */
+.dk-room { container-type: inline-size; }
+/* the funnel: each step one piece with the arrow before it, so a wrap falls between steps */
+.dk-funnel { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.dk-fn { white-space: nowrap; }
 .dk-fn b { color: var(--text); font-variant-numeric: tabular-nums; }
-.dk-arrow { color: var(--border); }
+.dk-arrow { color: var(--border); margin-right: 6px; }
 .dk-msgs { display: flex; flex-direction: column; gap: 2px; max-height: 480px; overflow-y: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 0; scroll-behavior: smooth; }
-.dk-msg { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 6px 4px; border-radius: var(--radius-s); font-size: 13px; line-height: 1.45; }
+/* a line: the seat's tag, the words, the time — on the panel itself (the seat's tint is its tag's alone); in a narrow room the tag and the
+   time share the top line and the words take the whole width under them */
+.dk-msg { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; grid-template-areas: "tag text at"; gap: 8px; align-items: start; padding: 6px 4px; border-radius: var(--radius-s); font-size: 13px; line-height: 1.45; }
+.dk-msg > .dk-role { grid-area: tag; justify-self: start; }
+.dk-msg > .dk-text { grid-area: text; }
+.dk-msg > .dk-at { grid-area: at; }
 .dk-msg:hover { background: var(--hover); }
+@container (max-width: 479px) {
+  .dk-msg { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "tag at" "text text"; gap: 4px 8px; }
+}
 .dk-text { overflow-wrap: anywhere; white-space: pre-wrap; }
 .dk-text .mono { font-size: 12px; }
 .dk-at { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
@@ -131,8 +142,6 @@
 
 @media (max-width: 900px) {
   .dk-charter { padding-left: 0; }
-  .dk-msg { grid-template-columns: 64px minmax(0, 1fr); }
-  .dk-at { grid-column: 2; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dk-curve .line { animation: none; stroke-dashoffset: 0; }

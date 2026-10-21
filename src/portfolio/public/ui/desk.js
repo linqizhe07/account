@@ -24,6 +24,21 @@ const dkLeft = (ms) => {
 };
 /* lead and card ids in a line, set in mono */
 const dkIds = (text) => esc(text).replace(/\b(L-\d{4,}|card-\d{4}|ord-\d{4})\b/g, '<span class="mono">$1</span>');
+/* the room's funnel: each arrow travels with the step after it (one piece that does not break), so a narrow column wraps between steps
+   and never leaves an arrow at a line's end */
+function dkFunnelHtml(f) {
+  const steps = [["scanned", f.scanned], ["cleared", f.cleared], ["confirmed", f.confirmed], ["executed", f.executed], ["closed", f.closed]];
+  return `<div class="dk-funnel" aria-label="The funnel">${steps.map(([k, n], i) => `<span class="dk-fn">${i ? '<span class="dk-arrow" aria-hidden="true">→</span>' : ""}<b>${esc(String(num(n)))}</b> ${k}</span>`).join("")}${f.rejected ? `<span class="dk-fn">· ${esc(String(f.rejected))} rejected</span>` : ""}</div>`;
+}
+/* A LINE OF THE ROOM: the seat's tag with its tint — on the tag alone, never on the row (Head's tint is the ink fill: on the row it made the
+   line a black box and lost the tag in it) — the line said for people where the Superagent has the words for the room's protocol
+   (ui/superagent.js sgPlain, loaded after this file and asked when the room is drawn), the room's own line one pointer away, and its time.
+   A report keeps its lines */
+function dkMsgHtml(m, leads) {
+  const raw = String(m.text || "");
+  const said = typeof sgPlain === "function" ? sgPlain(m, Array.isArray(leads) ? leads : []) : raw;
+  return `<div class="dk-msg dk-k-${esc(m.kind)}" data-k="${m.seq}"${said !== raw ? ` title="${esc(raw)}"` : ""}><span class="dk-role dk-${esc(DK_ROLE_CLASS[m.from] || "note")}">${esc(dkTag(m.from))}</span><span class="dk-text">${dkIds(said).replace(/\n/g, "<br>")}${m.brain ? ' <span class="dim small">· brain</span>' : ""}</span><span class="dk-at dim">${esc(nyTime(m.at))}</span></div>`;
+}
 
 /** the pane: the shell calls it on every read, on the route and on the lens */
 function renderDesk({ el, owner }) {
@@ -174,9 +189,8 @@ function dkViewHtml(v, owner) {
   const tape = `<section class="sec dk-tape" aria-labelledby="dk-tape-h"><div class="sec-head"><div class="label" id="dk-tape-h">Trade tape</div><div class="dk-wl"><span class="tag up">${esc(String(tp.wins))}W</span><span class="tag warn">${esc(String(tp.losses))}L</span><span class="tag">${esc(String(tp.winRatePct))}%</span></div></div>${closes.length ? `<svg class="dk-bars" viewBox="0 0 ${Math.max(600, closes.length * (bw + 2))} 104" preserveAspectRatio="none" role="img" aria-label="${esc(`${closes.length} closes: ${tp.wins} won, ${tp.losses} lost`)}"><line x1="0" y1="51" x2="100%" y2="51" class="base"></line>${bars}</svg>` : '<p class="empty">No close yet: the first lead the Exit closes draws the first bar.</p>'}<div class="dk-tape-f dim small"><span>Last ${esc(String(closes.length))} close${closes.length === 1 ? "" : "s"}</span><span>avg win ${esc(dkPct(tp.avgWinPct))} · avg loss ${esc(dkPct(tp.avgLossPct))}</span></div></section>`;
   const big = `<section class="sec dk-big" aria-labelledby="dk-big-h"><div class="sec-head"><div class="label" id="dk-big-h">Big closes <span class="dim">${esc(String(v.big.length))}/5</span></div><span class="num-m ${v.big.reduce((a, b) => a + b.pnlUsd, 0) >= 0 ? "up" : "down"} dk-big-sum">${esc(dkSigned(v.big.reduce((a, b) => a + b.pnlUsd, 0)))}</span></div><div class="dk-slots">${[0, 1, 2, 3, 4].map((i) => { const b = v.big[i]; return b ? `<div class="dk-slot filled" data-k="${esc(b.id)}"><span class="dim small">#${i + 1}</span>${avatar(b.symbol.split(/[/:@-]/)[0] || b.symbol, "sm")}<b>${esc(b.symbol.split(/[/:@-]/)[0] || b.symbol)}</b><span class="tag ${b.side === "buy" ? "up" : "warn"}">${b.side === "buy" ? "L" : "S"}</span><span class="dk-slot-p ${b.pnlUsd >= 0 ? "up" : "down"}">${esc(dkSigned(b.pnlUsd))}</span><span class="dim small">${esc(dkPct(b.roiPct))} · <span class="mono">${esc(b.id)}</span></span></div>` : `<div class="dk-slot" data-k="empty-${i}"><span class="dim small">#${i + 1}</span><span class="dim dk-q">?</span><span class="dim small">not yet</span></div>`; }).join("")}</div></section>`;
   // the room, its funnel, its routines
-  const f = v.funnel;
-  const funnel = `<div class="dk-funnel" aria-label="The funnel">${[["scanned", f.scanned], ["cleared", f.cleared], ["confirmed", f.confirmed], ["executed", f.executed], ["closed", f.closed]].map(([k, n], i) => `${i ? '<span class="dk-arrow" aria-hidden="true">→</span>' : ""}<span class="dk-fn"><b>${esc(String(n))}</b> ${k}</span>`).join("")}${f.rejected ? `<span class="dim small">· ${esc(String(f.rejected))} rejected</span>` : ""}</div>`;
-  const msgs = (v.room || []).map((m) => `<div class="dk-msg dk-${esc(DK_ROLE_CLASS[m.from] || "note")} dk-k-${esc(m.kind)}" data-k="${m.seq}"><span class="dk-role">${esc(dkTag(m.from))}</span><span class="dk-text">${dkIds(m.text).replace(/\n/g, "<br>")}${m.brain ? ' <span class="dim small">· brain</span>' : ""}</span><span class="dk-at dim">${esc(nyTime(m.at))}</span></div>`).join("");
+  const funnel = dkFunnelHtml(v.funnel);
+  const msgs = (v.room || []).map((m) => dkMsgHtml(m, v.open)).join("");
   const r = v.routines;
   const room = `<section class="sec dk-room" aria-labelledby="dk-room-h"><div class="sec-head"><div class="label" id="dk-room-h">The room</div><span class="dim small">${esc(plural((v.room || []).length, "line"))}</span></div>${funnel}<div class="dk-msgs" role="log" aria-live="polite">${msgs || '<p class="empty">Nothing said yet.</p>'}</div><div class="dk-routines dim small">${state === "live" && r.nextCycleAt ? `<span>Next cycle in <span data-dk-next="${esc(r.nextCycleAt)}">—</span></span>` : `<span>Cycles ${state === "paused" ? "paused" : state === "halted" ? "halted" : "ended"}</span>`}<span>Evening report ${esc(r.reportAt)} NY (<span data-dk-left="${esc(r.nextReportAt)}">—</span>)</span><span>Weekly review ${esc(nyDay(r.weeklyAt))}</span>${owner && state !== "ended" ? dkBtn("report", "Report now", { cls: "link dim" }) : ""}</div></section>`;
   // the roster: each seat, its standing at the door, its limit, its charter
