@@ -132,7 +132,7 @@ describe("ui/stream.js", () => {
     expect(p.out("ALL")).toEqual(["health:connected", "fill", "order"]);
     expect(p.run("STREAM.lastId")).toBe("ab12cd34.9");
     // every event the account sends is heard by name (a browser hands a named event only to a listener for that name)
-    expect([...p.es().heard.keys()].sort()).toEqual(["balance", "book", "card", "desk", "fill", "hb", "order", "paper", "position", "quote", "snapshot", "statement", "trades"]);
+    expect([...p.es().heard.keys()].sort()).toEqual(["alert", "balance", "book", "card", "desk", "fill", "hb", "order", "paper", "position", "quote", "snapshot", "statement", "trades"]);
   });
 
   it("closes the stream while the tab is hidden, and opens it again when it shows, naming the last id it heard", () => {

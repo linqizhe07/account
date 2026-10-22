@@ -1186,6 +1186,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!classic && service.account) service.watchStreams();
   // while a page listens on the push channel, the account's door follows real venues' orders, payments and earn by itself
   if (!classic && service.account) service.watchDoor();
+  // the price alerts' clock: each standing alert's market priced every half minute, and the owner told the moment one fires (service.ts
+  // watchAlerts) — whether or not a page is open
+  if (!classic && service.account) service.watchAlerts();
   // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
   if (!classic && service.account) service.watchDesk();
   const stop = () => srv.close().then(() => process.exit(0));

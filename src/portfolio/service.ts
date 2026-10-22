@@ -84,7 +84,7 @@ import { agentWalletKey, agentWalletKeyPath, hasKey } from "./account/keystore.t
 import { agentWalletSource, agentWalletVenue } from "./live/agent-wallet.ts";
 import { guardedHttp, type PayHttp } from "./live/guarded-http.ts";
 import { publicSender } from "./live/chain.ts";
-import { agentStatus, type SubAccount } from "./account/state.ts";
+import { agentStatus, type FiredAlert, type SubAccount } from "./account/state.ts";
 import { publicChain } from "./live/chain.ts";
 import { realMm } from "./live/metamask.ts";
 import { publicPrices } from "./live/prices.ts";
@@ -2090,7 +2090,87 @@ export class PortfolioService {
   }
   private doorLooking = false;
 
-  /** one look at every paper account the account keeps itself (watchPaper's, or a test's): the venues whose books changed */
+  /** THE PRICE ALERTS' OWN CLOCK: every half minute (ALERT_LOOK_MS) each standing alert's market is priced — at its venue when that is
+   * connected, else from the venue's public side — and an alert whose figure the price has reached or crossed fires (lookAtAlerts): the
+   * engine takes it off, the ledger gets its note, and every page listening is told at once. Whether or not a page is open: an alert is the
+   * account's promise, not the page's. One look at a time; never in tests, which look themselves */
+  watchAlerts(everyMs = ALERT_LOOK_MS): () => void {
+    const every = setInterval(() => void this.lookAtAlerts(), everyMs);
+    every.unref?.();
+    return () => clearInterval(every);
+  }
+  /** one look at the standing price alerts (watchAlerts's, or a test's): each alert's market priced once — alerts on one market share the
+   * read — and each alert whose condition the price meets fired: "above" fires at the figure or over it, "below" at the figure or under it.
+   * A market nothing prices now leaves its alerts standing for the next look. Answers the alerts that fired, in the order they stood */
+  async lookAtAlerts(): Promise<FiredAlert[]> {
+    const a = this.account;
+    if (!a || this.alertsLooking) return [];
+    const now = Date.parse(this.now());
+    const standing = a.state.alerts.filter((x) => now < Date.parse(x.expiresAt));
+    if (!standing.length) return [];
+    this.alertsLooking = true;
+    try {
+      const keyOf = (x: { venue: string; symbol: string }) => `${x.venue}|${x.symbol}`;
+      const markets = [...new Map(standing.map((x) => [keyOf(x), { venue: x.venue, symbol: x.symbol }])).values()];
+      const prices = new Map<string, { price: number; from: string }>();
+      await Promise.all(markets.map(async (m) => {
+        const p = await this.priceNow(m.venue, m.symbol).catch(() => undefined);
+        if (p) prices.set(keyOf(m), p);
+      }));
+      const fired: FiredAlert[] = [];
+      for (const x of standing) {
+        const p = prices.get(keyOf(x));
+        if (!p) continue;
+        if (!(x.condition === "above" ? p.price >= x.price : p.price <= x.price)) continue;
+        const f = a.fireAlert(x.id, p.price, p.from);
+        if (!f) continue;
+        fired.push(f);
+        this.stream.emit("alert", { ...f, venueName: this.nameOf(f.venue), at: f.firedAt });
+      }
+      return fired;
+    } finally {
+      this.alertsLooking = false;
+    }
+  }
+  private alertsLooking = false;
+  /** ONE MARKET'S PRICE NOW, for a price alert: at a venue connected live, the venue's own (liveMarket: a few seconds old at most — its last
+   * trade, else the middle of its book); at a venue that is not connected, the public side of it (the source whose venue it is, or that
+   * trades its markets) — the venue's stream while the hub carries the market (its last trade; a perpetual's mark), else the source's
+   * one-market line (the US stocks line), else its listings searched for the symbol. Each says whose price it is (`from`), in its own
+   * words. Undefined where nothing prices it now */
+  private async priceNow(venue: string, symbol: string): Promise<{ price: number; from: string } | undefined> {
+    const ofMarket = (m: Market, from: string): { price: number; from: string } | undefined => {
+      const mid = m.bid !== undefined && m.ask !== undefined && m.ask >= m.bid ? (m.bid + m.ask) / 2 : undefined;
+      const price = m.price ?? mid;
+      return price !== undefined && price > 0 ? { price, from: m.quoteFrom ?? from } : undefined;
+    };
+    const live = this.liveVenues.get(venue);
+    if (live && this.adapters.get(venue)?.account.watchOnly) {
+      const m = await this.liveMarket(venue, symbol);
+      return isRefusal(m) ? undefined : ofMarket(m, live.name);
+    }
+    const src = this.publicMarkets().find((s) => s.id === venue || s.connectTo === venue || s.alsoVia?.some((v) => v.connectTo === venue));
+    if (!src) return undefined;
+    const hub = this.listenHub();
+    if (hub?.covers(src.id, symbol)) {
+      hub.want(src.id, symbol);
+      const q = hub.quote(src.id, symbol);
+      if (q?.live) {
+        const mid = q.bid !== undefined && q.ask !== undefined && q.ask >= q.bid ? (q.bid + q.ask) / 2 : undefined;
+        const price = /-PERP$/i.test(symbol) ? (q.mark ?? mid ?? q.last) : (q.last ?? mid);
+        if (price !== undefined && price > 0) return { price, from: q.from ?? `${q.src} · live` };
+      }
+    }
+    if (src.line) {
+      const l = await src.line(symbol);
+      if (l && !isRefusal(l)) return ofMarket(l, src.name);
+    }
+    const base = symbol.split(/[/@:]/)[0]?.replace(/-(PERP|USD[CT]?|SWAP)$/i, "") ?? symbol;
+    const listed = await src.listings({ q: base, limit: 60 });
+    if (isRefusal(listed)) return undefined;
+    const l = listed.find((x) => x.symbol === symbol);
+    return l ? ofMarket(l, src.name) : undefined;
+  }
   async lookAtPaper(): Promise<string[]> {
     if (this.paperLooking || !this.paperLooks.size) return [];
     this.paperLooking = true;
@@ -2893,8 +2973,8 @@ export class PortfolioService {
     // a replayed agent wallet is the key file it was made with: one that is gone is not made again under the same name (the wallet is
     // named, never the file: the message reaches the page and the agents' seats)
     const home = this.opts.home;
-    const r = await rebuild(history.rows, engine.state, { ...engine.applyOptions(), codeRequired: (this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode) !== undefined, walletAddress: (name) => (hasKey(agentWalletKeyPath(home, name)) ? (() => { const k = agentWalletKey(home, name); return isRefusal(k) ? k : (k.address as Hex); })() : no("E_ACCOUNT_CREDENTIAL", { message: `the agent wallet "${name}" is not brought back: its key file is gone from this account's home, and an agent wallet is the key it was made with`, detail: { wallet: name } })) });
-    engine.adopt(r.state, r.ids);
+    const r = await rebuild(history.rows, engine.state, { ...engine.applyOptions(), nowMs: Date.parse(this.now()), codeRequired: (this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode) !== undefined, walletAddress: (name) => (hasKey(agentWalletKeyPath(home, name)) ? (() => { const k = agentWalletKey(home, name); return isRefusal(k) ? k : (k.address as Hex); })() : no("E_ACCOUNT_CREDENTIAL", { message: `the agent wallet "${name}" is not brought back: its key file is gone from this account's home, and an agent wallet is the key it was made with`, detail: { wallet: name } })) });
+    engine.adopt(r.state, r.ids, r.fired);
     this.seq = Math.max(this.seq, r.ids.card);
     if (r.dial) this.adoptDial(r.dial);
     const report: RestoreReport = { runs: history.files.length, from: history.files[0] ?? "", owner: r.owner, agents: r.state.agents.filter((a) => a.revokedAt === undefined && a.validUntil > Date.parse(this.now())).length, limits: r.state.spends.filter((x) => x.revokedAt === undefined && x.validUntil > Date.parse(this.now())).length, mode: this.openness.mode === "open" ? "Beast" : "Guard", venues: r.connections.map((c) => ({ venue: c.venue, ok: false, why: "connecting again" })), orders: r.orders.length, payments: r.payments.length + r.authorisations.length + r.earns.length, skipped: [...r.skipped, ...(history.broken ? [`${history.broken.file}: its hash chain breaks${history.broken.at ? ` at row ${history.broken.at}` : ""}, so nothing after the break (and nothing older) was brought back`] : [])], state: "restoring" };
@@ -4273,6 +4353,9 @@ const PAPER_CURVE_MS = 60_000;
 const TOLD_FILLS_MAX = 5_000;
 /** how often the service looks at each paper account's book on its own (watchPaper) */
 const PAPER_LOOK_MS = 5_000;
+/** how often the standing price alerts' markets are priced and each alert judged (service.ts watchAlerts): half a minute, which the page
+ * says ("checked about every 30 seconds") */
+export const ALERT_LOOK_MS = 30_000;
 /** how often the account's door looks by itself while a page listens on the push channel (watchDoor). Each look asks a venue about an
  * order only once that order's own wait is up (live-orders.ts POLL_MS, ten seconds): a look every five seconds comes within five of it,
  * where a page that read every twenty seconds came within twenty — so a fill at a real venue is no later on screen than it was then */

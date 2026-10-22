@@ -498,6 +498,8 @@ describe("the Markets pane", () => {
     expect(html).toContain('data-v="movers" data-fk="sort:movers" aria-pressed="true"');
     expect(html.indexOf('data-fk="open:coin:DOGE"')).toBeLessThan(html.indexOf('data-fk="open:coin:BTC"'));
     expect(html.indexOf('data-fk="open:coin:BTC"')).toBeLessThan(html.indexOf('data-fk="open:kalshi:KXFED-DEC"'));
+    // the pulse over All reads the Stocks tab once for its index tiles (kept like any read): not a sort's doing
+    p.asked.splice(0, p.asked.length, ...p.asked.filter((a) => !a.path.includes("tab=stocks")));
     // the path of the read carries no sort; pressing a sort moves the route in place and reads nothing
     expect(p.asked.map((a) => a.path)).toEqual(["/api/account/explore"]);
     p.run("var GONE = []; go = (tab, params, opts) => GONE.push([tab, params, opts])");
@@ -925,7 +927,7 @@ describe("the one drawer", () => {
     expect(html).toContain("<dt>Volume 24h</dt><dd>$1.9B</dd>");
     expect(html).not.toContain('data-act="rekey"');
     // the parts, each in its own element, in the brief's order
-    expect([...html.matchAll(/data-sec="([a-z]+)"/g)].map((m) => m[1])).toEqual(["head", "chart", "across", "ipo", "held", "agents", "lines"]);
+    expect([...html.matchAll(/data-sec="([a-z]+)"/g)].map((m) => m[1])).toEqual(["head", "chart", "alerts", "across", "ipo", "held", "agents", "lines"]);
     expect(html.indexOf('aria-label="Across venues"')).toBeLessThan(html.indexOf('aria-label="You hold"'));
     expect(html.indexOf('aria-label="You hold"')).toBeLessThan(html.indexOf('aria-label="Agents on it"'));
     expect(html.indexOf('aria-label="Agents on it"')).toBeLessThan(html.indexOf('aria-label="On the statement"'));
@@ -1311,7 +1313,7 @@ describe("the one drawer", () => {
     // the watched BTC is the row Markets lists; the Kraken market no read carries is a row of its own that still prices, opens and connects
     expect(html).toContain('data-fk="open:coin:BTC"');
     expect(html).toContain("ETH/USD");
-    expect([...html.matchAll(/<th scope="col"[^>]*>(?:<span class="sr">)?([^<]*)/g)].map((m) => m[1])).toEqual(["Watch", "Market", "Where", "Price", "24h", "Actions"]);
+    expect([...html.matchAll(/<th scope="col"[^>]*>(?:<span class="sr">)?([^<]*)/g)].map((m) => m[1])).toEqual(["Watch, price alert", "Market", "Where", "Price", "24h", "Actions"]);
     // a watched outcome is said beside its price (not under the name: a row is one line, its name's card says the rest)
     p.set("A", account({ watch: [{ venue: "kalshi", symbol: "KXFED-DEC:NO", at: "2026-10-06T04:00:00.000Z" }] }));
     const ev = p.run<string>("MKT.reg = []; mkWatchingHtml(lensNow())");
@@ -1552,5 +1554,134 @@ describe("after connect, a venue that refuses this network is a state Markets sa
     p.run('A.connectLive.waiting = []; ELS = {}; openConnect(optionOf("kalshi"), {})');
     expect(p.run("ELS['reach-note'].className")).toBe("reach-note msg no");
     p.run("REACH.clear()");
+  });
+});
+
+/** PRICE ALERTS AND THE PULSE (after OpenStock; markets.js): the bell beside ★, the alert sheet's Remove, the Alerts list under Watching, and
+ * the pulse over All — the session line from the stocks' own session words and the six tiles, only for rows the read has */
+describe("price alerts and the pulse", () => {
+  const alertOn = (over: Record<string, unknown> = {}) => ({ id: "alert-0001", venue: "okx", venueName: "OKX", symbol: "DOGE/USDT", condition: "above", price: 0.2, at: "2026-10-05T04:00:00.000Z", expiresAt: "2027-01-03T04:00:00.000Z", ...over });
+  /* an index ETF as the US stocks line lists it, out of its session before the open */
+  const spy = (session: unknown = { open: false, opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-06T20:00:00.000Z" }) => ({
+    key: "stock:SPY",
+    kind: "stock",
+    name: "SPDR S&P 500 ETF",
+    base: "SPY",
+    price: 571.2,
+    changePct24h: -0.3,
+    quoteFrom: "Cboe · 15 min delayed",
+    tabs: ["all", "stocks"],
+    at: [{ venue: "cboe", venueName: "US stocks", symbol: "SPY", connected: false, canTrade: false, public: true, price: 571.2, connectTo: "alpaca", connector: "live:alpaca", quoteFrom: "Cboe · 15 min delayed", session }],
+  });
+
+  it("the bell is drawn beside ★ for the same markets, pressed while an alert stands on the row (a public listing's under the venue it would be); Remove signs a setAlert with on \"\", the alert's figure as a plain decimal", async () => {
+    const p = page(() => ({}));
+    p.set("A", account());
+    p.set("ITEMS", { btc, doge });
+    expect(p.run("mkBell(ITEMS.doge, 0)")).toContain('class="icon-btn mk-bell" data-act="alert" data-i="0" data-fk="alert:coin:DOGE" aria-pressed="false" aria-label="Set a price alert for DOGE"');
+    expect(p.run("mkKeys(ITEMS.btc, 1)")).toContain('data-fk="watch:coin:BTC"');
+    expect(p.run("mkKeys(ITEMS.btc, 1)")).toContain('data-fk="alert:coin:BTC"');
+    // the table's first cell holds both
+    expect(p.run("mkTable([ITEMS.btc], '')")).toContain('<span class="mk-keys"><button type="button" class="icon-btn mk-star"');
+    // an alert on DOGE at OKX, where only OKX's public prices list DOGE: the bell is pressed on that row, not on BTC's
+    p.set("A", account({ alerts: [alertOn()] }));
+    expect(p.run("mkBell(ITEMS.doge, 0)")).toContain('aria-pressed="true" aria-label="1 price alert on DOGE"');
+    expect(p.run("mkBell(ITEMS.btc, 1)")).toContain('aria-pressed="false"');
+    expect(p.run("mkAlertsOf(ITEMS.doge).map((x) => x.id)")).toEqual(["alert-0001"]);
+    expect(p.run("mkAlertsOf(ITEMS.btc)")).toEqual([]);
+    // Remove: the alert as it stands, its price a plain decimal
+    p.run("own = async (d) => { DRAFTS.push(d); return { status: 200, body: {} }; }; var DRAFTS = []");
+    p.run(`mkPaneClick(${press({ act: "alert-off", id: "alert-0001" })})`);
+    await settle();
+    expect(p.run("JSON.stringify(DRAFTS)")).toBe(JSON.stringify([{ type: "setAlert", id: "alert-0001", venue: "okx", symbol: "DOGE/USDT", condition: "above", price: "0.2", on: "" }]));
+    expect(p.run("[mkPlain(63500), mkPlain(0.62), mkPlain(1e-7), mkPlain(0.1 + 0.2)]")).toEqual(["63500", "0.62", "0.0000001", "0.3"]);
+    // the drawer's Alert button counts them, and its Price alerts part lists them with Remove
+    p.run("MKT.open = { item: ITEMS.doge, range: '1M', interval: '1h', ipo: [] }");
+    const parts = p.run<Record<string, string>>("mkDrawerParts(MKT.open)");
+    expect(parts.head).toContain('data-act="alert" data-fk="d-alert" aria-pressed="true"');
+    expect(parts.head).toContain("1 Alert</button>");
+    expect(parts.alerts).toContain('aria-label="Price alerts"');
+    expect(parts.alerts).toContain("Rises above $0.2</div><div class=\"t2\">OKX · since Mon 5 Oct · until Sat 2 Jan · alert-0001</div>");
+    expect(parts.alerts).toContain('data-fk="alert-off:alert-0001"');
+    // a row with no alert has an empty part, and the button says Alert
+    p.run("MKT.open = { item: ITEMS.btc, range: '1M', interval: '1h', ipo: [] }");
+    expect(p.run<Record<string, string>>("mkDrawerParts(MKT.open)").alerts).toBe("");
+    expect(p.run<Record<string, string>>("mkDrawerParts(MKT.open)").head).toContain(">Alert</button>");
+  });
+
+  it("the Watching tab lists the alerts under the watchlist — the market, which way and the figure (cents for an event contract), the price now, since and until, Remove — then the fired ones; the tab shows for alerts alone", async () => {
+    const p = page((path) => (path.startsWith("/api/account/explore") ? exploreF5 : {}));
+    p.set("A", account({
+      alerts: [alertOn(), alertOn({ id: "alert-0002", venue: "kalshi", venueName: "Kalshi", symbol: "KXFED-DEC:YES", condition: "below", price: 0.5 })],
+      alertsFired: [{ ...alertOn({ id: "alert-0003", venue: "ex", venueName: "Exchange X", symbol: "BTC/USDT", condition: "above", price: 62000 }), seen: 62140, from: "Exchange X", firedAt: "2026-10-06T04:30:00.000Z" }],
+    }));
+    p.run(`ROUTE.tab = "markets"; ${PANE}`);
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { tab: "watching" } })');
+    await settle();
+    await settle();
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { tab: "watching" } })');
+    const html = p.run<string>("EL.innerHTML");
+    expect(html).toContain('data-tab="watching"');
+    expect(html).toContain("Nothing watched.");
+    expect(html).toContain('aria-label="Price alerts"');
+    expect(html).toContain("2 alerts standing · checked about every 30 seconds while the account runs · each stands 90 days");
+    expect(html).toContain('<span class="mk-al-cond">Rises above <b>$0.2</b></span>');
+    expect(html).toContain('<span class="mk-al-cond">Falls below <b>50¢</b></span>');
+    expect(html).toContain("Mon 5 Oct · until Sat 2 Jan");
+    expect(html).toContain('data-fk="alert-off:alert-0001"');
+    expect(html).toContain('data-fk="alert-off:alert-0002"');
+    // the Fed alert's row is the event Markets lists, its price now its lead outcome's
+    expect(html).toContain('data-fk="open:kalshi:KXFED-DEC"');
+    expect(html).toContain("62¢");
+    // the fired one, in words, with the price that fired it and whose it was
+    expect(html).toContain("BTC/USDT at Exchange X rose above $62,000.00: $62,140.00");
+    expect(html).toContain("Tue 6 Oct 00:30 New York · Exchange X");
+    // a browser that only looks (its device is not the owner's) gets no Remove
+    p.run('Owner.role = "pending"; renderMarkets({ el: EL, owner: false, lens: lensNow(), params: { tab: "watching" } })');
+    expect(p.run<string>("EL.innerHTML")).not.toContain("alert-off:");
+    expect(p.run<string>("EL.innerHTML")).not.toContain(">Remove</button>");
+    p.run('Owner.role = "owner"');
+  });
+
+  it("the pulse over All: the US session from the stocks' own session words with a countdown on the page's clock, a tile for each of the six the reads have, none for one they have not, and nothing while searching", async () => {
+    const p = page((path) => (path.includes("tab=stocks") ? { ...exploreF5, items: [spy()] } : path.startsWith("/api/account/explore") ? exploreF5 : {}));
+    p.set("A", account());
+    p.run(`ROUTE.tab = "markets"; ${PANE}`);
+    p.run("renderMarkets({ el: EL, owner: true, lens: lensNow(), params: {} })");
+    await settle();
+    await settle();
+    p.run("renderMarkets({ el: EL, owner: true, lens: lensNow(), params: {} })");
+    const html = p.run<string>("EL.innerHTML");
+    expect(html).toContain('<section class="mk-pulse" aria-label="Pulse">');
+    // the session: closed before the open at 09:30 New York (NOW is 05:00 UTC, 01:00 New York): opens in 8h 30m, said once a second
+    expect(html).toContain('<span class="mk-dot off" aria-hidden="true"></span><b>US stocks</b> · Closed · <span class="mk-sess" data-at="2026-10-06T13:30:00.000Z" data-word="opens">opens in 8h 30m</span>');
+    expect(html).toContain("opens Tue 6 Oct 09:30 New York");
+    // the tiles the reads have: the S&P 500 from the Stocks read, Bitcoin from All; none for the four the reads do not carry
+    const tiles = [...html.matchAll(/class="mk-tile"[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(tiles).toEqual(["S&amp;P 500: open SPDR S&amp;P 500 ETF", "Bitcoin: open Bitcoin"]);
+    expect(html).toContain('<span class="mk-tile-px">$571.20</span>');
+    expect(html).toContain("Cboe · 15 min delayed");
+    expect(html).toContain('<span class="mk-tile-px" data-q="ex|BTC/USDT" data-fmt="usd">$62,140.00</span>');
+    // the tiles come after the table's rows in the pane's list (data-i), so a row's place is what it always was
+    expect(html).toContain('data-fk="open:kalshi:KXFED-DEC" data-peek="3"');
+    // the countdown ticks with the others: its words each second, and the moment come it sends the list to be read again
+    expect(p.run('mkIn("opens", 3600000 + 7 * 60000)')).toBe("opens in 1h 07m");
+    expect(p.run('mkIn("closes", 125000)')).toBe("closes in 2m 05s");
+    expect(p.run('mkIn("opens", 2 * 86400000 + 15 * 3600000)')).toBe("opens in 2d 15h");
+    expect(p.run('mkIn("opens", -1)')).toBe("opens now");
+    // an open market: the dot up, closes in; an extended session: the amber dot, the phase's own end
+    expect(p.run(`mkSessionLine([${JSON.stringify(spy({ open: true, opensAt: "2026-10-07T13:30:00.000Z", closesAt: "2026-10-06T20:00:00.000Z" }))}])`)).toContain('<span class="mk-dot up" aria-hidden="true"></span><b>US stocks</b> · Open · <span class="mk-sess" data-at="2026-10-06T20:00:00.000Z" data-word="closes">closes in 15h 00m</span>');
+    expect(p.run(`mkSessionLine([${JSON.stringify(spy({ open: false, phase: "pre", phaseEndsAt: "2026-10-06T13:30:00.000Z", opensAt: "2026-10-06T13:30:00.000Z", closesAt: "2026-10-06T20:00:00.000Z", extendedHours: true }))}])`)).toContain('<span class="mk-dot ext" aria-hidden="true"></span><b>US stocks</b> · Pre-market · <span class="mk-sess" data-at="2026-10-06T13:30:00.000Z" data-word="opens">opens in 8h 30m</span>');
+    expect(p.run("mkSessionLine([])")).toBe("");
+    // searching: the rows are the answer, no pulse over them
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { q: "btc" } })');
+    await settle();
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { q: "btc" } })');
+    expect(p.run<string>("EL.innerHTML")).not.toContain("mk-pulse");
+    // another tab: no pulse either
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { tab: "crypto" } })');
+    await settle();
+    p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { tab: "crypto" } })');
+    expect(p.run<string>("EL.innerHTML")).not.toContain("mk-pulse");
   });
 });

@@ -66,11 +66,12 @@ import { actionHash, BRAIN_KEY_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, SIGN_OUT_TTL_M
 import { deskBrainKeyProblem, fingerprintOf, setBrainKeyProblem } from "./brain-keys.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
+import { figure } from "./statement.ts";
 import { LiveEarns, type EarnDesk, type EarnQuote, type LiveEarn } from "./live-earn.ts";
 import type { KeptAuthorisation } from "./pay-real.ts";
 import { CARD_TTL_MS, modeRules, type ModeRule } from "./mode-rules.ts";
 import { TOPIC_WORDS, type MemoryStore } from "./memory.ts";
-import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, isOwner, MAX_ASKS, nameHolder, refsOf, renewSpend, spendFor, type AccountState, type AgentKey, type AgentReport, type AskKind, type OwnerKey, type SpendApproval, type SubAccount } from "./state.ts";
+import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, FIRED_ALERTS_KEPT, isOwner, MAX_ASKS, nameHolder, refsOf, renewSpend, spendFor, type AccountState, type AgentKey, type AgentReport, type Alert, type AskKind, type FiredAlert, type OwnerKey, type SpendApproval, type SubAccount } from "./state.ts";
 
 const HUB = "metamask";
 /** devices that have asked to sign and wait for an owner, at most, at one time */
@@ -413,6 +414,9 @@ export class AccountEngine {
   /** an ask the agent asked again, by its old id: the id of the ask that took its place. A replaced ask takes a new id, so the owner's
    * answer, signed by id, is only ever about the words the owner was shown */
   private readonly askReplaced = new Map<string, string>();
+  /** price alerts that fired, newest first — this run's and, after a restart, earlier runs' (account/restore.ts): the page and the agents
+   * see the last few (FIRED_ALERTS_KEPT) */
+  firedAlerts: FiredAlert[] = [];
 
   constructor(
     readonly host: Host,
@@ -438,6 +442,7 @@ export class AccountEngine {
     this.asks = [];
     this.declined = [];
     this.askReplaced.clear();
+    this.firedAlerts = [];
     this.payer?.reset();
   }
 
@@ -666,6 +671,7 @@ export class AccountEngine {
       case "signOut":
       case "setDestination":
       case "setWatch":
+      case "setAlert":
       case "setIntent": {
         // "every venue" is the venues on the account when the owner signs: one plugged in later is not covered until it is named
         const here = action.type === "approveSpend" ? [...this.host.accounts().map((a) => a.id), ...this.state.subAccounts.map((x) => `sub:${x.name}`)] : [];
@@ -897,6 +903,11 @@ export class AccountEngine {
         return a.address === "" ? `destination "${a.label}" removed` : `destination "${a.label}" added on ${a.chain}: usable in 24 hours`;
       case "setWatch":
         return a.on === "true" ? `watching ${a.symbol.trim()} at ${a.venue.trim()}` : `no longer watching ${a.symbol.trim()} at ${a.venue.trim()}`;
+      case "setAlert": {
+        if (a.on !== "true") return `price alert ${a.id} removed`;
+        const set = this.state.alerts.find((x) => x.venue === a.venue.trim() && x.symbol === a.symbol.trim() && x.condition === a.condition && x.price === Number(a.price));
+        return `price alert${set ? ` ${set.id}` : ""}: ${a.symbol.trim()} at ${this.name(a.venue.trim())} ${a.condition === "above" ? "rises above" : "falls below"} ${figure(Number(a.price))}${set ? ` · until ${etDate(Date.parse(set.expiresAt))}` : ""}`;
+      }
       case "setIntent": {
         if (a.validUntil === 0) return `intent ${a.id} withdrawn`;
         const it = this.state.intents.find((x) => x.envelope.action === a);
@@ -1194,11 +1205,27 @@ export class AccountEngine {
   }
 
   /** the account as a restart rebuilt it from its ledgers (account/restore.ts): its owners, agents, limits — and the ids it had reached */
-  adopt(state: AccountState, ids: { order: number; payment: number; earn?: number | undefined }): void {
+  adopt(state: AccountState, ids: { order: number; payment: number; earn?: number | undefined }, fired: FiredAlert[] = []): void {
     this.state = state;
     this.orderSeq = Math.max(this.orderSeq, ids.order);
     this.earnSeq = Math.max(this.earnSeq, ids.earn ?? 0);
     this.seq = Math.max(this.seq, ids.payment);
+    // the price alerts earlier runs fired, as their ledgers said them (newest first), before any this run fires
+    this.firedAlerts = [...this.firedAlerts, ...fired].slice(0, FIRED_ALERTS_KEPT);
+  }
+
+  /** A PRICE ALERT FIRED (service.ts lookAtAlerts priced its market and found the price at the figure or across it): the alert leaves the
+   * standing ones, joins the fired ones the page and the agents see, and is written to the ledger as a note a restart reads back
+   * (account/restore.ts). `seen` is the price that fired it, `from` whose price that was in the source's own words. Nothing is placed and
+   * nothing moves: words to the owner. Undefined where no such alert stands (it lapsed, was removed, or fired already) */
+  fireAlert(id: string, seen: number, from: string): FiredAlert | undefined {
+    const a = this.state.alerts.find((x) => x.id === id);
+    if (!a) return undefined;
+    const fired: FiredAlert = { ...a, seen, from, firedAt: this.host.now() };
+    this.state = { ...this.state, alerts: this.state.alerts.filter((x) => x.id !== id) };
+    this.firedAlerts = [fired, ...this.firedAlerts].slice(0, FIRED_ALERTS_KEPT);
+    this.host.log({ kind: "note", venue: a.venue, reason: `price alert ${a.id} fired: ${a.symbol} at ${this.name(a.venue)} ${a.condition === "above" ? "rose above" : "fell below"} ${figure(a.price)} — ${figure(seen)} (${from})`, detail: { alertFired: fired } });
+    return fired;
   }
 
   /** is the approval still the owner's? Its own signed envelope is checked against the account's CURRENT owners, every time it is used */
@@ -1505,6 +1532,9 @@ export class AccountEngine {
       destinations: this.state.destinations.map((d) => ({ ...d, usable: now >= Date.parse(d.usableAt), usableOn: etDate(Date.parse(d.usableAt)) })),
       activeKeys: activeAgents(this.state, now).length,
       watch: this.state.watch.map((w) => ({ venue: w.venue, symbol: w.symbol, at: w.at })),
+      // an alert that lapsed is gone from the page before the next signed change takes it off the state
+      alerts: this.state.alerts.filter((x) => now < Date.parse(x.expiresAt)).map((x) => ({ ...x, venueName: this.name(x.venue) })),
+      alertsFired: this.firedAlerts.map((x) => ({ ...x, venueName: this.name(x.venue) })),
       intents: this.state.intents.filter((x) => now < x.validUntil).map((x) => ({ id: x.id, agent: x.agent, agentName: x.agent === "*" ? "every agent" : this.agentName(x.agent), venue: x.venue, symbol: x.symbol, side: x.side, usd: x.usd, text: x.text, validUntil: new Date(x.validUntil).toISOString(), at: x.at, reports: x.reports, ...(x.report ? { report: { ...x.report, byName: this.agentName(x.report.by) } } : {}), byAgent: x.byAgent.map((r) => ({ ...r, byName: this.agentName(r.by) })) })),
       asks: this.waitingAsks(now).map((x) => ({ ...x })),
       declinedAsks: this.declinedAsks(now).map((x) => ({ ...x })),
@@ -1690,6 +1720,10 @@ export interface AccountPage {
   restore?: unknown;
   /** the markets the owner watches, which agents read */
   watch: Array<{ venue: string; symbol: string; at: string }>;
+  /** the owner's price alerts standing (account/state.ts Alert), each with its venue's name — and the ones that fired lately, newest first,
+   * each with the price that fired it (FiredAlert). Words to the owner, which agents read too; none is an order */
+  alerts: Array<Alert & { venueName: string }>;
+  alertsFired: Array<FiredAlert & { venueName: string }>;
   /** the owner's open intents — words to an agent (`agent` its address) or to every agent (`*`), none of them a limit — each with how many
    * reports agents made on it since the owner last set its words, the latest of them, and each agent's own latest (`byAgent`) */
   intents: Array<{ id: string; agent: string; agentName: string; venue: string; symbol: string; side: string; usd: string; text: string; validUntil: string; at: string; reports: number; report?: AgentReport & { byName: string }; byAgent: Array<AgentReport & { byName: string }> }>;
