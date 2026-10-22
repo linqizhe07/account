@@ -784,9 +784,12 @@ shOn("alert", (f) => {
   shAlertToast(f);
   shSoon();
 });
-// the stream could not resume from where the page stopped (the account restarted, or more came than it keeps): everything read afresh
+// the stream could not resume from where the page stopped (the account restarted, or more came than it keeps): everything read afresh —
+// a share's financials too: the drawer keeps them ten minutes (markets.js), and a refusal read before a restart (the account started
+// without SEC_CONTACT, then started again with it) would otherwise stand in the drawer until that time ran out
 shOn("snapshot", () => {
   afterAction();
+  forget("/api/account/financials");
   shSoon();
 });
 // focus left a field while a read was drawn only in part: the whole page now

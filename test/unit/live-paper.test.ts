@@ -1468,6 +1468,21 @@ describe("a market is priced by its own source, and judged only while it takes o
     now = NOW;
   });
 
+  it("a ticker that also names more event contracts than a search keeps still lists the share first: the exact match is ranked before the few are picked, not after", async () => {
+    const h = home();
+    const s = sources();
+    const cboe = cboeLike([row("NVDA", "stock", "NVDA", "USD", 190)]);
+    // twelve questions on NVDA, Yes and No each: more than the twenty a search keeps, every one of them starting with the ticker
+    const rows: Row[] = [];
+    for (let i = 0; i < 12; i++) for (const side of ["Yes", "No"]) rows.push(row(`nvda-close-above-${200 + i * 5}-on-october-22-2026:${side}`, "event", side, "pUSD", 0.5, { outcome: side }));
+    const events = source("kalshi", "Kalshi", "events", rows);
+    const { t } = await open(h, "paper-1", { all: [events, cboe, s.coinbase] });
+    const got = ok(await t.markets("NVDA"));
+    expect(got[0]).toMatchObject({ symbol: "NVDA", kind: "stock" });
+    expect(got.length).toBe(20);
+    expect(got.filter((m) => m.kind === "event").length).toBe(19);
+  });
+
   it("a coin pair whose venue does not answer is not judged at another venue's pair of the same symbol", async () => {
     const h = home();
     const { t, s } = await open(h);

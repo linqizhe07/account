@@ -902,7 +902,7 @@ export class AccountEngine {
       case "setDestination":
         return a.address === "" ? `destination "${a.label}" removed` : `destination "${a.label}" added on ${a.chain}: usable in 24 hours`;
       case "setWatch":
-        return a.on === "true" ? `watching ${a.symbol.trim()} at ${a.venue.trim()}` : `no longer watching ${a.symbol.trim()} at ${a.venue.trim()}`;
+        return a.on === "true" ? `watching ${a.symbol.trim()} at ${this.name(a.venue.trim())}` : `no longer watching ${a.symbol.trim()} at ${this.name(a.venue.trim())}`;
       case "setAlert": {
         if (a.on !== "true") return `price alert ${a.id} removed`;
         const set = this.state.alerts.find((x) => x.venue === a.venue.trim() && x.symbol === a.symbol.trim() && x.condition === a.condition && x.price === Number(a.price));
