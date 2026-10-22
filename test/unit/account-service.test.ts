@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codeLine, LABEL, plan } from "../../src/portfolio/account-service.ts";
+import { codeLine, LABEL, plan, stillLeaving, tryAgain, untilGone } from "../../src/portfolio/account-service.ts";
 
 /** The LaunchAgent that keeps the account up for agents: what launchd is told to run, and what it is not given */
 describe("the account as a background service", () => {
@@ -39,5 +39,68 @@ describe("the account as a background service", () => {
     // a run that started owned said no code: an earlier run's is not this run's
     expect(codeLine(`${earlier}\nTRADING IS ON · real orders …\nyour account at …`)).toBeUndefined();
     expect(codeLine("")).toBeUndefined();
+  });
+});
+
+/** `install` over a running copy: launchd answers `bootout` before the copy has left, and a `bootstrap` inside that moment fails with
+ * "5: Input/output error" (seen 2026-10-22: SIGTERM at 10:43:59.910, the service removed at 10:44:00.030, the bootstrap between them) */
+describe("install over a running copy", () => {
+  /** a clock and a pause that moves it, so the waits are counted and not slept */
+  const fakes = () => {
+    let t = 1_000_000;
+    const pauses: number[] = [];
+    return { now: () => t, pause: (ms: number) => { pauses.push(ms); t += ms; }, pauses, at: () => t };
+  };
+
+  it("asks launchd until the service is gone, a pause between asks, and is done the moment it is", () => {
+    const f = fakes();
+    let asks = 0;
+    const gone = untilGone(() => ++asks <= 3, { now: f.now, pause: f.pause });
+    expect(gone).toBe(true);
+    expect(asks).toBe(4);
+    expect(f.pauses).toEqual([100, 100, 100]);
+  });
+
+  it("does not pause at all when nothing is loaded", () => {
+    const f = fakes();
+    expect(untilGone(() => false, { now: f.now, pause: f.pause })).toBe(true);
+    expect(f.pauses).toEqual([]);
+  });
+
+  it("gives up once the time allowed has passed, so the installer can say so instead of hanging", () => {
+    const f = fakes();
+    const gone = untilGone(() => true, { now: f.now, pause: f.pause, forMs: 30_000, everyMs: 100 });
+    expect(gone).toBe(false);
+    expect(f.pauses.length).toBe(300);
+    expect(f.at()).toBe(1_030_000);
+  });
+
+  it("knows launchd's answer while the label is still leaving, from the command's stderr or its message, and nothing else", () => {
+    expect(stillLeaving(Object.assign(new Error("Command failed: launchctl bootstrap gui/501 /x.plist"), { stderr: "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.\n" }))).toBe(true);
+    expect(stillLeaving(new Error("Command failed: launchctl bootstrap gui/501 /x.plist\nBootstrap failed: 5: Input/output error"))).toBe(true);
+    expect(stillLeaving(Object.assign(new Error("Command failed"), { stderr: "Bootstrap failed: 37: Operation already in progress\n" }))).toBe(false);
+    expect(stillLeaving(Object.assign(new Error("Command failed"), { stderr: "Bootstrap failed: 119: Service is disabled\n" }))).toBe(false);
+    expect(stillLeaving(undefined)).toBe(false);
+  });
+
+  it("bootstraps again after a pause while launchd says the label is still leaving, a few times in all, and throws anything else at once", () => {
+    const f = fakes();
+    // as execFileSync throws it: the command in the message with stderr appended, and stderr on its own
+    const eio = () => Object.assign(new Error("Command failed: launchctl bootstrap gui/501 /x.plist\nBootstrap failed: 5: Input/output error\n"), { stderr: "Bootstrap failed: 5: Input/output error\n" });
+    let calls = 0;
+    expect(tryAgain(() => (++calls < 3 ? (() => { throw eio(); })() : "ok"), { again: stillLeaving, pause: f.pause })).toBe("ok");
+    expect(calls).toBe(3);
+    expect(f.pauses).toEqual([500, 500]);
+
+    calls = 0;
+    expect(() => tryAgain(() => { calls++; throw eio(); }, { again: stillLeaving, pause: f.pause, tries: 5 })).toThrow(/Input\/output error/);
+    expect(calls).toBe(5);
+    expect(f.pauses).toEqual([500, 500, 500, 500, 500, 500]);
+
+    calls = 0;
+    const other = Object.assign(new Error("Command failed: launchctl bootstrap gui/501 /x.plist\nBootstrap failed: 119: Service is disabled\n"), { stderr: "Bootstrap failed: 119: Service is disabled\n" });
+    expect(() => tryAgain(() => { calls++; throw other; }, { again: stillLeaving, pause: f.pause })).toThrow(/Service is disabled/);
+    expect(calls).toBe(1);
+    expect(f.pauses.length).toBe(6);
   });
 });
