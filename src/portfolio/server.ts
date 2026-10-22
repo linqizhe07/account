@@ -16,6 +16,7 @@
  *   POST /api/order   {base, side, qty, agent}  route the order and fly it: one flight, one leg per slice, one card at most
  *   POST /api/mode    {mode}           open | guard
  *   POST /api/revoke  {account} · POST /api/restore {account}   an account's switch
+ *   POST /api/agents/stop                 every agent stopped at once: their session ends, Guard, waiting cards closed, the desk paused
  *   POST /api/reset
  *
  * With the account layer mounted (the default for this server; `--classic` runs the original accounts without it). It holds REAL accounts
@@ -149,7 +150,7 @@
  *
  * and the routes above change: /api/execute and /api/order take no unsigned caller (an agent signs `agentLiveOrder` / `agentLiveMove` at the
  * door; on a layered simulation `agentExecute` / `agentOrder`); /api/say, /api/approve, /api/restore, /api/reset and opening the dial are the
- * owner's and arrive as signed actions; tightening (Guard, an account off) stays free. On the real account /api/markets and /api/quote
+ * owner's and arrive as signed actions; tightening (Guard, an account off, every agent stopped) stays free. On the real account /api/markets and /api/quote
  * answer a refusal: the fixture's event contracts and the simulated router are not on it.
  *
  * Answers under /api/ are never stored by the browser (cache-control: no-store). The page's own files are read from disk once per process
@@ -511,7 +512,7 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     // the dial as the page needs it: the agents' session, the venues switched off for agents, the most leverage they may set
     // and how each venue connected live has answered lately (its health, for the Venues board)
     // and the command an agent's owner runs to add this account's seat (the server's own origin, the seat by its absolute path)
-    res.json({ ok: true, ...(view.real ? realPage(view) : view), mode: o.mode, live: svc.live, dial: { sessionExpiresAt: o.sessionExpiresAt, sessionEnded: Date.parse(o.sessionExpiresAt) <= Date.parse(view.now), revoked: o.revoked, maxLeverage: o.maxLeverage ?? 1 }, health: svc.venueHealth(), memoryAsks: svc.memoryAsks(), agentSetup: agentSetupOf(origin || `${req.protocol}://${req.get("host") ?? "127.0.0.1"}`) });
+    res.json({ ok: true, ...(view.real ? realPage(view) : view), mode: o.mode, live: svc.live, dial: { sessionExpiresAt: o.sessionExpiresAt, sessionEnded: Date.parse(o.sessionExpiresAt) <= Date.parse(view.now), ...(o.stoppedAt && Date.parse(o.sessionExpiresAt) <= Date.parse(view.now) ? { stoppedAt: o.stoppedAt } : {}), revoked: o.revoked, maxLeverage: o.maxLeverage ?? 1 }, health: svc.venueHealth(), memoryAsks: svc.memoryAsks(), agentSetup: agentSetupOf(origin || `${req.protocol}://${req.get("host") ?? "127.0.0.1"}`) });
   }));
 
   app.post("/api/account/pair", (req, res) => {
@@ -1077,6 +1078,12 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     if (isRefusal(r)) return void res.status(404).json({ ok: false, refusal: r });
     res.json(r);
   });
+
+  // EVERY AGENT STOPPED, at once: tightening, so free as Guard is — any browser on this account's page, or a script on this machine, may
+  // stop the agents; starting them again (a new session) is the owner's signature
+  app.post("/api/agents/stop", wrap(async (_req, res) => {
+    res.json(await svc.stopAgents());
+  }));
 
   app.post("/api/restore", (req, res) => {
     if (layer()) return ownerOnly(res, "switching an account back on");

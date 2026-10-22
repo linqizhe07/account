@@ -24,7 +24,7 @@ import { keccak256, stringToHex, type Hex } from "viem";
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { canonical } from "../../core/hash.ts";
 import { no } from "../refuse.ts";
-import { isExpired } from "../openness.ts";
+import { isExpired, stoppedRefusal } from "../openness.ts";
 import type { EarnPosition, EarnProduct, EarnState, LiveEarner } from "../live/earn.ts";
 import { holdBackMs } from "../live/public-markets.ts";
 import { plain } from "../live/trade.ts";
@@ -251,6 +251,8 @@ export class LiveEarns {
    * it lets agents subscribe (money in) or redeem (money out) there */
   private dial(venue: string, kind: EarnKind): Refusal | null {
     const o = this.e.host.policy();
+    const stopped = stoppedRefusal(o, this.e.host.now());
+    if (stopped) return no(stopped.code, { venue, message: stopped.message, detail: stopped.detail });
     if (isExpired(this.e.host.now(), o.sessionExpiresAt)) return no("E_WALLET_SESSION_EXPIRED", { venue, message: "the agent's session has expired: every write stops, reads continue", detail: { sessionExpiresAt: o.sessionExpiresAt } });
     if (o.revoked.includes(venue)) return no("E_WALLET_ACCOUNT_REVOKED", { venue, message: `${venue} is switched off for agents: reads only`, detail: { revoked: o.revoked } });
     const reach = o.reach[venue];

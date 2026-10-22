@@ -180,7 +180,8 @@ describe("the chrome around the mode", () => {
     const agents = p.out<Array<{ html: string; title: string; wide: boolean }>>("SHEETS")[1]!;
     expect([agents.title, agents.wide]).toEqual(["Agents", true]);
     expect(agents.html).not.toContain('id="devices"');
-    expect(agents.html).toContain('<h3 class="h2" id="agents-h">Agents</h3><div id="agents"></div>');
+    // the stop for every agent sits at the head of the list (ui-tower.test)
+    expect(agents.html).toContain('<h3 class="h2" id="agents-h">Agents</h3><div id="agents-stop"></div><div id="agents"></div>');
     expect(agents.html).toContain('<h3 class="h2" id="wallets-h">Agent wallets</h3><div id="wallets"></div>');
     expect(agents.html).toMatch(/<button type="button" class="btn btn-sm" id="agents-setup"><svg class="ico sm"[^>]*><use href="#i-copy"><\/use><\/svg>Copy agent setup command<\/button>/);
     expect(source("ui/agents-mount.js")).toContain('$("agents-setup").addEventListener("click", copySetup);');

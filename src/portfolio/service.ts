@@ -50,7 +50,7 @@ import { cents, detailOf, plainRefusal, routeLine, sayOf, waitWords } from "./wo
 import { HOW_TEXT, MAX_NOTES, MemoryStore, NOTE_TEXT, TOPIC_WORDS, TOPICS, type MemoryNote, type MemoryRules, type Topic } from "./account/memory.ts";
 import { etDate, isEarlyClose } from "./account/calendar.ts";
 import { pairingCode } from "./account/pairing.ts";
-import { AccountEngine, CARD_TTL_MS, slug, type AccountPage, type AccountSeed, type AgentAsk, type CardOffer, type DeclinedAsk, type Outcome, type WaitingConnection } from "./account/exchange.ts";
+import { AccountEngine, CARD_TTL_MS, RESTARTED_CARD, slug, STOPPED_CARD, type AccountPage, type AccountSeed, type AgentAsk, type CardOffer, type DeclinedAsk, type Outcome, type WaitingConnection } from "./account/exchange.ts";
 import { defaultKeyRef } from "./live/credentials.ts";
 import { assetKey, byAsset, change24h, withEarn, type AssetRow, type DayChange, type EarnHeld, type MoneySummary } from "./account/holdings.ts";
 import { NetWorthLog, NETWORTH_RANGES, networthPath, paperNetworthPath, bucketFor, type NetWorthHistory, type NetWorthRange, type NetWorthSnapshot } from "./account/networth.ts";
@@ -79,7 +79,7 @@ import { historyKeep, INTERVAL_RANGE, keepMsOf, PAGE_MOST, pageOf, pageWeight, R
 import { compareAcross, normalBase, type Comparison, type PlaceRule } from "./live/compare.ts";
 import { fold, paperFillLine, type StatementLine } from "./account/statement.ts";
 import { WalletProofs } from "./live/proof.ts";
-import { proofHolds, readHistory, rebuild, runOf, type DialSnapshot, type Rebuilt, type RunMark } from "./account/restore.ts";
+import { proofHolds, readHistory, rebuild, runOf, type DialSnapshot, type LeftCard, type Rebuilt, type RunMark } from "./account/restore.ts";
 import { RealPayer } from "./account/pay-real.ts";
 import { agentWalletKey, agentWalletKeyPath, hasKey } from "./account/keystore.ts";
 import { agentWalletSource, agentWalletVenue } from "./live/agent-wallet.ts";
@@ -212,6 +212,10 @@ export interface Approval {
   outcome?: unknown;
   /** the account layer: the spending approval this card holds its share of */
   approval?: string | undefined;
+  /** the account layer: why it closed without going through, in the account's words — rejected, expired, every agent stopped
+   * (stopAgents), the account restarted while it waited, approved but no longer passing. The agent that asked reads it with the card
+   * (portfolio_approval, portfolio_wait) */
+  closedWhy?: string | undefined;
 }
 
 export type Pending = { ok: true; pending: true; approval: Approval };
@@ -273,7 +277,7 @@ export interface Overview {
   now: string;
   live: boolean;
   mode: Mode;
-  session: { expiresAt: string; expired: boolean };
+  session: { expiresAt: string; expired: boolean; /** the owner stopped every agent then (stopAgents): the session ended at that moment */ stoppedAt?: string | undefined };
   portfolio: Aggregate;
   liquidity: Liquidity;
   /** liquidity as amount × time × cost: how soon each holding can be at the hub chain, and for how much */
@@ -441,7 +445,8 @@ export class PortfolioService {
         this.approvals.unshift(approval);
         this.counters.cards++;
         const f = this.flight(no);
-        this.ledger.append({ kind: "card", venue: c.account, intentId: approval.id, tool: c.action.type, outcome: "pending", reason: c.reason, notionalUsd: c.usd, flight: no, ...(f ? { agent: f.agent.id } : {}) });
+        // who asked, until when, and what about: a restart that finds this card still waiting closes it in those words (closeLeftCards)
+        this.ledger.append({ kind: "card", venue: c.account, intentId: approval.id, tool: c.action.type, outcome: "pending", reason: c.reason, notionalUsd: c.usd, flight: no, signer: c.signer, detail: { card: { expiresAt: c.expiresAt, why: c.why, intent: c.intent } }, ...(f ? { agent: f.agent.id } : {}) });
         if (f) f.legs.push({ seq: f.legs.length + 1, mark: "wait", text: `${describeIntent(c.intent)}: ${waitWords(c.why)}`, account: c.account, intent: c.intent, usd: c.usd, approvalId: approval.id });
         return approval;
       },
@@ -465,6 +470,7 @@ export class PortfolioService {
         if (!ap) return;
         ap.status = status;
         ap.decidedAt = this.now();
+        if (note) ap.closedWhy = note;
         if (outcome !== undefined) ap.outcome = outcome;
         const f = this.flight(ap.flight);
         this.ledger.append({ kind: "card", venue: ap.account, intentId: ap.id, outcome: status, reason: note || ap.reason, notionalUsd: ap.usd, flight: ap.flight, ...(f ? { agent: f.agent.id } : {}) });
@@ -504,8 +510,8 @@ export class PortfolioService {
           return { ok: true, summary: `agents may set leverage up to ${lev}x` };
         }
         if (change === "session") {
-          // a new session for the agents: thirty days from now. Widening, so it is the owner's to sign
-          this.openness = { ...this.openness, sessionExpiresAt: new Date(Date.parse(this.now()) + 30 * 86_400_000).toISOString() };
+          // a new session for the agents: thirty days from now. Widening, so it is the owner's to sign — and the end of a stop (stopAgents)
+          this.openness = { ...this.openness, sessionExpiresAt: new Date(Date.parse(this.now()) + 30 * 86_400_000).toISOString(), stoppedAt: undefined };
           this.ledger.append({ kind: "note", venue: "*", reason: `a new session for the agents, until ${this.openness.sessionExpiresAt}`, detail: this.dialNow() });
           // the day as the page writes dates (New York, no year); the exact moment is the dial's, on the account page
           return { ok: true, summary: `agents may act again, until ${nyDay(this.openness.sessionExpiresAt)}` };
@@ -2481,7 +2487,12 @@ export class PortfolioService {
       }
       return void this.stream.emit("statement", { venue: row.venue, line: row.detail ?? null, at: row.ts });
     }
-    if (row.kind === "card") return void this.stream.emit("card", { id: row.intentId, venue: row.venue, outcome: row.outcome, at: row.ts });
+    // a card raised says what it asks, how much, until when and which agent asks: the page can tell the owner with the tab in the background
+    if (row.kind === "card") {
+      const ap = row.outcome === "pending" ? this.approvals.find((x) => x.id === row.intentId) : undefined;
+      const who = ap?.signer ? this.account?.state.agents.find((k) => k.address === ap.signer)?.name : undefined;
+      return void this.stream.emit("card", { id: row.intentId, venue: row.venue, outcome: row.outcome, at: row.ts, ...(ap ? { reason: ap.reason, usd: ap.usd, ...(ap.expiresAt ? { expiresAt: ap.expiresAt } : {}), ...(who ? { agentName: who } : {}) } : {}) });
+    }
     if (row.kind !== "order") return;
     // an order's row names it first, by the account's id (live-orders.ts: "ord-0007 · …")
     const id = /^(ord-\d+)\b/.exec(row.reason ?? "")?.[1];
@@ -2999,15 +3010,36 @@ export class PortfolioService {
     const home = this.opts.home;
     const r = await rebuild(history.rows, engine.state, { ...engine.applyOptions(), nowMs: Date.parse(this.now()), codeRequired: (this.opts.liveWrites?.pairingCode ?? this.opts.pairingCode) !== undefined, walletAddress: (name) => (hasKey(agentWalletKeyPath(home, name)) ? (() => { const k = agentWalletKey(home, name); return isRefusal(k) ? k : (k.address as Hex); })() : no("E_ACCOUNT_CREDENTIAL", { message: `the agent wallet "${name}" is not brought back: its key file is gone from this account's home, and an agent wallet is the key it was made with`, detail: { wallet: name } })) });
     engine.adopt(r.state, r.ids, r.fired);
+    engine.adoptAsks(r.asks);
     this.seq = Math.max(this.seq, r.ids.card);
     if (r.dial) this.adoptDial(r.dial);
-    const report: RestoreReport = { runs: history.files.length, from: history.files[0] ?? "", owner: r.owner, agents: r.state.agents.filter((a) => a.revokedAt === undefined && a.validUntil > Date.parse(this.now())).length, limits: r.state.spends.filter((x) => x.revokedAt === undefined && x.validUntil > Date.parse(this.now())).length, mode: this.openness.mode === "open" ? "Beast" : "Guard", venues: r.connections.map((c) => ({ venue: c.venue, ok: false, why: "connecting again" })), orders: r.orders.length, payments: r.payments.length + r.authorisations.length + r.earns.length, skipped: [...r.skipped, ...(history.broken ? [`${history.broken.file}: its hash chain breaks${history.broken.at ? ` at row ${history.broken.at}` : ""}, so nothing after the break (and nothing older) was brought back`] : [])], state: "restoring" };
+    const closed = this.closeLeftCards(r.cards);
+    const report: RestoreReport = { runs: history.files.length, from: history.files[0] ?? "", owner: r.owner, agents: r.state.agents.filter((a) => a.revokedAt === undefined && a.validUntil > Date.parse(this.now())).length, limits: r.state.spends.filter((x) => x.revokedAt === undefined && x.validUntil > Date.parse(this.now())).length, mode: this.openness.mode === "open" ? "Beast" : "Guard", venues: r.connections.map((c) => ({ venue: c.venue, ok: false, why: "connecting again" })), orders: r.orders.length, payments: r.payments.length + r.authorisations.length + r.earns.length, asks: r.asks.waiting.length, knocks: r.state.requests.length, cards: closed, skipped: [...r.skipped, ...(history.broken ? [`${history.broken.file}: its hash chain breaks${history.broken.at ? ` at row ${history.broken.at}` : ""}, so nothing after the break (and nothing older) was brought back`] : [])], state: "restoring" };
     this.restored = report;
     this.reconnecting = true;
     this.restoring = engine
       .serially(() => this.reconnect(r, report))
       .catch(() => undefined)
       .finally(() => void (this.reconnecting = false));
+  }
+
+  /** CARDS AN EARLIER RUN LEFT WAITING. A card is its run's alone — what it showed the owner (a quote, a fee) is not kept, and releasing it
+   * would need it (account/live-orders.ts release) — so each is closed now, on the ledger, and kept on the list as closed: the agent that
+   * asked reads why with its card (portfolio_approval, portfolio_wait), and an owner answering it late is told so. One whose time had run
+   * out by then is closed as the expired card it was. A card raised before the account kept who asked (no signer on its row) is closed on
+   * the ledger only. How many it closed */
+  private closeLeftCards(left: LeftCard[]): number {
+    const now = this.now();
+    const expired: string[] = [];
+    for (const c of left) {
+      const lapsed = c.expiresAt !== undefined && Date.parse(c.expiresAt) <= Date.parse(now);
+      const why = lapsed ? "The card expired before it was answered; nothing moved" : RESTARTED_CARD;
+      if (lapsed) expired.push(c.id);
+      if (c.signer && c.intent && c.why) this.approvals.unshift({ id: c.id, at: c.at, account: c.venue, intent: c.intent as unknown as Intent, usd: c.usd, reason: c.reason, status: "rejected", why: c.why as AskReason, flight: "", decidedAt: now, closedWhy: why, signer: c.signer, ...(c.expiresAt ? { expiresAt: c.expiresAt } : {}) });
+      this.ledger.append({ kind: "card", venue: c.venue, intentId: c.id, outcome: "rejected", reason: why, notionalUsd: c.usd, ...(c.agent ? { agent: c.agent } : {}) });
+    }
+    this.account?.expiredBefore(expired);
+    return left.length;
   }
 
   /** an agent wallet on the account: read from the chains, proven the user's (the account holds its key), a place money can be sent to */
@@ -3054,7 +3086,7 @@ export class PortfolioService {
     report.state = "done";
     const back = report.venues.filter((v) => v.ok).length;
     const waiting = report.venues.filter((v) => v.waiting).length;
-    this.ledger.append({ kind: "note", venue: "*", reason: `restored after a restart: ${report.owner ? "your device is still the owner" : "no owner yet"} · ${report.agents} agent${report.agents === 1 ? "" : "s"} · ${report.limits} limit${report.limits === 1 ? "" : "s"} · ${back} of ${report.venues.length} venue${report.venues.length === 1 ? "" : "s"} connected again${waiting ? ` (${waiting} asked again when ${waiting === 1 ? "it answers" : "they answer"})` : ""} · ${report.orders} order${report.orders === 1 ? "" : "s"} and ${report.payments} movement${report.payments === 1 ? "" : "s"} followed again · ${report.mode}${report.skipped.length ? ` · ${report.skipped.length} not brought back` : ""}`, detail: { restore: report } });
+    this.ledger.append({ kind: "note", venue: "*", reason: `restored after a restart: ${report.owner ? "your device is still the owner" : "no owner yet"} · ${report.agents} agent${report.agents === 1 ? "" : "s"} · ${report.limits} limit${report.limits === 1 ? "" : "s"} · ${back} of ${report.venues.length} venue${report.venues.length === 1 ? "" : "s"} connected again${waiting ? ` (${waiting} asked again when ${waiting === 1 ? "it answers" : "they answer"})` : ""} · ${report.orders} order${report.orders === 1 ? "" : "s"} and ${report.payments} movement${report.payments === 1 ? "" : "s"} followed again${report.asks ? ` · ${report.asks} ask${report.asks === 1 ? "" : "s"} still waiting` : ""}${report.knocks ? ` · ${report.knocks} agent${report.knocks === 1 ? "" : "s"} asking to be let in` : ""}${report.cards ? ` · ${report.cards} card${report.cards === 1 ? "" : "s"} left waiting, closed` : ""} · ${report.mode}${report.skipped.length ? ` · ${report.skipped.length} not brought back` : ""}`, detail: { restore: report } });
   }
 
   /** one saved connection, connected again from the credential reference the owner signed; a throw is no answer (its words, with this
@@ -3246,7 +3278,9 @@ export class PortfolioService {
   private adoptDial(d: DialSnapshot): void {
     // never later than this start would give a new account: a row cannot lengthen the session past what a restart grants anyway
     const session = d.sessionExpiresAt && (!this.openness.sessionExpiresAt || Date.parse(d.sessionExpiresAt) < Date.parse(this.openness.sessionExpiresAt)) ? d.sessionExpiresAt : this.openness.sessionExpiresAt;
-    this.openness = { ...this.openness, mode: d.mode, revoked: d.revoked, reach: d.reach as Openness["reach"], ...(session ? { sessionExpiresAt: session } : {}), ...(d.maxLeverage !== undefined ? { maxLeverage: d.maxLeverage } : {}) };
+    // the owner's stop stands with the session it ended: a session signed open since then has no stop on it
+    const stopped = d.stoppedAt && session && Date.parse(session) <= Date.parse(this.now()) ? d.stoppedAt : undefined;
+    this.openness = { ...this.openness, mode: d.mode, revoked: d.revoked, reach: d.reach as Openness["reach"], ...(session ? { sessionExpiresAt: session } : {}), ...(d.maxLeverage !== undefined ? { maxLeverage: d.maxLeverage } : {}), ...(stopped ? { stoppedAt: stopped } : {}) };
     // the cap the owner last signed stands again, on a server that moves money; a read-only server has none
     if (d.capUsd !== undefined && d.capUsd > 0 && this.opts.liveWrites !== undefined) this.capUsd = d.capUsd;
   }
@@ -3254,7 +3288,7 @@ export class PortfolioService {
   /** the dial now, as the note rows record it after each change: a restart reads the last one */
   private dialNow(): { dial: DialSnapshot } {
     const ended = !!this.openness.sessionExpiresAt && Date.parse(this.openness.sessionExpiresAt) <= Date.parse(this.now());
-    return { dial: { mode: this.openness.mode === "open" ? "open" : "guard", revoked: [...this.openness.revoked], reach: { ...this.openness.reach }, ...(this.openness.sessionExpiresAt ? { sessionExpiresAt: this.openness.sessionExpiresAt } : {}), ...(ended ? { ended: true } : {}), ...(this.openness.maxLeverage !== undefined ? { maxLeverage: this.openness.maxLeverage } : {}), ...(this.opts.liveWrites !== undefined ? { capUsd: this.capUsd } : {}) } };
+    return { dial: { mode: this.openness.mode === "open" ? "open" : "guard", revoked: [...this.openness.revoked], reach: { ...this.openness.reach }, ...(this.openness.sessionExpiresAt ? { sessionExpiresAt: this.openness.sessionExpiresAt } : {}), ...(ended ? { ended: true } : {}), ...(ended && this.openness.stoppedAt ? { stoppedAt: this.openness.stoppedAt } : {}), ...(this.openness.maxLeverage !== undefined ? { maxLeverage: this.openness.maxLeverage } : {}), ...(this.opts.liveWrites !== undefined ? { capUsd: this.capUsd } : {}) } };
   }
 
   private openLedger(): Ledger {
@@ -3369,7 +3403,7 @@ export class PortfolioService {
       now,
       live: page ? views.some((v) => v.live === true) : this.live,
       mode: this.openness.mode,
-      session: { expiresAt: this.openness.sessionExpiresAt, expired: isExpired(now, this.openness.sessionExpiresAt) },
+      session: { expiresAt: this.openness.sessionExpiresAt, expired: isExpired(now, this.openness.sessionExpiresAt), ...(this.openness.stoppedAt ? { stoppedAt: this.openness.stoppedAt } : {}) },
       portfolio,
       // a real account's dollars move as each venue's own writer says they can (account/holdings.ts movesOut), and no route to a hub is
       // quoted from the simulation's rail table: the ladder is empty there. The simulated statement keeps both as they were
@@ -3766,6 +3800,28 @@ export class PortfolioService {
     this.openness = { ...this.openness, sessionExpiresAt: this.now() };
     this.ledger.append({ kind: "note", venue: "*", reason: "session ended: every write stops, reads continue", detail: this.dialNow() });
     return { ok: true, sessionExpiresAt: this.openness.sessionExpiresAt };
+  }
+
+  /** STOP EVERY AGENT, at once — the page's "Stop all agents", unsigned as every tightening is. The agents' session ends now: each agent
+   * write from here on is refused in its own code (E_WALLET_AGENTS_STOPPED), reads go on. The dial goes back to Guard; every card still
+   * waiting is closed and gives back what it held of its limit; a desk that runs is paused. Agent keys, their limits, the owner's intents
+   * and the orders agents left at venues stay as they are: starting agents again is the owner's signature (a new session), and an order an
+   * agent left on a book is the owner's to cancel (`openOrders` says how many). One note on the ledger says it, with the dial, so a
+   * restart keeps the agents stopped */
+  async stopAgents(): Promise<{ ok: true; stoppedAt: string; cards: number; desk: boolean; guard: boolean; openOrders: number }> {
+    const at = this.now();
+    const guard = this.openness.mode !== "guard";
+    this.openness = { ...this.openness, mode: "guard", sessionExpiresAt: at, stoppedAt: at };
+    // in the door's own line: a card the owner is answering at this moment is released, or closed here, never both
+    const cards = this.account ? await this.account.serially(async () => this.account!.closeWaiting(STOPPED_CARD)) : this.approvals.filter((a) => a.status === "pending").length;
+    if (!this.account) for (const a of this.approvals) if (a.status === "pending") Object.assign(a, { status: "rejected", decidedAt: at, closedWhy: STOPPED_CARD });
+    const desk = this.desk?.stopped() ?? false;
+    const openOrders = (this.account?.orders ?? []).filter((o) => o.authority === "agent" && !DONE.has(o.status)).length;
+    const said = [guard ? "Guard" : "", cards ? `${cards} waiting card${cards === 1 ? "" : "s"} closed` : "", desk ? "the desk paused" : "", openOrders ? `${openOrders} open order${openOrders === 1 ? "" : "s"} an agent placed left at ${openOrders === 1 ? "its venue" : "their venues"}` : ""].filter(Boolean);
+    this.ledger.append({ kind: "note", venue: "*", reason: `every agent stopped by the owner: their writes stop, reads go on${said.length ? ` · ${said.join(" · ")}` : ""}`, detail: this.dialNow() });
+    // the pages open elsewhere read the account again (the cards closed said themselves already, one by one)
+    this.stream.emit("card", { stopped: at, at });
+    return { ok: true, stoppedAt: at, cards, desk, guard, openOrders };
   }
 
   reset(): void {
@@ -4289,6 +4345,11 @@ export interface RestoreReport {
   venues: Array<{ venue: string; ok: boolean; why?: string; waiting?: boolean; said?: string }>;
   orders: number;
   payments: number;
+  /** what agents asked that waits for the owner still, and the agents that knocked to be let in, brought back */
+  asks: number;
+  knocks: number;
+  /** cards the earlier run left waiting, closed as the account restarted (a card is its run's alone) */
+  cards: number;
   skipped: string[];
   state: "restoring" | "done";
 }

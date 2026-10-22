@@ -752,6 +752,92 @@ function shAlertToast(f) {
     // a browser that shows none: the toast said it
   }
 }
+/* AN AGENT'S CARD, WITH THE TAB IN THE BACKGROUND (the account's `card` event: a card raised says what it asks, how much, until when and
+   which agent asks — service.ts toldRow). Where the owner asked this browser to (Settings › Cards in the background, or "Notify me" on
+   Waiting for you; kept in this browser under SH_CARDS_KEY, the browser's own permission asked as it is turned on), the browser's
+   notification says it, and stays until it is clicked or the card is answered: clicking it opens the card under Waiting for you. With the
+   page in front and focused the page shows the card itself, and nothing more is said. A card answered, expired or closed takes its
+   notification away. Nothing is answered from the notification: the card is signed on the page */
+const SH_CARDS_KEY = "account.cards.notify";
+const SH_CARD_NOTES = new Map();
+function shCardsWanted() {
+  try {
+    return localStorage.getItem(SH_CARDS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function shCardsSet(on) {
+  try {
+    if (on) localStorage.setItem(SH_CARDS_KEY, "1");
+    else localStorage.removeItem(SH_CARDS_KEY);
+  } catch {
+    // a private window keeps nothing: the choice holds for this visit alone
+  }
+}
+/* whether this browser tells the owner of cards now: asked for here, and allowed by the browser */
+const shCardsOn = () => typeof Notification === "function" && Notification.permission === "granted" && shCardsWanted();
+/* "Notify me" is worth offering: a browser that shows notifications, not blocked for this page, not on yet */
+const shCardsOffer = () => typeof Notification === "function" && Notification.permission !== "denied" && !shCardsOn();
+/* turned on: the browser's permission asked once; a browser that gives none leaves it off and says so */
+async function shCardsTurnOn() {
+  if (typeof Notification !== "function") return void toast("This browser shows no notifications: a card is still said on this page.", "info");
+  const p = Notification.permission === "granted" ? "granted" : await Notification.requestPermission().catch(() => "denied");
+  if (p !== "granted") {
+    shCardsSet(false);
+    toast("This browser gave no permission for notifications: a card is still said on this page.", "info");
+  } else {
+    shCardsSet(true);
+    toast("This browser tells you when an agent's card waits for you, with the tab in the background.", "ok");
+  }
+  render();
+}
+function shCardsTurnOff() {
+  shCardsSet(false);
+  for (const n of SH_CARD_NOTES.values()) {
+    try {
+      n.close();
+    } catch {
+      // gone already
+    }
+  }
+  SH_CARD_NOTES.clear();
+  render();
+}
+function shCardNote(e) {
+  if (!e || !e.id) return;
+  if (e.outcome !== "pending") {
+    const was = SH_CARD_NOTES.get(e.id);
+    if (was) {
+      try {
+        was.close();
+      } catch {
+        // the owner closed it already
+      }
+      SH_CARD_NOTES.delete(e.id);
+    }
+    return;
+  }
+  if (!shCardsOn() || (document.visibilityState === "visible" && document.hasFocus())) return;
+  const words = [e.reason, Number(e.usd) > 0 ? usd(Number(e.usd)) : "", e.expiresAt ? `answer by ${nyTime(e.expiresAt)}` : ""].filter(Boolean).join(" · ");
+  try {
+    const n = new Notification(`${e.agentName || "An agent"} is waiting for you`, { body: words, tag: `card-${e.id}`, requireInteraction: true });
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // a window the browser will not raise from here
+      }
+      n.close();
+      go("portfolio", { card: e.id });
+    };
+    SH_CARD_NOTES.set(e.id, n);
+    // a few dozen at most: the oldest goes first (the browser keeps its own anyway)
+    if (SH_CARD_NOTES.size > 30) SH_CARD_NOTES.delete(SH_CARD_NOTES.keys().next().value);
+  } catch {
+    // a browser that shows none: the page says it
+  }
+}
 /* a listener on the account's stream (ui/stream.js, loaded right after the contract; asked for, as any other script's names are) */
 const shOn = (type, fn) => (typeof stOn === "function" ? stOn(type, fn) : () => {});
 // an order whose status or fill did not move (a trailing stop's stop moved, a queued order's note) is drawn in place, and not read for
@@ -778,7 +864,11 @@ shOn("statement", () => {
   forget("/api/account/statement");
   shSoon();
 });
-shOn("card", () => shSoon());
+// a card raised or answered: said to the owner with the tab in the background (where asked for), then read with the account
+shOn("card", (e) => {
+  shCardNote(e);
+  shSoon();
+});
 // a price alert fired: said now (and as this browser's own notification, where the owner asked for that); its record comes with the read
 shOn("alert", (f) => {
   shAlertToast(f);

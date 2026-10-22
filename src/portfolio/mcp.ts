@@ -733,7 +733,7 @@ server.registerTool(
 
 server.registerTool(
   "portfolio_approval",
-  { description: "Status of a card the wallet raised: pending | approved | rejected, with the venue result once decided. For a card about a transfer or a payment, `outcome` holds what approving it released: the payment and the data it bought, or — at a shop that asks for AP2 mandates — a note that mandates are needed (call portfolio_pay again).", inputSchema: { id: z.string() }, annotations: { readOnlyHint: true } },
+  { description: "Status of a card the wallet raised: pending | approved | rejected, with the venue result once decided. For a card about a transfer or a payment, `outcome` holds what approving it released: the payment and the data it bought, or — at a shop that asks for AP2 mandates — a note that mandates are needed (call portfolio_pay again). A card that closed without going through says why in `closedWhy`: the owner rejected it, it expired, the owner stopped every agent (writes then answer E_WALLET_AGENTS_STOPPED until the owner signs a new session), or the account restarted while it waited (ask again if it is still wanted).", inputSchema: { id: z.string() }, annotations: { readOnlyHint: true } },
   async ({ id }) => {
     const r = await call("GET", "/api/overview");
     if (r.status >= 400) return text(r.body, true);

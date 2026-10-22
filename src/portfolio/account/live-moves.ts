@@ -33,7 +33,7 @@ import type { Payment, PaymentKind } from "./payments.ts";
 import { CARD_TTL_MS } from "./mode-rules.ts";
 import { micro, type AgentAction, type Envelope, type OwnerAction } from "./sign.ts";
 import { covers, spendFor, type AgentKey, type SpendApproval } from "./state.ts";
-import { isExpired, type Openness } from "../openness.ts";
+import { isExpired, stoppedRefusal, type Openness } from "../openness.ts";
 
 export type LiveMoveAction = Extract<OwnerAction, { type: "liveMove" }>;
 export type AgentLiveMoveAction = Extract<AgentAction, { type: "agentLiveMove" }>;
@@ -325,6 +325,8 @@ export class LiveMoves {
     if (!(await this.e.stillSigned(spend))) return no("E_ACCOUNT_BAD_SIGNATURE", { message: "the spending approval's own signature no longer checks out against the account's owners", detail: { approval: spend.id } });
     // the dial: the agents' session, and each end switched on for agents
     const o = this.e.host.policy();
+    const stopped = stoppedRefusal(o, this.e.host.now());
+    if (stopped) return no(stopped.code, { message: stopped.message, detail: stopped.detail });
     if (isExpired(this.e.host.now(), o.sessionExpiresAt)) return no("E_WALLET_SESSION_EXPIRED", { message: "the agent's session has expired: every write stops, reads continue", detail: { sessionExpiresAt: o.sessionExpiresAt } });
     const off = [a.from, a.to].find((x) => o.revoked.includes(x));
     if (off) return no("E_WALLET_ACCOUNT_REVOKED", { venue: off, message: `${off} is switched off for agents: reads only`, detail: { revoked: o.revoked } });
