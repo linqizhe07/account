@@ -201,6 +201,16 @@
 .mk-iss-box p { margin: 0; line-height: 1.5; color: var(--dim); }
 /* a venue that keeps no price history for it, said quietly in its own words */
 .mk-quiet { font-size: 12px; color: var(--dim); margin: 6px 0 0; line-height: 1.5; }
+/* FINANCIALS (markets.js mkFinHtml), a US share's drawer: the fiscal years and the quarters as filed, each a small table — the period in
+   bold with its end and its filing under it, the money short and tabular — the shares outstanding in a line, and under it all whose figures
+   they are, in the account's quiet source line */
+.mk-fin-h { margin: 0; }
+.mk-fin-h + .t-wrap { margin-top: -8px; }
+.mk-fin-t td { white-space: nowrap; vertical-align: top; }
+.mk-fin-t td:first-child { white-space: normal; min-width: 150px; }
+.mk-fin-t td .why { margin-top: 2px; }
+.mk-fin-sh { margin: 0; font-size: 13px; line-height: 1.5; }
+.mk-fin-link { font-size: 13px; }
 
 /* a market's hover card (markets.js mkPeek): one for the pane, on the page's body, beside the market a mouse rests on or a key reached. Its
    whole name, what kind of thing it is with its countdown, who issues it, where it is listed (public prices quieter), where its price is

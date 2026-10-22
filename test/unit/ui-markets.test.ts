@@ -927,7 +927,7 @@ describe("the one drawer", () => {
     expect(html).toContain("<dt>Volume 24h</dt><dd>$1.9B</dd>");
     expect(html).not.toContain('data-act="rekey"');
     // the parts, each in its own element, in the brief's order
-    expect([...html.matchAll(/data-sec="([a-z]+)"/g)].map((m) => m[1])).toEqual(["head", "chart", "alerts", "across", "ipo", "held", "agents", "lines"]);
+    expect([...html.matchAll(/data-sec="([a-z]+)"/g)].map((m) => m[1])).toEqual(["head", "chart", "alerts", "across", "financials", "ipo", "held", "agents", "lines"]);
     expect(html.indexOf('aria-label="Across venues"')).toBeLessThan(html.indexOf('aria-label="You hold"'));
     expect(html.indexOf('aria-label="You hold"')).toBeLessThan(html.indexOf('aria-label="Agents on it"'));
     expect(html.indexOf('aria-label="Agents on it"')).toBeLessThan(html.indexOf('aria-label="On the statement"'));
@@ -1683,5 +1683,96 @@ describe("price alerts and the pulse", () => {
     await settle();
     p.run('renderMarkets({ el: EL, owner: true, lens: lensNow(), params: { tab: "crypto" } })');
     expect(p.run<string>("EL.innerHTML")).not.toContain("mk-pulse");
+  });
+});
+
+/** A SHARE'S FINANCIALS from SEC EDGAR (markets.js mkFinHtml, the drawer's Financials part; the account's read is live/edgar.ts): drawn for
+ * a US share's row and no other, a skeleton while the SEC answers, its refusal in its own words, and the filed figures as two small tables
+ * with the shares, whose figures they are and the filings one click away */
+describe("the drawer's Financials from SEC EDGAR", () => {
+  const share = (over: Record<string, unknown> = {}) => ({
+    key: "stock:AAPL",
+    kind: "stock",
+    name: "Apple Inc.",
+    base: "AAPL",
+    price: 228.2,
+    tabs: ["all", "stocks"],
+    at: [{ venue: "cboe", venueName: "US stocks", symbol: "AAPL", connected: false, canTrade: false, public: true, price: 228.2, connectTo: "alpaca", connector: "live:alpaca" }],
+    ...over,
+  });
+  const FIN = {
+    ok: true,
+    symbol: "AAPL",
+    cik: "0000320193",
+    company: "Apple Inc.",
+    annual: [{ start: "2024-09-29", end: "2025-09-27", days: 363, form: "10-K", filed: "2025-10-31", fy: 2025, fp: "FY", revenue: 416_161_000_000, netIncome: 112_010_000_000, eps: 7.46 }],
+    quarterly: [
+      { start: "2026-03-29", end: "2026-06-27", days: 90, form: "10-Q", filed: "2026-07-31", fy: 2026, fp: "Q3", revenue: 109_417_000_000, netIncome: -29_789_000_000, eps: 2.02 },
+      { start: "2025-12-28", end: "2026-03-28", days: 90, form: "10-Q", filed: "2026-05-01", fy: 2026, fp: "Q2", netIncome: 29_578_000_000 },
+    ],
+    shares: { value: 14_594_180_000, asOf: "2026-07-17", form: "10-Q", filed: "2026-07-31" },
+    concepts: { revenue: "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", netIncome: "us-gaap:NetIncomeLoss", eps: "us-gaap:EarningsPerShareDiluted", shares: "dei:EntityCommonStockSharesOutstanding" },
+    currency: "USD",
+    source: "SEC EDGAR · XBRL company facts",
+    filingsUrl: "https://www.sec.gov/edgar/browse/?CIK=320193&owner=exclude",
+    latest: { form: "10-Q", filed: "2026-07-31" },
+    readAt: "2026-10-22T14:00:00.000Z",
+  };
+
+  it("is a part of a US share's drawer and no other's, read once as the drawer opens: a skeleton, then the SEC's words or its figures", async () => {
+    const p = page((path) => (path.startsWith("/api/account/financials") ? FIN : {}));
+    p.set("A", account());
+    p.set("ITEMS", { btc, anth, share: share() });
+    expect(p.run('[mkTicker(ITEMS.share), mkTicker({ kind: "stock", base: "brk.b" }), mkTicker(ITEMS.btc), mkTicker(ITEMS.anth), mkTicker({ kind: "stock", base: "0700.HK" })]')).toEqual(["AAPL", "BRK.B", "", "", ""]);
+    expect(p.run('[mkDate("2025-09-27"), mkDate("2026-01-05"), mkDate(""), mkDate("soon")]')).toEqual(["27 Sep 2025", "5 Jan 2026", "—", "soon"]);
+    // the drawer opens on the share: the part is there, a skeleton, and the account is asked once
+    p.run("MKT.open = { item: ITEMS.share, range: '1M', interval: '1h', ipo: [], fin: undefined }");
+    let parts = p.run<Record<string, string>>("mkDrawerParts(MKT.open)");
+    expect(parts.financials).toContain('<section class="sec" aria-label="Financials"><div class="sec-head"><h2 class="h2">Financials</h2></div>');
+    expect(parts.financials).toContain("skel-rows");
+    p.run("mkDrawerLoad(MKT.open)");
+    expect(p.asked.filter((a) => a.path.startsWith("/api/account/financials")).map((a) => a.path)).toEqual(["/api/account/financials?symbol=AAPL"]);
+    p.run("mkDrawerLoad(MKT.open)");
+    expect(p.asked.filter((a) => a.path.startsWith("/api/account/financials")).length).toBe(1);
+    await settle();
+    await settle();
+    // a coin, a pre-IPO contract: no part at all, nothing asked
+    p.run("MKT.open = { item: ITEMS.btc, range: '1M', interval: '1h', ipo: [], fin: undefined }; mkDrawerLoad(MKT.open)");
+    expect(p.run<Record<string, string>>("mkDrawerParts(MKT.open)").financials).toBe("");
+    p.run("MKT.open = { item: ITEMS.anth, range: '1M', interval: '1h', ipo: [], fin: undefined }; mkDrawerLoad(MKT.open)");
+    expect(p.run<Record<string, string>>("mkDrawerParts(MKT.open)").financials).toBe("");
+    expect(p.asked.filter((a) => a.path.startsWith("/api/account/financials")).length).toBe(1);
+    // the SEC's refusal, in its words — no contact set: what to set — and no link to filings it did not give
+    p.run("MKT.open = { item: ITEMS.share, range: '1M', interval: '1h', ipo: [], fin: { ok: false, refusal: { code: 'E_ACCOUNT_CREDENTIAL', message: 'The SEC asks every reader of EDGAR to say who they are and how to reach them: start the account with SEC_CONTACT set to your email address, and this reads the company\\'s own filings' } } }");
+    parts = p.run<Record<string, string>>("mkDrawerParts(MKT.open)");
+    expect(parts.financials).toContain('<p class="mk-quiet">The SEC asks every reader of EDGAR to say who they are and how to reach them: start the account with SEC_CONTACT set to your email address, and this reads the company&#39;s own filings.</p>');
+    expect(parts.financials).not.toContain("Filings at the SEC");
+  });
+
+  it("the figures: the fiscal years and the quarters as filed, each row its period and its filing, money short and signed, a dash where the filing tagged nothing, the shares, whose figures they are", () => {
+    const p = page(() => ({}));
+    p.set("A", account());
+    p.set("ITEMS", { share: share() });
+    p.run(`MKT.open = { item: ITEMS.share, range: '1M', interval: '1h', ipo: [], fin: ${JSON.stringify(FIN)} }`);
+    const html = p.run<Record<string, string>>("mkDrawerParts(MKT.open)").financials;
+    expect(html).toContain('<a class="link mk-fin-link" href="https://www.sec.gov/edgar/browse/?CIK=320193&amp;owner=exclude" target="_blank" rel="noopener noreferrer">Filings at the SEC ');
+    expect(html).toContain('<h3 class="label mk-fin-h">Fiscal years</h3>');
+    expect(html).toContain('<td><b>FY2025</b><span class="why">ended 27 Sep 2025 · 10-K filed 31 Oct 2025</span></td><td class="r">$416B</td><td class="r">$112B</td><td class="r">7.46</td>');
+    expect(html).toContain('<h3 class="label mk-fin-h">Quarters</h3>');
+    expect(html).toContain('<td><b>Q3 FY2026</b><span class="why">ended 27 Jun 2026 · 10-Q filed 31 Jul 2026</span></td><td class="r">$109B</td><td class="r">−$29.8B</td><td class="r">2.02</td>');
+    // a quarter the filing tagged no revenue or earnings for: a dash, never a figure worked out
+    expect(html).toContain('<td><b>Q2 FY2026</b><span class="why">ended 28 Mar 2026 · 10-Q filed 1 May 2026</span></td><td class="r"><span class="flat">—</span></td><td class="r">$29.6B</td><td class="r"><span class="flat">—</span></td>');
+    expect(html).toContain('<p class="mk-fin-sh"><b>14.6B</b> shares outstanding as of 17 Jul 2026 <span class="dim">(10-Q filed 31 Jul 2026)</span></p>');
+    expect(html).toContain('<p class="mk-src">SEC EDGAR · XBRL company facts · in USD · revenue is us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax, net income us-gaap:NetIncomeLoss, earnings a share us-gaap:EarningsPerShareDiluted · latest filing 10-Q filed 31 Jul 2026 · as filed, nothing estimated; a fourth quarter is in the year\'s 10-K</p>');
+    // a company with years and no quarters, or shares alone: only what it has
+    p.run(`MKT.open.fin = ${JSON.stringify({ ...FIN, quarterly: [], shares: undefined, latest: undefined, concepts: { revenue: "us-gaap:Revenues" } })}`);
+    const years = p.run<Record<string, string>>("mkDrawerParts(MKT.open)").financials;
+    expect(years).toContain("Fiscal years");
+    expect(years).not.toContain("Quarters");
+    expect(years).not.toContain("shares outstanding");
+    expect(years).toContain('<p class="mk-src">SEC EDGAR · XBRL company facts · in USD · revenue is us-gaap:Revenues · as filed');
+    // a link only to the SEC's own site
+    p.run(`MKT.open.fin = ${JSON.stringify({ ...FIN, filingsUrl: "https://evil.example/" })}`);
+    expect(p.run<Record<string, string>>("mkDrawerParts(MKT.open)").financials).not.toContain("evil.example");
   });
 });

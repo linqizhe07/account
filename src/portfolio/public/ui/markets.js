@@ -1336,7 +1336,7 @@ function openMarket(item) {
   if (!A) return;
   const it = mkResolve(item);
   if (!it) return void mkLookup(item);
-  MKT.open = { item: it, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [] };
+  MKT.open = { item: it, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [], fin: undefined };
   const body = openDrawer(`<div class="mk-d" data-mk-drawer>${mkDrawerHtml(MKT.open)}</div>`, { title: it.name, redraw: mkDrawerRedraw });
   if (!MKT.drawerWired) {
     $("drawer").addEventListener("close", () => {
@@ -1419,6 +1419,17 @@ function mkDrawerLoad(o) {
     api(`/api/account/compare?base=${encodeURIComponent(base)}&side=buy`, { ttl: 15_000 }).then((b) => {
       if (MKT.open !== o) return;
       o.compare = b;
+      mkDrawerRedraw();
+    });
+  }
+  // a US share's own filed figures (SEC EDGAR: GET /api/account/financials, live/edgar.ts), read once a drawer and kept ten minutes — the
+  // filings change twice a quarter — never for a pre-IPO contract or anything that is not a share
+  const ticker = !pre ? mkTicker(o.item) : "";
+  if (ticker && o.fin === undefined) {
+    o.fin = null;
+    api(`/api/account/financials?symbol=${encodeURIComponent(ticker)}`, { ttl: 600_000, timeout: 20_000 }).then((b) => {
+      if (MKT.open !== o) return;
+      o.fin = b;
       mkDrawerRedraw();
     });
   }
@@ -1713,6 +1724,44 @@ function mkChartHtml(o, it, leg, key) {
   return fromAsset || `<p class="empty">${esc(((a.missing || []).find((m) => m.part === "candles") || {}).why || (mkPublicOnly(it) ? "Price history comes from a connected venue that trades it: connect one to see it." : ev ? "The venue keeps price history for a contract you hold." : "No venue on the account keeps price history for it."))}</p>`;
 }
 
+// ---- a share's financials (SEC EDGAR, live/edgar.ts) -----------------------------------------------------------------------------
+
+/* a US share's ticker as the SEC's reader takes one: a stock row's base — letters, a class letter after a dot or a dash (BRK.B); "" for
+   anything else (a pre-IPO contract's company, a coin, a token) */
+const mkTicker = (item) => (item && item.kind === "stock" && /^[A-Z]{1,6}([.-][A-Z]{1,2})?$/.test(String(item.base || "").toUpperCase()) ? String(item.base).toUpperCase() : "");
+/* a filing's date (YYYY-MM-DD) as a person reads it, the day the SEC wrote, never moved to another zone: "27 Sep 2025" */
+function mkDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return String(iso || "—");
+  return `${Number(m[3])} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1] || m[2]} ${m[1]}`;
+}
+/* a filed figure in money, short, with its sign: $416B · −$2.5B · $94.0B; a dash where the filing tagged none */
+const mkFinMoney = (n) => (n === undefined || n === null || !Number.isFinite(Number(n)) ? '<span class="flat">—</span>' : `${Number(n) < 0 ? "−" : ""}${mkVol(Math.abs(Number(n)))}`);
+/** THE FINANCIALS PART, a US share's drawer: the fiscal years as filed, then the quarters as filed (a 10-Q's own quarter; a fourth quarter
+ * is in the 10-K and is not a row) — each with its revenue, net income and earnings a share, the period's end and its filing — the shares
+ * outstanding as the latest cover says, whose figures they are and which tagged concept each column is. A skeleton while the SEC answers;
+ * where it does not, its refusal in its own words (no contact set: what to set). Nothing here is estimated */
+function mkFinHtml(o) {
+  if (o.fin === undefined || o.fin === null) return '<div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div>';
+  const f = o.fin.ok !== false ? o.fin : null;
+  if (!f) return `<p class="mk-quiet">${esc(mkSaid(refusalOf(o.fin)) || "The SEC did not answer")}.</p>`;
+  const annual = Array.isArray(f.annual) ? f.annual : [];
+  const quarterly = Array.isArray(f.quarterly) ? f.quarterly : [];
+  const rowsOf = (list, year) => list.map((p) => ({ p, label: year ? `FY${p.fy || String(p.end || "").slice(0, 4)}` : `${p.fp || "Q"} FY${p.fy || String(p.end || "").slice(0, 4)}` }));
+  const cols = [
+    { label: "Period", cell: (r) => `<b>${esc(r.label)}</b><span class="why">ended ${esc(mkDate(r.p.end))} · ${esc(r.p.form || "")} filed ${esc(mkDate(r.p.filed))}</span>` },
+    { label: "Revenue", r: true, cell: (r) => mkFinMoney(r.p.revenue) },
+    { label: "Net income", r: true, cell: (r) => mkFinMoney(r.p.netIncome) },
+    { label: "EPS", r: true, cell: (r) => (r.p.eps === undefined || r.p.eps === null ? '<span class="flat">—</span>' : esc(px(r.p.eps))) },
+  ];
+  const tableOf = (title, list, year) => (list.length ? `<h3 class="label mk-fin-h">${esc(title)}</h3>${table(cols, rowsOf(list, year), { cls: "mk-fin-t" })}` : "");
+  const shares = f.shares && Number.isFinite(Number(f.shares.value)) ? `<p class="mk-fin-sh"><b>${esc(mkCount(f.shares.value))}</b> shares outstanding as of ${esc(mkDate(f.shares.asOf))} <span class="dim">(${esc(f.shares.form || "")} filed ${esc(mkDate(f.shares.filed))})</span></p>` : "";
+  const c = f.concepts || {};
+  const named = [c.revenue ? `revenue is ${c.revenue}` : "", c.netIncome ? `net income ${c.netIncome}` : "", c.eps ? `earnings a share ${c.eps}` : ""].filter(Boolean).join(", ");
+  const foot = `<p class="mk-src">${esc(f.source || "SEC EDGAR")}${f.currency ? ` · in ${esc(f.currency)}` : ""}${named ? ` · ${esc(named)}` : ""}${f.latest ? ` · latest filing ${esc(f.latest.form)} filed ${esc(mkDate(f.latest.filed))}` : ""} · as filed, nothing estimated; a fourth quarter is in the year's 10-K</p>`;
+  return `${tableOf("Fiscal years", annual, true)}${tableOf("Quarters", quarterly, false)}${shares}${foot}`;
+}
+
 /** the drawer, part by part (each painted on its own, so a fresh read repaints only what changed): the head — name · countdown · price with
  * its 24 hours said once · facts · issuer · outcomes · Buy · Sell · Hand to agent · ★ · why not — then the chart, Across venues, (a pre-IPO
  * company's) IPO markets, You hold, Agents on it, On the statement */
@@ -1806,11 +1855,15 @@ function mkDrawerParts(o) {
   // its price alerts (standing, with Remove; fired), where it has any — "Set another" opens the sheet
   const alertLines = mkAlertLinesHtml(it);
   const alerts = alertLines ? `<section class="sec" aria-label="Price alerts"><div class="sec-head"><h2 class="h2">Price alerts</h2>${mkWatchTarget(it) ? `<button type="button" class="link" data-act="alert" data-fk="d-alert2"${mkDis()}>Set another →</button>` : ""}</div>${alertLines}</section>` : "";
+  // a US share's own filed figures from the SEC (mkFinHtml), with the company's filings there one click away
+  const finOk = o.fin && o.fin.ok !== false && typeof o.fin.filingsUrl === "string" && /^https:\/\/www\.sec\.gov\//.test(o.fin.filingsUrl) ? o.fin : null;
+  const financials = !pre && mkTicker(it) ? `<section class="sec" aria-label="Financials"><div class="sec-head"><h2 class="h2">Financials</h2>${finOk ? `<a class="link mk-fin-link" href="${esc(finOk.filingsUrl)}" target="_blank" rel="noopener noreferrer">Filings at the SEC ${icon("external", "sm")}</a>` : ""}</div>${mkFinHtml(o)}</section>` : "";
   return {
     head,
     chart,
     alerts,
     across,
+    financials,
     ipo: pre ? mkIpoHtml(o) : "",
     held: `<section class="sec" aria-label="You hold"><h2 class="h2">You hold</h2>${mkHeldHtml(o)}</section>`,
     agents: `<section class="sec" aria-label="Agents on it"><h2 class="h2">Agents on it</h2>${mkAgentsHtml(it)}</section>`,

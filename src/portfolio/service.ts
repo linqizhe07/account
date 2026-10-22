@@ -62,7 +62,8 @@ import type { AutonomyHook, LiveOrder } from "./account/live-orders.ts";
 import type { LiveEarn } from "./account/live-earn.ts";
 import type { Payment } from "./account/payments.ts";
 import { exploreAcross, type Exploration, type ExploreSort, type ExploreVenue } from "./live/explore.ts";
-import { holdBackMs, KEEP_MS as LISTING_KEEP_MS, publicSources, type PublicSource } from "./live/public-markets.ts";
+import { fixedHosts, holdBackMs, KEEP_MS as LISTING_KEEP_MS, publicSources, type PublicSource } from "./live/public-markets.ts";
+import { SEC_HOSTS, SEC_TICKER, SEC_TIMEOUT_MS, SecEdgar, secUserAgent, type Financials } from "./live/edgar.ts";
 import { TABS, type TabId } from "./live/categories.ts";
 import { CHAIN_BY_ID, CHAINS, type ChainName } from "./live/chain.ts";
 import { mountPayees, type PayeeWorld } from "./account/payees.ts";
@@ -157,6 +158,9 @@ export interface ServiceOptions {
   /** the keyless public market data Markets reads beside the connected venues (default: live/public-markets.ts publicSources over the live
    * connection's network and exchange library); stand-ins in tests */
   publicMarkets?: PublicSource[] | undefined;
+  /** SEC EDGAR (live/edgar.ts), which the stock drawer's Financials are read from: the environment the owner's contact (SEC_CONTACT) is
+   * read from (the process's own by default), or the user agent outright (tests) */
+  sec?: { env?: NodeJS.ProcessEnv | undefined; userAgent?: string | undefined } | undefined;
   /** THE DESK (account/desk.ts), on a real account: the brains its house seats may think with and how often its clock ticks (0: only when
    * asked, as in tests). The brains, by default: every provider the Brains place offers (account/brains.ts brainProviders) — Claude through
    * the Anthropic API and each OpenAI-format preset — each ready when its key is there; a scripted one in tests. `env`: the environment
@@ -886,6 +890,26 @@ export class PortfolioService {
   }
 
   private publicMade: PublicSource[] | undefined;
+  /** FINANCIALS: a US company's own filed figures — the fiscal years and quarters as filed, with revenue, net income and earnings a share,
+   * and the shares outstanding — read keyless from SEC EDGAR's XBRL company facts (live/edgar.ts) with the contact the owner set; the
+   * stock drawer's Financials part. Kept twelve hours; nothing is estimated. A read */
+  async financials(symbol: string): Promise<Financials | Refusal> {
+    if (!this.account) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
+    const sym = symbol.trim().toUpperCase();
+    if (!SEC_TICKER.test(sym)) return no("E_ACCOUNT_BAD_ACTION", { message: "financials are read for a US stock's ticker: letters, with a class letter after a dot (BRK.B)" });
+    return this.edgar().financials(sym);
+  }
+  private edgarMade: SecEdgar | undefined;
+  /** the SEC reader, made once: the live connection's network behind the fixed-host guard for the SEC's two hosts, and the account's user
+   * agent there — its name and the owner's contact (SEC_CONTACT), without which nothing is asked */
+  private edgar(): SecEdgar {
+    if (!this.edgarMade) {
+      const deps = this.liveDeps();
+      this.edgarMade = new SecEdgar({ http: fixedHosts(deps.http, SEC_HOSTS, SEC_TIMEOUT_MS), clock: deps.clock, userAgent: this.opts.sec?.userAgent ?? secUserAgent(this.opts.sec?.env ?? process.env) });
+    }
+    return this.edgarMade;
+  }
+
   /** the keyless public sources, made once and kept (what each keeps — its answers for a while, its exchange client — lives in it), each
    * read through the account's own cache (`keptPublic`) */
   private publicMarkets(): PublicSource[] {

@@ -127,6 +127,11 @@
  *                                                        with `more` (older bars exist) and, where the history ends, why: a connected
  *                                                        venue's own, or a venue not connected from its public data, without a key; kept
  *                                                        seconds to minutes in a bounded memory, nothing written
+ *   GET  /api/account/financials?symbol=AAPL               a US stock's figures as the company filed them: its last four fiscal years and
+ *                                                        quarters (revenue, net income, diluted EPS) and the shares outstanding, read without
+ *                                                        a key from SEC EDGAR's XBRL company facts (live/edgar.ts); the SEC asks every reader
+ *                                                        to say who they are, so SEC_CONTACT (an email address) names this account to it —
+ *                                                        unset, a refusal that says so. Nothing estimated; kept twelve hours in memory
  *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
  *                                                        bid and ask only, depth "top"); kept a second and a half
  *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds (a source that
@@ -823,6 +828,16 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const q = strings(req, res, { venue: 60, symbol: 200, interval: 4, range: 4, before: 16, limit: 6 });
     if (!q) return;
     answerOf(res, await svc.candles(q.venue, q.symbol, q.interval, { range: q.range, before: q.before, limit: q.limit }));
+  }));
+
+  // FINANCIALS: a US company's own filed figures — the fiscal years and quarters as filed, with revenue, net income and earnings a share,
+  // and the shares outstanding — read keyless from SEC EDGAR's XBRL company facts with the contact the owner set (service.ts financials,
+  // live/edgar.ts); the stock drawer's Financials part. A read
+  app.get("/api/account/financials", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { symbol: 12 });
+    if (!q) return;
+    answerOf(res, await svc.financials(q.symbol));
   }));
 
   // one market's order book (best first, `depth` levels a side, 1 to 50) and its latest trades (newest first, `limit`, 1 to 100): a connected
