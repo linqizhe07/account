@@ -146,3 +146,7 @@ test/             unit · attack（攻击复现，必须失败）· standin（�
 docs/             细节
 site/             公开介绍页（GitHub Pages）；scripts/ 它的数字和本地预览
 ```
+
+## 许可
+
+Apache-2.0（仓库根目录的 [LICENSE](../LICENSE)），版权 2026 Linqi Zhe：可以用、改、再分发，包括放进你卖的东西里，只要许可证和声明跟着走；不提供任何担保。要贡献先读 [CONTRIBUTING.md](../CONTRIBUTING.md)；安全问题按 [SECURITY.md](../SECURITY.md) 私下报，不要开公开的 issue。

@@ -78,4 +78,10 @@ The same page with stand-in venues at http://127.0.0.1:4821 — no network, no m
 - `npm test` · `npm run typecheck`
 - Questions and bugs: [GitHub issues](https://github.com/linqizhe07/buyer-agent-demo/issues).
 
+## License
+
+Apache-2.0: see [LICENSE](LICENSE). Copyright 2026 Linqi Zhe. You may use, change and redistribute it, including in something you sell, as long as the licence and notices travel with it; it comes with no warranty.
+
+To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md). A security problem goes privately, as [SECURITY.md](SECURITY.md) says, never in a public issue.
+
 Gravit is not financial advice. Real trading is at your own risk; paper money is not real money.
