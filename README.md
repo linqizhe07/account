@@ -4,15 +4,15 @@
 
 **Your trading accounts on one page, and AI agents that trade only inside the limits you sign.**
 
-Gravit runs on your own computer. It puts your exchanges, brokers, wallets and prediction markets on one page, gives you a paper account with live prices to practise on, and lets AI agents — its own trading desk, or yours over MCP — trade, move and pay inside limits you sign. Website: [linqizhe07.github.io/buyer-agent-demo](https://linqizhe07.github.io/buyer-agent-demo/)
+Gravit runs on your own computer. It puts your exchanges, brokers, wallets and prediction markets on one page, gives you a paper account with live prices to practise on, and lets AI agents — its own trading desk, or yours over MCP — trade, move and pay inside limits you sign. Website: [linqizhe07.github.io/account](https://linqizhe07.github.io/account/)
 
 ## Start in five minutes
 
 You need [Node.js](https://nodejs.org) 22 or newer and Git. Tested on macOS; Linux should work the same way; Windows is untested.
 
 ```bash
-git clone https://github.com/linqizhe07/buyer-agent-demo.git
-cd buyer-agent-demo
+git clone https://github.com/linqizhe07/account.git
+cd account
 npm ci
 npm run account
 ```
@@ -76,7 +76,7 @@ The same page with stand-in venues at http://127.0.0.1:4821 — no network, no m
 - `npm run account -- --port 4825 --home ~/gravit-second` runs a second, separate account; `--fresh` starts one from nothing.
 - In Chinese: [docs/README.zh.md](docs/README.zh.md) (the full description), [COOKBOOK.md](COOKBOOK.md) (recipes) and [docs/account.md](docs/account.md) (how every part works).
 - `npm test` · `npm run typecheck`
-- Questions and bugs: [GitHub issues](https://github.com/linqizhe07/buyer-agent-demo/issues).
+- Questions and bugs: [GitHub issues](https://github.com/linqizhe07/account/issues).
 
 ## License
 

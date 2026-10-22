@@ -5,7 +5,7 @@ Gravit holds venue API keys on the owner's computer and can place orders, move m
 ## Report it privately
 
 Use GitHub's private vulnerability reporting for this repository:
-https://github.com/linqizhe07/buyer-agent-demo/security/advisories/new
+https://github.com/linqizhe07/account/security/advisories/new
 
 Say which part it is in (pairing, the owner's signed instructions, an agent's limit, a venue connector, the paper account, the MCP surface, the page) and how to reproduce it. A failing test under `test/attack/` is the best report there is. Do not include a real key, a seed, or anything from your own `~/.buyer-agent-demo/`.
 
