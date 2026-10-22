@@ -36,4 +36,4 @@ npx tsx test/standin/ui-standin.ts --port 4821 --superagent
 
 By contributing you agree that your contribution is licensed under the Apache License 2.0, as section 5 of [LICENSE](LICENSE) says. There is no separate contributor agreement.
 
-Bugs and questions go to [GitHub issues](https://github.com/linqizhe07/buyer-agent-demo/issues); a security problem goes privately, as [SECURITY.md](SECURITY.md) says.
+Bugs and questions go to [GitHub issues](https://github.com/linqizhe07/account/issues); a security problem goes privately, as [SECURITY.md](SECURITY.md) says.
