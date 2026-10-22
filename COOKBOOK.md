@@ -539,11 +539,11 @@ portfolio_ask {kind: "limit", venue, usd, text}         # letIn · limit · venu
 
 - 回报出现在 Agents at work 那条意图下面。一个 agent 在一个意图上最多 50 条，不会盖掉别的 agent 的；给所有 agent 的意图上，别的 agent 的回报对它只是别人的话，不是你的指令。
 - 请求出现在 Waiting for you，和它的卡在一组。"Grant…" 打开你自己做这件事的那张表（额度、建钱包或充值、连接那个场所、会话、杠杆上限、模式、放它进来），签了请求自己关掉（给一份额度只关掉它问的场所在这份额度里的那些请求，没点场所的请求任何一份额度都关；收回额度——预算 0——什么都不给，不关请求）；"Decline…" 是一次签名（`answerAsk {ask, decision: "decline"}`），只关掉、什么都不给，agent 在 `portfolio_watchlist` 里一天之内看得见 `declined: true`。agent 要你接一个场所的，那条请求的按钮是 "Connect"，直接是那家的连接表单。
-- 请求只在内存里、一天过期：同类同场所的再问替换旧的；一共最多 20 条、每个 agent 最多 5 条、每把钥匙一小时 5 条。没被放进来的钥匙也能请求放它进来（`letIn`），报的名字会洗干净，而且不能是、也不能像账户上某把钥匙的名字（放它进来会顶掉那把钥匙）。
-- 重启以后关注和意图回来（每一条重新验签），请求和拒掉的请求不回来。
+- 请求一天过期：同类同场所的再问替换旧的；一共最多 20 条、每个 agent 最多 5 条、每把钥匙一小时 5 条。没被放进来的钥匙也能请求放它进来（`letIn`），报的名字会洗干净，而且不能是、也不能像账户上某把钥匙的名字（放它进来会顶掉那把钥匙）。
+- 重启以后关注、意图和还在等你的请求都回来（每一条重新验签；请求验的是 agent 自己的签名和它签的那几个字，账本里伪造的、换了字的不回来），一天内拒掉的照样给 agent 看；请求的编号接着排，"一小时 5 条"跨重启照算。一天之内敲门要进来的 agent 也回来，带着它报的名字。
 - agent 写的字页面一律转义、限长、去掉看不见的字符。工具说明里写着：意图是你的请求，不是许可。
 
-会被拒：agent 的钥匙签关注、意图或 `answerAsk` `E_ACCOUNT_OWNER_ONLY` · 没被放进来的钥匙签 `E_ACCOUNT_UNKNOWN_SIGNER` · 关注、意图、请求、回报超过上面的数 `E_ACCOUNT_LIMIT` · 回报一条给别的 agent 的意图、回报里认领别人的单、拒一条已经没了的请求（答过了、过期了、或者服务重启过）`E_ACCOUNT_BAD_ACTION`。
+会被拒：agent 的钥匙签关注、意图或 `answerAsk` `E_ACCOUNT_OWNER_ONLY` · 没被放进来的钥匙签 `E_ACCOUNT_UNKNOWN_SIGNER` · 关注、意图、请求、回报超过上面的数 `E_ACCOUNT_LIMIT` · 回报一条给别的 agent 的意图、回报里认领别人的单、拒一条已经没了的请求（答过了、过期了）`E_ACCOUNT_BAD_ACTION`。
 
 ## 8c · 记忆：agent 记得的你
 
@@ -601,6 +601,7 @@ portfolio_forget {id}                                   # 忘掉它学的一条
 | 收紧或收回它的额度 | Agents 弹层里那一行 "Change limit"；只收回 earn 的用 "End earn limit" |
 | 停掉这把钥匙 | Agents 弹层里那一行 "Revoke" |
 | 撤掉所有挂着的单 | Trade 屏 Open orders 右上 "Cancel all N" |
+| 一下停掉所有 agent | Settings 里 Agents' session 那一行、Agents 弹层顶上、或 Waiting for you 段头的红按钮 "Stop all agents"，先确认一次，不用签名（本机程序也能 `curl -X POST http://127.0.0.1:4820/api/agents/stop`）。会话立刻结束：每个 agent 的下单、改单、挪钱、付款、earn 都被拒，读照常；同时切回 Guard，还在等你的卡全部关掉（占的额度退回），desk 暂停。钥匙、额度、意图、agent 留在场所的挂单都不动（agent 还能撤它自己的单；要全撤用上一行）。重新开始要签名：Settings 里 "Start a new one"，desk 另外点 Resume。重启后照样是停的 |
 
 钥匙撤销之后：
 
@@ -608,6 +609,15 @@ portfolio_forget {id}                                   # 忘掉它学的一条
 seat order okx buy BTC/USDT '$5'
 401 ✗ E_ACCOUNT_AGENT_REVOKED · the agent key was revoked
 ```
+
+全部停下之后，每个 agent 写的都这样被拒，到你签新会话为止（等着的卡 agent 用 `portfolio_approval` 读到 `closedWhy`）：
+
+```
+seat order okx buy BTC/USDT '$5'
+409 ✗ E_WALLET_AGENTS_STOPPED · the owner stopped every agent at 2026-10-22T16:00:00.000Z: every write stops, reads continue, until the owner signs a new session
+```
+
+**卡在页面外也找得到你**：Settings 里 "Cards in the background" 打开（或 Waiting for you 段头的 "Notify me"），浏览器问一次许可；之后标签页不在前台时有 agent 的卡，系统通知说谁在等、要做什么、多少钱、几点前答，点一下打开那张卡，卡答了通知就撤。页面要开着，浏览器关了就收不到。
 
 撤销过的钥匙不能再授权，要换一把新的。
 
@@ -633,7 +643,7 @@ curl -s http://127.0.0.1:4820/api/overview | python3 -c "import json,sys; o=json
 - 账户重新接上：用你当初签的同一个凭据引用（钥匙文件、地址、本机的 mm）；钱包的证明是它当初签的那句话，再验一次；agent 钱包从它的钥匙文件；
 - 没完成的单和在途的钱接着跟（只问，不重发）；场所没接回来的单标成不再跟（第 9 条）；以前运行里做完的 earn 还是 Done；编号接着往下排，ord-0007 永远是同一单。
 
-页面顶栏下面一行写着接回了什么（"Continued after a restart: …"），没接上的在 details 里（例如 Robinhood 的登录令牌只在内存里，要重新登录）。被撤销的钥匙、你结束的会话，重启后照样是关的（Settings 弹层里 "Start a new one" 重开会话，一次签名）；重启也不会把会话延长。你签的关注和意图也逐条重新验签接回来；agent 的请求只在内存里，重启就没了。净值曲线接着同一个文件画。每条签过名的指令只收一次，重启以后同一个信封再来也不收（真钱转账在十分钟有效期里重启，也不会转第二次）。最新的一次运行看运行序号，不看文件名，电脑时钟被往回调过也不会漏掉后面的运行。
+页面顶栏下面一行写着接回了什么（"Continued after a restart: …"），没接上的在 details 里（例如 Robinhood 的登录令牌只在内存里，要重新登录）。被撤销的钥匙、你结束的会话（包括 Stop all agents），重启后照样是关的：账本里后来哪一行说会话开着都不算，只认你在那之后签的新会话（Settings 弹层里 "Start a new one" 重开，一次签名）；重启也不会把会话延长。你签的关注和意图逐条重新验签接回来；agent 还在等你的请求、一天内敲门的 agent 也接回来（请求的签名重新验）。**等你批的卡不接回来**：一张卡只属于它那一次运行（它给你看的报价、手续费不留），重启时还在等的卡一律关掉，账本记一行 "The account restarted before it was answered; nothing moved…"（那时已经过了半小时的按过期关）；agent 用 `portfolio_approval` / `portfolio_wait` 读到这张卡和 `closedWhy`，再问一次就是一张新卡；你在旧页面上晚到的批准会被告知它关了。净值曲线接着同一个文件画。每条签过名的指令只收一次，重启以后同一个信封再来也不收（真钱转账在十分钟有效期里重启，也不会转第二次）。最新的一次运行看运行序号，不看文件名，电脑时钟被往回调过也不会漏掉后面的运行。
 
 不会被带回的：`--fresh` 启动；旧版本写的、没有那一行的账本；哈希链断了的文件（只读到断点，之后的不信）。有人往账本里加一行伪造的授权，签名验不过，不会生效；把一条真签名的行再抄一遍，只算一次；没签名的行（例如一条把 agent 杠杆上限写成 50 倍的设置记录）放不宽你没签过的东西。
 
@@ -708,13 +718,13 @@ Agent 的管理（放谁进来、给多少额度、它们在做什么、它们�
 | `spend[]` | 额度，一份一行：`id`、`agent`、`agentName`、`scope`（`trade` · `venues` · `payees` · `earn`）、`allow`、`perPaymentUsd`、`budgetUsd`、`spentUsd`、`reservedUsd`（等批的卡和没兑现的付款占着的）、`windowHours`、`validUntil`、`expired`、`payTo`（钉住的收款地址）、`intent`（随哪个意图签的，有才带） |
 | `subAccounts[]` | agent 钱包：`id`、`name`、`agent`、`agentName`、`address`、`capUsd`、`balanceUsd`（真实账户上是链上读到的这个钱包的余额）；它在 `venues[]` 里是 `agent-<名字>`，没有 Disconnect |
 | `cards[]` | 等 owner 批的卡：`id`、`flight`、`usd`、`reason`、`hash`（批的时候要签进去）、`kind`（agent 的指令类型）、`agent`、`agentName`、`expiresAt`、`shown`（卡上要签的字段） |
-| `asks[]` | agent 的请求：`id`、`agent`、`agentName`、`kind`、`venue`、`usd`、`text`、`at`、`expiresAt`。只在内存里 |
+| `asks[]` | agent 的请求：`id`、`agent`、`agentName`、`kind`、`venue`、`usd`、`text`、`at`、`expiresAt`。重启后接回来（第 10 条） |
 | `declinedAsks[]` | 一天内拒掉的请求，多一个 `declinedAt` |
 | `intents[]` | owner 开着的意图：`id`、`agent`（地址或 `*`）、`agentName`、`venue`、`symbol`、`side`、`usd`、`text`、`validUntil`、`at`、`reports`、`report`（最新一条）、`byAgent`（每个 agent 最新一条） |
 | `watch[]` | owner 关注的市场 |
 | `orders[]` · `payments[]` · `earns[]` | 每一条都带 `agent`（下它的钥匙；owner 下的没有） |
 | `modeRules` | `{ rows: [{door, guard, beast}], cardMinutes }`：Mode 弹层那张表，每扇门两档各怎么做、一张卡等几分钟（`account/mode-rules.ts`）；页面照它画，不自己写 |
-| `mode` · `dial` | `guard`（Guard）或 `open`（Beast）；`dial` 是 agent 的会话到哪天、是否已结束、关给 agent 的场所（`revoked`）、最大杠杆 |
+| `mode` · `dial` | `guard`（Guard）或 `open`（Beast）；`dial` 是 agent 的会话到哪天、是否已结束、你按 Stop all agents 的时刻（`stoppedAt`，到签新会话为止）、关给 agent 的场所（`revoked`）、最大杠杆 |
 | `connectLive.writes` | 服务能不能交易（`on`）、单笔上限（`capUsd`） |
 | `agentSetup` | 加这个 MCP 席位的那一行命令（`command`）和服务地址（`url`） |
 | `dollars` · `networks` · `bridgeChains` · `real` | 门收的三张表：账户认的美元稳定币、它们所在的链、桥能到的链；`real: true`。真实账户上每个场所**不带** `runways` / `agentKey` / `in` / `out` / `swaps` / `fiat` / `ledgers`，顶层不带 `destinations`——那些是模拟门的词，别读 |
@@ -1007,7 +1017,7 @@ npx vitest run test/attack
 | `E_ACCOUNT_NONCE` | 这条指令收过了。同一条重发拿到的是第一次的结果，改了内容要换 nonce |
 | 刚接上的账户 agent 用不了 | 它不在旧额度里，见第 3 条 |
 | agent 的单没有出卡就下了 | 模式是 Beast，见第 4 条 |
-| 重启之后有的账户没接回来、agent 的请求不见了 | 顶栏下面那一行的 details 写着没接回来的和原因（例如 Robinhood 的登录令牌只在内存里，要重新登录）；请求只在内存里，重启就没了，关注和意图会接回来，见第 10 条。`--fresh` 起的什么都不接 |
+| 重启之后有的账户没接回来、等着的卡不见了 | 顶栏下面那一行的 details 写着没接回来的和原因（例如 Robinhood 的登录令牌只在内存里，要重新登录）；等着的卡重启时关掉（agent 读到 `closedWhy`，再问一次），请求、关注和意图会接回来，见第 10 条。`--fresh` 起的什么都不接 |
 | rail 底下一枚 "Not answering since HH:MM" | 账户进程没应答（挂了、在重启），页面留着上一次读到的，恢复就撤 |
 | 回 500，正文 "The account hit an error answering this; it was recorded." | 服务内部出错，细节在服务的日志里，不上线 |
 | 批一张卡回 `E_ACCOUNT_CARD_EXPIRED` | 卡 30 分钟没人答，账户自己关了它、放回了它占的额度，见第 8 条 |
@@ -1041,4 +1051,4 @@ npx vitest run test/attack
 | `E_WALLET_ACCOUNT_UNKNOWN` · `E_WALLET_UNKNOWN_VENUE` | 来源或目的地不是接在账户上的场所（agent 挪真钱只在接上的场所之间），或没有这个子账户；统一接口库不认识这个交易所 id，或连接器名字不对 |
 | `E_ACCOUNT_CREDENTIAL` · `E_VENUE_UNREACHABLE` · `E_VENUE_GEOBLOCKED` · `E_VENUE_UNAUTHORIZED` | 真实连接：钥匙文件不能用（席位和 agent 钱包的钥匙文件也一样，拒绝里只说是哪把钥匙，路径在 `detail`）、场所没应答或答得账户读不懂（或因为请求太多封了这个地址，到它说的时间；网络上别的东西冒充场所回了一页，也算没答）、场所不服务这个地区（含只能平仓的地方的买入、场所前面的服务器拒绝这个网络；只针对某个交易对或产品的地区规矩带 `detail.scope`，不挡这家的其它东西）、场所不认这把钥匙。`E_VENUE_UNREACHABLE` 带 `detail.unsure: true`（或 `placed: "unknown"`）的不是拒绝：单子或转账的答复在路上丢了，可能已经成了——先去场所看，别重发；能按账户自己的 id 跟的，账户在跟（付款显示 pending） |
 | `E_WALLET_LIVE_WRITES_OFF` | 这个服务是 `--read-only` 起的，或者 MetaMask 自己的开关没开 |
-| `E_WALLET_SESSION_EXPIRED` · `E_WALLET_ACCOUNT_REVOKED` · `E_WALLET_REACH` | agent 的会话结束了；这个场所对 agent 关着（Account › Venues 的 "Open to agents"）；owner 没对 agent 开放这家的这一类动作（`setPolicy reach`：交易、放进 / 取出 earn） |
+| `E_WALLET_AGENTS_STOPPED` · `E_WALLET_SESSION_EXPIRED` · `E_WALLET_ACCOUNT_REVOKED` · `E_WALLET_REACH` | 你按了 Stop all agents（到你签新会话为止）；agent 的会话结束了；这个场所对 agent 关着（Account › Venues 的 "Open to agents"）；owner 没对 agent 开放这家的这一类动作（`setPolicy reach`：交易、放进 / 取出 earn） |

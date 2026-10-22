@@ -15,7 +15,27 @@ async function setMode(mode) {
 }
 const modeNote = () => (modeOf(A.mode) === "open" ? "Inside their limits, agents act at once." : "What agents ask for waits for you on a card.");
 
-/* the agents' session and the most leverage they may set: what the owner opens to agents beyond their limits */
+/* STOP EVERY AGENT, asked first. The account ends the agents' session at once — from then on no agent places, changes or closes an order,
+   moves money or pays (it can still cancel its own orders); reads go on — switches to Guard, closes the cards still waiting and pauses the desk. Free, as every tightening is:
+   any browser on this page may press it, the owner's or not. Starting the agents again is a new session, the owner's signature (Settings).
+   Nothing is said done that the account did not take: a refusal, or no answer, says so */
+async function stopAgentsAsk() {
+  if (!A || busy) return;
+  const n = (A.cards || []).length;
+  const yes = await confirmSheet(`From this moment no agent can place, change or close an order, move money or pay — it can still cancel its own orders${n ? ` — and the ${plural(n, "card")} waiting for you ${n === 1 ? "is" : "are"} closed` : ""}. Guard comes on and the desk pauses. Reads go on; keys, limits and the orders agents left at venues stay as they are. Starting them again is a new session, signed by you.`, { title: "Stop all agents?", yes: "Stop all agents", no: "Keep them running", danger: true });
+  if (!yes || busy) return;
+  const r = await postJson("/api/agents/stop", {});
+  if (refusedAt(r)) flash = `Not stopped: ${Owner.why(r) || "the account did not answer"}`;
+  else {
+    const b = r.body || {};
+    const left = Number(b.openOrders) || 0;
+    said = `${["Every agent is stopped", b.cards ? `${plural(b.cards, "card")} closed` : "", b.guard ? "Guard is on" : "", b.desk ? "the desk is paused" : ""].filter(Boolean).join(" · ")}.${left ? ` ${plural(left, "order")} an agent placed ${left === 1 ? "is" : "are"} still open at ${left === 1 ? "its venue" : "their venues"}: Trade › Open orders cancels ${left === 1 ? "it" : "them"}.` : ""}`;
+  }
+  await load();
+}
+
+/* the agents' session and the most leverage they may set: what the owner opens to agents beyond their limits. While it runs, anyone here
+   may stop every agent at once; a session the owner stopped says when */
 function renderDial(L, owner) {
   const el = $("dial");
   if (!el) return;
@@ -23,7 +43,10 @@ function renderDial(L, owner) {
   if (!d || !writesOn()) return void (el.innerHTML = '<div class="set"><div><b>Agents\' session</b><span class="note-s">This server places no orders (it was started read-only), so there is no session or leverage to open.</span></div></div>');
   // leverage is offered only where a connected venue sets it from here
   const lev = L.some((v) => v.trade && v.trade.leverage);
-  el.innerHTML = `<div class="set"><div><b>Agents' session</b><span class="note-s">${d.sessionEnded ? "Ended: agents can do nothing until you start a new one." : `Agents may act until ${esc(nyDay(d.sessionExpiresAt))}.`}</span></div>${owner ? `<button type="button" class="btn btn-sm" id="session-new">${d.sessionEnded ? "Start a new one" : "Renew for 30 days"}</button>` : ""}</div>${lev ? `<div class="set"><div><b>Their leverage</b><span class="note-s">The most an agent may set on a perpetual: up to ${esc(String(d.maxLeverage))}x${Number(d.maxLeverage) === 1 ? " (none)" : ""}.</span></div>${owner ? '<button type="button" class="btn btn-sm" id="lev-cap">Change</button>' : ""}</div>` : ""}`;
+  const ended = d.stoppedAt ? `Stopped by you, ${esc(nyDay(d.stoppedAt))} ${esc(nyTime(d.stoppedAt))}: agents can do nothing until you start a new session.` : "Ended: agents can do nothing until you start a new one.";
+  const stop = d.sessionEnded ? "" : '<button type="button" class="btn btn-sm btn-danger" id="session-stop">Stop all agents</button>';
+  el.innerHTML = `<div class="set"><div><b>Agents' session</b><span class="note-s">${d.sessionEnded ? ended : `Agents may act until ${esc(nyDay(d.sessionExpiresAt))}.`}</span></div><div class="btns">${stop}${owner ? `<button type="button" class="btn btn-sm" id="session-new">${d.sessionEnded ? "Start a new one" : "Renew for 30 days"}</button>` : ""}</div></div>${lev ? `<div class="set"><div><b>Their leverage</b><span class="note-s">The most an agent may set on a perpetual: up to ${esc(String(d.maxLeverage))}x${Number(d.maxLeverage) === 1 ? " (none)" : ""}.</span></div>${owner ? '<button type="button" class="btn btn-sm" id="lev-cap">Change</button>' : ""}</div>` : ""}`;
+  if ($("session-stop")) $("session-stop").addEventListener("click", stopAgentsAsk);
   if ($("session-new")) $("session-new").addEventListener("click", () => own({ type: "setPolicy", change: "session", value: "30d" }));
   if ($("lev-cap")) $("lev-cap").addEventListener("click", async () => {
     const now = Number(d.maxLeverage) || 1;
@@ -38,13 +61,22 @@ function renderDial(L, owner) {
 /** the Agents sheet: the agents and their limits, the wallets they pay from, and the command that brings a new agent to the door. The other
  * team's module mounts here. The devices that sign are the owner's, under Settings */
 function openAgents() {
-  openSheet(`<div class="old"><section class="sheet-sec" aria-labelledby="agents-h"><h3 class="h2" id="agents-h">Agents</h3><div id="agents"></div></section><section class="sheet-sec" id="wallets-sec" aria-labelledby="wallets-h"><h3 class="h2" id="wallets-h">Agent wallets</h3><div id="wallets"></div></section><section class="sheet-sec"><div class="set"><div><b>Add an agent</b><span class="note-s">Run the command where your agent runs; it knocks here, and you let it in above.</span></div><button type="button" class="btn btn-sm" id="agents-setup">${icon("copy", "sm")}Copy agent setup command</button></div></section></div>`, { title: "Agents", wide: true, redraw: drawAgents });
+  openSheet(`<div class="old"><section class="sheet-sec" aria-labelledby="agents-h"><h3 class="h2" id="agents-h">Agents</h3><div id="agents-stop"></div><div id="agents"></div></section><section class="sheet-sec" id="wallets-sec" aria-labelledby="wallets-h"><h3 class="h2" id="wallets-h">Agent wallets</h3><div id="wallets"></div></section><section class="sheet-sec"><div class="set"><div><b>Add an agent</b><span class="note-s">Run the command where your agent runs; it knocks here, and you let it in above.</span></div><button type="button" class="btn btn-sm" id="agents-setup">${icon("copy", "sm")}Copy agent setup command</button></div></section></div>`, { title: "Agents", wide: true, redraw: drawAgents });
   $("agents-setup").addEventListener("click", copySetup);
   drawAgents();
 }
 function drawAgents() {
   if (!$("agents")) return;
   const owner = owns();
+  // every agent stopped at once, from here too: while their session runs and there is an agent to stop
+  const d = A.dial;
+  const running = !!d && !d.sessionEnded && writesOn() && A.keys.some((k) => k.status === "ok");
+  paint($("agents-stop"), running ? '<div class="set"><div><b>Stop all agents</b><span class="note-s">Every agent\'s orders, moves and payments stop at once; reads go on. Starting them again is a new session, signed by you.</span></div><button type="button" class="btn btn-sm btn-danger" data-stop-agents>Stop all agents</button></div>' : "");
+  const stop = $("agents-stop").querySelector("button[data-stop-agents]");
+  if (stop && !stop.dataset.wired) {
+    stop.dataset.wired = "1";
+    stop.addEventListener("click", stopAgentsAsk);
+  }
   renderAgents(connected(), owner);
   // the agent wallets are drawn by money.js, which holds what moves money
   $("wallets-sec").hidden = typeof renderWallets !== "function";
@@ -54,7 +86,7 @@ function drawAgents() {
 /** the Settings sheet: trading on or off (and the cap), the agents' session and leverage, the background, the devices. The mode is the
  * rail's: its seg, and the Mode sheet behind "What changes ›" */
 function openSettings() {
-  openSheet('<section class="sheet-sec"><div class="set"><div><b>Trading</b><span class="note-s" id="set-writes"></span></div><div id="set-cap"></div></div><div id="dial"></div><div class="set"><div><b>Background</b><span class="note-s">Kept in this browser.</span></div><div id="set-theme"></div></div></section><section class="sheet-sec old" aria-labelledby="set-devices-h"><h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div></section>', { title: "Settings", redraw: drawSettings });
+  openSheet('<section class="sheet-sec"><div class="set"><div><b>Trading</b><span class="note-s" id="set-writes"></span></div><div id="set-cap"></div></div><div id="dial"></div><div class="set"><div><b>Cards in the background</b><span class="note-s" id="set-cards-note"></span></div><div id="set-cards"></div></div><div class="set"><div><b>Background</b><span class="note-s">Kept in this browser.</span></div><div id="set-theme"></div></div></section><section class="sheet-sec old" aria-labelledby="set-devices-h"><h3 class="h2" id="set-devices-h">Devices</h3><div id="devices"></div></section>', { title: "Settings", redraw: drawSettings });
   drawSettings();
 }
 function drawSettings() {
@@ -66,6 +98,11 @@ function drawSettings() {
   if ($("cap-change")) $("cap-change").addEventListener("click", openCap);
   // the light ocean keeps the name it was stored under ("cream"), so every browser keeps its choice
   $("set-theme").innerHTML = seg([["cream", "Light"], ["black", "Black"]], document.documentElement.dataset.theme || "cream", setTheme, { label: "Background" });
+  // an agent's card said by this browser with the tab in the background (shell.js shCardNote): kept in this browser, its permission asked once
+  const can = typeof Notification === "function";
+  const blocked = can && Notification.permission === "denied";
+  $("set-cards-note").textContent = !can ? "This browser shows no notifications: a card is said on this page." : blocked ? "This browser's settings block notifications from this page: a card is said on this page." : "This browser tells you when an agent's card waits for you, with the tab in the background. A card nobody answers in 30 minutes expires.";
+  $("set-cards").innerHTML = can && !blocked ? seg([["on", "On"], ["off", "Off"]], shCardsOn() ? "on" : "off", (v) => (v === "on" ? shCardsTurnOn() : shCardsTurnOff()), { label: "Cards in the background" }) : "";
   renderDial(connected(), owner);
   renderDevices(owner);
 }

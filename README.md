@@ -49,6 +49,8 @@ Gravit has no server in the middle, and no analytics: your computer reads public
 - **You sign what matters.** Orders, movements and every agent's limit are signed by your browser's key; the account checks each signature.
 - **Guard or Beast.** In Guard, whatever an agent asks for waits for your yes on a card. In Beast, agents act at once — but only inside the limits you signed.
 - **Hard caps.** No order or movement is worth more than `--live-cap`, and money leaves a venue only for a place shown to be yours.
+- **One button stops them all.** *Stop all agents* ends every agent's session at once, back in Guard, with waiting cards closed and the desk paused. It needs no signature; starting them again is a new session, signed by you, and a restart keeps them stopped.
+- **Cards find you.** Turn on *Cards in the background* and this browser's notification tells you when an agent waits on you, with the tab in the background. What agents asked survives a restart; a card does not: it is closed, and its agent is told why.
 - **A record of everything** in a hash-chained log on your computer, and a Statement you can filter and export.
 
 ## Bring your own agent

@@ -28,7 +28,7 @@ import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { canonical } from "../../core/hash.ts";
 import { no, unaddressed } from "../refuse.ts";
 import type { Intent } from "../accounts.ts";
-import { isExpired } from "../openness.ts";
+import { isExpired, stoppedRefusal } from "../openness.ts";
 import { holdBackMs } from "../live/public-markets.ts";
 import { ceilTo, DONE, floorTo, inDollars, notionalOf, onStep, ORDER_TYPES, plain, TIFS, type LiveTrader, type Market, type MarketKind, type OrderChange, type OrderRequest, type OrderState, type OrderStatus, type OrderType, type Position, type Side, type TimeInForce } from "../live/trade.ts";
 import type { CardLike, Outcome } from "./exchange.ts";
@@ -457,6 +457,9 @@ export class LiveOrders {
   /** the dial, as it stands: the agent's session, the venue switched off for agents, what the owner opened to agents there */
   private dial(venue: string): Refusal | null {
     const o = this.e.host.policy();
+    // the owner stopped every agent: said in its own code, never as a session that ran out
+    const stopped = stoppedRefusal(o, this.e.host.now());
+    if (stopped) return no(stopped.code, { venue, message: stopped.message, detail: stopped.detail });
     if (isExpired(this.e.host.now(), o.sessionExpiresAt)) return no("E_WALLET_SESSION_EXPIRED", { venue, message: "the agent's session has expired: every write stops, reads continue", detail: { sessionExpiresAt: o.sessionExpiresAt } });
     if (o.revoked.includes(venue)) return no("E_WALLET_ACCOUNT_REVOKED", { venue, message: `${venue} is switched off for agents: reads only`, detail: { revoked: o.revoked } });
     const reach = o.reach[venue];

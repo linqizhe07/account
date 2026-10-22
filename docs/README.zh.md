@@ -46,6 +46,8 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
 
   切到 Guard 一键，切到 Beast 要签名；卡 30 分钟没人答自动过期。十扇门的完整对照在页面的 Mode 弹层（服务器给的 `modeRules`）。接口上的值仍是 `guard` | `open`。
 - **不变的线**：单笔上限（启动时 `--live-cap`，之后在 Settings 里改，升降都是 owner 一次签名 `setPolicy cap`，重启按最后一次签的恢复；纸上账户不受它）；钱只去你自己的地方；随时撤销；场所自己的地区规则不绕。
+- **一下全停**：Settings、Agents 弹层或 Waiting for you 上的红按钮 **Stop all agents**，不用签名：每个 agent 的会话立刻结束（写一律拒绝 `E_WALLET_AGENTS_STOPPED`，读照常），切回 Guard，等着的卡全部关掉、额度退回，desk 暂停；钥匙、额度和 agent 留在场所的挂单不动。重新开始是你的签名（新会话），重启后照样是停的。
+- **卡找得到你**：Settings 里打开 **Cards in the background**，标签页不在前台时这个浏览器用系统通知说谁在等你、要做什么、几点前答。agent 的请求、敲门的 agent 跨重启接回来；等着的卡重启时关掉，agent 读到为什么，再问一次。
 
 ## 能接什么
 

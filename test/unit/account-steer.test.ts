@@ -16,8 +16,8 @@ import type { LiveTrader, Market, OrderState } from "../../src/portfolio/live/tr
 import { PortfolioService } from "../../src/portfolio/service.ts";
 
 /** How the owner steers and the agents answer: a watchlist and intents the owner signs, reports and asks the agents sign. None of it is
- * authority — it never makes or widens a limit — and the account keeps it the way it keeps the rest: signed, re-verified on restore (all but
- * the asks, which live a day in memory). Cards and statement lines say which agent did what. */
+ * authority — it never makes or widens a limit — and the account keeps it the way it keeps the rest: signed, re-verified on restore (the asks
+ * too: each agent's own signature, checked again). Cards and statement lines say which agent did what. */
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const START = Date.parse("2026-10-05T14:00:00.000Z");
 const HOUR = 3_600_000;
@@ -470,7 +470,7 @@ describe("what each venue's trader offers", () => {
 });
 
 describe("after a restart", () => {
-  it("the watchlist and the intents come back verified, each with its latest report; the asks do not; ids continue", async () => {
+  it("the watchlist, the intents and the asks still waiting come back verified, each intent with its latest report; ids continue", async () => {
     const home = fresh();
     const a = await account(home);
     ok(await a.own({ type: "setWatch", venue: "kraken", symbol: "BTC/USD", on: "true" }));
@@ -489,7 +489,8 @@ describe("after a restart", () => {
     const page = await b.page();
     expect(page.watch.map((w) => `${w.venue} ${w.symbol}`)).toEqual(["kraken BTC/USD"]);
     expect(page.intents.map((i) => [i.id, i.text, i.reports, i.report?.status, i.report?.note, i.report?.byName])).toEqual([["intent-0001", "Buy BTC under 59k this week", 2, "done", "bought 0.001", "Claude Code"]]);
-    expect(page.asks).toEqual([]);
+    // the ask still waits for the owner, under its own id, its agent's signature checked again (account/restore.ts)
+    expect(page.asks.map((x) => [x.id, x.kind, x.venue, x.text])).toEqual([["ask-0001", "limit", "ex", "a trading limit at Ex, please"]]);
     ok(await b.own(intent({ text: "the next one" })));
     expect(b.engine.state.intents.map((i) => i.id)).toEqual(["intent-0001", "intent-0003"]);
   });
