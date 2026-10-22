@@ -104,6 +104,47 @@ const launchctl = (args: string[], quiet = false): string => {
   }
 };
 
+/** whether launchd still has the service: loaded, or on its way out */
+const loaded = (): boolean => launchctl(["print", `${domain()}/${LABEL}`], true) !== "";
+
+/** a pause without a shell (this script is synchronous), after which launchd is asked again */
+const pause = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/** `launchctl bootout` answers before the service is gone: launchd first ends the process (SIGTERM; the account server closes and exits in
+ * about a tenth of a second) and only then removes the service — and a `bootstrap` of the same label inside that moment fails with
+ * "Bootstrap failed: 5: Input/output error". So the installer asks until the service is gone: true then; false once `forMs` have passed */
+export function untilGone(stillThere: () => boolean, o: { forMs?: number; everyMs?: number; pause?: (ms: number) => void; now?: () => number } = {}): boolean {
+  const forMs = o.forMs ?? 30_000;
+  const everyMs = o.everyMs ?? 100;
+  const now = o.now ?? Date.now;
+  const wait = o.pause ?? pause;
+  const until = now() + forMs;
+  while (stillThere()) {
+    if (now() >= until) return false;
+    wait(everyMs);
+  }
+  return true;
+}
+
+/** launchd's answer while the label is still leaving (the moment above, where its removal was not seen in time) */
+export const stillLeaving = (err: unknown): boolean => /Input\/output error/.test(String((err as { stderr?: unknown } | undefined)?.stderr ?? (err as Error | undefined)?.message ?? err));
+
+/** `step`, and when it fails the way `again` names, a pause and `step` once more — `tries` times in all; any other failure is thrown at once */
+export function tryAgain<T>(step: () => T, o: { again: (err: unknown) => boolean; tries?: number; everyMs?: number; pause?: (ms: number) => void }): T {
+  const tries = o.tries ?? 5;
+  const wait = o.pause ?? pause;
+  for (let i = 1; ; i++) {
+    try {
+      return step();
+    } catch (err) {
+      if (i >= tries || !o.again(err)) throw err;
+      wait(o.everyMs ?? 500);
+    }
+  }
+}
+
 /** the port the service listens on, as its arguments say (4820 unless --port) */
 const portOf = (args: string[]): number => {
   const i = args.indexOf("--port");
@@ -148,10 +189,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     if (process.platform !== "darwin") throw new Error("this installs a macOS LaunchAgent: on another system run `npm run account` under its own service manager");
     mkdirSync(dirname(p.log), { recursive: true, mode: 0o700 });
     mkdirSync(dirname(p.path), { recursive: true });
-    // a running copy of an earlier install is taken out first: one service, one port
+    // a running copy of an earlier install is taken out first: one service, one port — and waited for, since launchd answers bootout
+    // before the copy has left (untilGone): a bootstrap inside that moment fails with "Input/output error", and is then tried again
     launchctl(["bootout", `${domain()}/${LABEL}`], true);
+    if (!untilGone(loaded)) throw new Error(`the running copy of ${LABEL} has not stopped in 30 s: npm run account:service -- status, and install again once it has`);
     writeFileSync(p.path, p.plist, { mode: 0o644 });
-    launchctl(["bootstrap", domain(), p.path]);
+    tryAgain(() => launchctl(["bootstrap", domain(), p.path]), { again: stillLeaving });
     launchctl(["enable", `${domain()}/${LABEL}`], true);
     console.log(`installed: ${p.path}\n  runs: npm run account -- ${rest.join(" ") || "(no options)"} — at login, and again if it stops by accident\n  log: ${p.log} (only you can read it)\n  the account is at http://127.0.0.1:${portOf(rest)} · npm run account:service -- status`);
   } else if (cmd === "uninstall") {
