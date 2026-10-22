@@ -341,8 +341,9 @@ afterAll(async () => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
 });
 
-/** a real account with a paper account on a stand-in public source (Kraken's BTC/USD, priced as the test says: the one listing object, moved in place, as a kept read holds it), served on 127.0.0.1 */
-async function boot(o: { streams?: MarketHub; sources?: PublicSource[] } = {}) {
+/** a real account with a paper account on a stand-in public source (Kraken's BTC/USD, priced as the test says: the one listing object, moved in place, as a kept read holds it), served on 127.0.0.1.
+ * `paperLater`: the server starts with no paper account, and the test connects it (connectPaper) when it says */
+async function boot(o: { streams?: MarketHub; sources?: PublicSource[]; paperLater?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "account-stream-"));
   homes.push(home);
   const btc: Listing = { symbol: "BTC/USD", name: "BTC market", kind: "spot", base: "BTC", quote: "USD", price: 60000, bid: 59990, ask: 60010, open: true, types: [], volumeUsd24h: 2e9 };
@@ -351,8 +352,11 @@ async function boot(o: { streams?: MarketHub; sources?: PublicSource[] } = {}) {
   const svc = await PortfolioService.create({ home, now: () => new Date(START).toISOString(), venues: "frontline", real: true, liveDeps, publicMarkets: [kraken, ...(o.sources ?? [])], liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" }, account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] }, ...(o.streams ? { streams: o.streams } : {}) });
   let n = 0;
   const own = async (a: NoNonce<OwnerAction>): Promise<Outcome | Refusal> => svc.exchange(await signOwner(owner, { ...a, nonce: START + ++n } as OwnerAction));
-  const r = await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" });
-  if (isRefusal(r)) throw new Error(r.message);
+  const connectPaper = async () => {
+    const r = await own({ type: "connectVenue", venue: "paper-1", connector: "live:paper", label: "", credentialRef: "" });
+    if (isRefusal(r)) throw new Error(r.message);
+  };
+  if (!o.paperLater) await connectPaper();
   /** what the page does: prepare, then sign exactly what came back */
   const order = async (draft: Record<string, unknown>) => {
     const p = await svc.account!.prepare({ type: "liveOrder", venue: "paper-1", ...draft });
@@ -365,7 +369,7 @@ async function boot(o: { streams?: MarketHub; sources?: PublicSource[] } = {}) {
   const srv = await startPortfolioServer({ port: 0, service: svc, snapshotMs: 0 });
   servers.push(srv);
   const reprice = (price: number) => Object.assign(btc, { price, bid: price - 10, ask: price + 10 });
-  return { svc, srv, own, order, reprice, home };
+  return { svc, srv, own, order, reprice, home, connectPaper };
 }
 
 interface Sse {
@@ -785,6 +789,34 @@ describe("the markets a page shows, on its stream (feat/paper-live p2a)", () => 
       expect(await post(srv.url, "/api/account/stream/markets", { client, markets: ["paper-1:BTC/USD"], n: 6 })).toEqual({ status: 200, body: { ok: true, following: [] } });
       expect((await post(srv.url, "/api/account/stream/markets", { client, markets: [], n: "8" })).status).toBe(400);
       back.close();
+    } finally {
+      hub.close();
+    }
+  });
+
+  it("a page that follows a paper account's markets before the account is there — the tab that comes back within a second of a restart, while the account is still being restored — has them held once it appears, and is told their quotes then, with nothing more said by the page", async () => {
+    VenueWs.all = [];
+    const hub = new StreamHub({ WebSocket: VenueWs });
+    try {
+      const { srv, connectPaper } = await boot({ streams: hub, paperLater: true });
+      const page = await listen(srv.url, { path: `/api/account/stream?client=page-test-0005&markets=${encodeURIComponent("paper-1:BTC/USD,~paper-1:BTC/USD")}` });
+      expect(page.status).toBe(200);
+      // no paper account yet: the snapshot has none, and what its market stands for cannot be found — nothing is streamed for it
+      expect(named(await page.until((f) => named(f, "snapshot").length === 1), "snapshot")[0]!.data).toMatchObject({ paper: [] });
+      await new Promise((go) => setTimeout(go, 150));
+      expect(VenueWs.all).toEqual([]);
+      // the paper account appears (the owner connects it here; a restart's restore connects it the same way): its market is held from
+      // Kraken's stream now — its book too, for the key that shows it whole — and what the stream says reaches the page under both keys
+      await connectPaper();
+      await until(() => VenueWs.all.some((w) => w.url === HUB_URLS.kraken));
+      const kr = VenueWs.all.find((w) => w.url === HUB_URLS.kraken)!;
+      kr.open();
+      await until(() => kr.sent.some((m) => m.includes('"channel":"book"')));
+      kr.say({ channel: "ticker", type: "snapshot", data: [{ symbol: "BTC/USD", bid: 60001, bid_qty: 1, ask: 60002, ask_qty: 2, last: 60001.5 }] });
+      const live = (f: Frame, key: string) => f.event === "quote" && (f.data as { key?: string }).key === key && (f.data as { live?: boolean }).live === true;
+      const got = await page.until((f) => f.some((x) => live(x, "paper-1:BTC/USD")) && f.some((x) => live(x, "~paper-1:BTC/USD")));
+      for (const key of ["paper-1:BTC/USD", "~paper-1:BTC/USD"]) expect(got.find((x) => live(x, key))!.data, key).toMatchObject({ venue: "paper-1", symbol: "BTC/USD", source: "kraken", bid: 60001, ask: 60002, live: true });
+      page.close();
     } finally {
       hub.close();
     }

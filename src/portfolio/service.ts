@@ -2342,6 +2342,19 @@ export class PortfolioService {
       for (const what of priceOnly ? (["quote"] as const) : (["quote", "book", "trades"] as const)) this.tellMarket(`${h.source}|${h.symbol}`, what);
     }
   }
+  /** A VENUE'S MARKETS CAN BE FOUND NOW (its price sources known: a paper account restored after a restart, or connected): each key a page
+   * follows there that no stream holds yet — followed before the venue was on the account, when what it stands for could not be found — is
+   * followed again, so it is held and what its stream has is told to the page at once. Nothing else asks for it again: the page says what
+   * it shows anew only when that changes (ui/stream.js), and the tab that came back within a second of a restart would otherwise hear no
+   * market until it is reloaded */
+  private followAgainAt(venue: string): void {
+    for (const [client, held] of this.pageHolds) {
+      for (const key of this.stream.followsOf(client) ?? []) {
+        const bare = key.startsWith("~") ? key.slice(1) : key;
+        if (!held.has(key) && bare.slice(0, bare.indexOf(":")) === venue) void this.followKey(client, key).catch(() => undefined);
+      }
+    }
+  }
   private unfollowKey(key: string, k: string): void {
     const keys = this.followers.get(k);
     if (!keys) return;
@@ -2729,6 +2742,8 @@ export class PortfolioService {
     this.ruleSeen.delete(venue);
     // Markets and the comparison were answered from what the venues listed before this one: they are asked again
     this.marketReads.forgetAll(["explore", "compare"]);
+    // a page that followed one of its markets before it was here (the tab that came back while a restart was restoring it) has it held now
+    if (src.priceSource) this.followAgainAt(venue);
     const usd = r2((await adapter.read()).reduce((s, h) => s + h.usd, 0));
     // what this connection may do with the money there: nothing unless the server moves real money, and then only what the owner signs
     const writes = this.opts.liveWrites;
