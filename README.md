@@ -24,6 +24,7 @@ Then, on the page:
 1. **Start a paper account** — $10,000 of paper money, live public prices, nothing to connect.
 2. **Trade** — buy or sell crypto, US stocks, perpetuals and event contracts on paper.
 3. **Superagent** (Trade → Superagent) — paste an API key and press **Start the superagent**. The desk trades your paper account by itself: every trade lands on the chart, and each step it takes is played as it happens.
+4. **Watch** (Markets) — the day in six figures and the US session clock at the top; ★ a market to watch it, 🔔 to be told when it crosses a price — on the page, and as a notification if you ask. Your agents read both. ⌘K or `/` searches. Open a US stock and its **Financials** are there as the company filed them with the SEC — start the account with `SEC_CONTACT` set to your email, since the SEC asks every reader to say who they are.
 
 The superagent needs an AI model to think with. Paste a key from any of Anthropic, OpenAI, DeepSeek, Gemini, xAI, Kimi, Qwen, OpenRouter, Groq, Together or Meta — the account tells whose key it is and picks that provider's best model — or run a model on your machine with Ollama or vLLM (no key). Its calls are billed to your key.
 
@@ -60,7 +61,7 @@ Press **Copy setup command** (Portfolio's *Get started*, or under Agents) and ru
 npm run account:service -- install --live-cap 20
 ```
 
-It starts when you log in and restarts if it stops. Also `status`, `restart` (after an update), `logs`, `code` (the pairing code) and `uninstall`.
+It starts when you log in and restarts if it stops. Also `status`, `restart` (after an update), `logs`, `code` (the pairing code) and `uninstall`. The `SEC_CONTACT` set in the shell that runs `install` goes with it.
 
 ## Look around without anything real
 

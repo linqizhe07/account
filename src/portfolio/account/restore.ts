@@ -38,7 +38,7 @@ import type { LiveOrder } from "./live-orders.ts";
 import type { KeptAuthorisation } from "./pay-real.ts";
 import type { Payment } from "./payments.ts";
 import { actionHash, isAgentAction, isOwnerAction, isJwk, kidOf, malformed, signerOf, type AgentAction, type Envelope, type OwnerAction } from "./sign.ts";
-import { applyOwner, applyReport, deviceKeys, isOwner, type AccountState, type ApplyOptions, type SpendApproval } from "./state.ts";
+import { applyOwner, applyReport, deviceKeys, FIRED_ALERTS_KEPT, isOwner, type AccountState, type ApplyOptions, type FiredAlert, type SpendApproval } from "./state.ts";
 
 /** the first row of every run that continues the account */
 export interface RunMark {
@@ -161,6 +161,8 @@ export interface Rebuilt {
   earns: LiveEarn[];
   /** the highest id of each kind the chain has used */
   ids: { order: number; payment: number; card: number; earn: number };
+  /** the price alerts that fired in earlier runs, newest first (account/state.ts FiredAlert): the page and the agents still see them */
+  fired: FiredAlert[];
   /** authorisations a payee still held, not yet used or lapsed (account/pay-real.ts) */
   authorisations: KeptAuthorisation[];
   /** what was not brought back, and why */
@@ -179,7 +181,7 @@ const namedIn = (signers: string): string[] => {
 };
 
 /** a standing instruction the owner signs, which the restore applies again */
-const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "signOut", "createSubAccount", "setWatch", "setIntent"]);
+const STANDING = new Set(["approveAgent", "approveSpend", "setDestination", "convertToMultiSigUser", "signOut", "createSubAccount", "setWatch", "setAlert", "setIntent"]);
 const num = (id: unknown, prefix: string): number => {
   const m = typeof id === "string" ? new RegExp(`^${prefix}-(\\d+)$`).exec(id) : null;
   return m ? Number(m[1]) : 0;
@@ -187,7 +189,7 @@ const num = (id: unknown, prefix: string): number => {
 
 /** Everything the restore can rebuild without asking a venue: who the owner is, who the agents are and what they may do, the dial, the ids,
  * and what was in flight. Signatures are checked again here. */
-export async function rebuild(rows: readonly LedgerRow[], base: AccountState, opts: ApplyOptions & { codeRequired?: boolean | undefined } = {}): Promise<Rebuilt> {
+export async function rebuild(rows: readonly LedgerRow[], base: AccountState, opts: ApplyOptions & { codeRequired?: boolean | undefined; /** the moment the account restarts (ms): a price alert that lapsed by then is not brought back */ nowMs?: number | undefined } = {}): Promise<Rebuilt> {
   let s = base;
   const skipped: string[] = [];
   const connections = new Map<string, Connection>();
@@ -197,6 +199,8 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   const earns = new Map<string, LiveEarn>();
   const ids = { order: 0, payment: 0, card: 0, earn: 0 };
   let dial: DialSnapshot | undefined;
+  // the price alerts that fired, newest first (their note rows), as many as the page keeps
+  const fired: FiredAlert[] = [];
   // Beast needs the owner's signature: the row of the last verified `setPolicy mode open`, and of the last snapshot that said Guard
   let openedAt = -1;
   let closedAt = -1;
@@ -300,7 +304,7 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
           skipped.push(`${action.type} of ${row.ts}: ${next.message}`);
           // it took an id when it was first taken (its row says it went through): the ids after it stay the ones they were given, so the
           // limits, and what was spent and placed under them, keep their names
-          if (action.type === "approveSpend" || action.type === "createSubAccount" || (action.type === "setIntent" && action.id === "" && action.validUntil !== 0)) s = { ...s, seq: s.seq + 1 };
+          if (action.type === "approveSpend" || action.type === "createSubAccount" || (action.type === "setIntent" && action.id === "" && action.validUntil !== 0) || (action.type === "setAlert" && action.id === "" && action.on === "true")) s = { ...s, seq: s.seq + 1 };
         } else s = next;
       } else if (action.type === "setPolicy") {
         if (action.change === "mode" && action.value === "open") openedAt = i;
@@ -315,6 +319,15 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
       continue;
     }
     if (row.kind === "note") {
+      // a price alert that fired (service.ts lookAtAlerts wrote the row): it leaves the alerts standing, and stays among the fired ones the
+      // page and the agents see — the newest first
+      const f = (row.detail as { alertFired?: FiredAlert } | undefined)?.alertFired;
+      if (f && typeof f.id === "string") {
+        s = { ...s, alerts: s.alerts.filter((x) => x.id !== f.id) };
+        fired.unshift(f);
+        if (fired.length > FIRED_ALERTS_KEPT) fired.length = FIRED_ALERTS_KEPT;
+        continue;
+      }
       const d = (row.detail as { dial?: DialSnapshot } | undefined)?.dial;
       if (d && (d.mode === "open" || d.mode === "guard")) {
         dial = { mode: d.mode, revoked: Array.isArray(d.revoked) ? d.revoked.map(String) : [], reach: d.reach && typeof d.reach === "object" ? d.reach : {}, ...(typeof d.sessionExpiresAt === "string" ? { sessionExpiresAt: d.sessionExpiresAt } : {}), ...(d.ended === true ? { ended: true } : {}), ...(typeof d.maxLeverage === "number" && d.maxLeverage >= 1 ? { maxLeverage: d.maxLeverage } : {}) };
@@ -367,7 +380,10 @@ export async function rebuild(rows: readonly LedgerRow[], base: AccountState, op
   // save one whose owner's cancel waits to be sent again once its venue answers this network
   const unfinishedOrder = (o: LiveOrder) => (!o.unfollowed || o.cancelWanted === true) && (!DONE.has(o.status) || (!!o.walletTxs && !o.ref && o.status === "pending"));
   const unfinishedPayment = (p: Payment) => !!p.live && (p.status === "pending" || (p.status === "authorized" && !p.live.expired));
-  return { state: s, dial, authorisations: [...kept.values()], connections: [...connections.values()], orders: [...orders.values()].filter(unfinishedOrder), payments: [...payments.values()].filter(unfinishedPayment), earns: [...earns.values()].filter((e) => e.status === "pending"), ids, skipped, owner: s.owners.length > 0 };
+  // a price alert that lapsed while the account was down is gone, like one that lapses while it runs
+  const nowMs = opts.nowMs;
+  if (nowMs !== undefined && Number.isFinite(nowMs)) s = { ...s, alerts: s.alerts.filter((x) => nowMs < Date.parse(x.expiresAt)) };
+  return { state: s, dial, authorisations: [...kept.values()], connections: [...connections.values()], orders: [...orders.values()].filter(unfinishedOrder), payments: [...payments.values()].filter(unfinishedPayment), earns: [...earns.values()].filter((e) => e.status === "pending"), ids, fired, skipped, owner: s.owners.length > 0 };
 }
 
 /** a wallet's proof kept on its connection row, checked again: the wallet's signature over the sentence, naming the address */

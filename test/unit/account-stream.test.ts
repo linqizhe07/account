@@ -97,7 +97,7 @@ afterEach(() => {
 describe("the bus (account/stream.ts)", () => {
   it("keeps nothing before a page listens; a page's first stream is told to come back after a second and sent a snapshot under the seq the account stands at; then each account event at once, its id one more than the last", () => {
     const s = new AccountStream({ snapshot: () => ({ orders: [{ id: "ord-0001" }], paper: [] }), heartbeatMs: 0 });
-    expect(ACCOUNT_EVENTS).toEqual(["order", "fill", "position", "balance", "paper", "statement", "card", "desk"]);
+    expect(ACCOUNT_EVENTS).toEqual(["order", "fill", "position", "balance", "paper", "statement", "card", "desk", "alert"]);
     expect(COALESCE_MS).toEqual({ quote: 100, trades: 100, book: 250 });
     s.emit("order", { id: "before anyone listened" });
     const a = attach(s);

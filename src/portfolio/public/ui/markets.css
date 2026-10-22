@@ -94,6 +94,51 @@
 .mk-star:hover:not(:disabled) { color: var(--text); }
 .mk-star[aria-pressed="true"] { color: var(--text); }
 .mk-star[aria-pressed="true"] svg, svg.mk-on { fill: currentColor; }
+/* ★ and 🔔 side by side in a row's first cell; the bell pressed (an alert standing on the row) wears the warn colour, as a countdown does */
+.mk-keys { display: inline-flex; align-items: center; }
+.mk-t td.mk-c-keys { padding-right: 0; }
+.mk-bell { color: var(--dim); }
+.mk-bell .ico { width: 18px; height: 18px; }
+.mk-bell:hover:not(:disabled) { color: var(--text); }
+.mk-bell[aria-pressed="true"] { color: var(--warn-text); }
+.mk-bell[aria-pressed="true"] svg { fill: var(--warn-fill); }
+/* THE ALERTS (markets.js mkAlertsHtml, under the watchlist; mkAlertLinesHtml in the sheet and the drawer): which way and the figure in
+   bold tabular figures, the fired ones as a feed with a tick in the up colour */
+.mk-al-cond b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.mk-al-t td { white-space: nowrap; }
+.mk-al-feed .mk.ok { color: var(--up); }
+.mk-al-feed > div { align-items: center; }
+.mk-al-feed > div > div { flex: 1; min-width: 0; }
+.mk-al-feed > div > .btn { margin-left: auto; flex: none; }
+/* the alert sheet (markets.js openAlertSheet, in core quoteDialog's form): the market's line on top, this market's alerts under the form */
+.mk-al-who { margin-bottom: 4px; }
+.mk-al-list { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.mk-al-list:not(:empty) { padding-top: 14px; border-top: 1px solid var(--border); }
+.mk-al-list .label { margin: 0; }
+
+/* THE PULSE (markets.js mkPulseHtml, after OpenStock's dashboard), over the All tab: the US stock market's session on one line — a dot
+   (green open, amber an extended session, grey closed), the state, a countdown on the page's clock, the moment in New York and in the
+   viewer's own time — on the water with a halo, and six glass tiles, the day in six figures: each a button that opens its market, its name
+   and symbol, its price in the page's bold figures (ticking in place where its venue is connected), its 24 hours and whose price it is. Six
+   across where there is room, three between, two on a phone. Motion: only the price's tint (shell.css .tick-up · .tick-down) */
+.mk-pulse { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin-bottom: -6px; }
+.mk-sess-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; font-size: 13px; color: var(--text); text-shadow: var(--halo); font-variant-numeric: tabular-nums; }
+.mk-sess-line b { font-weight: 700; }
+.mk-sess { font-weight: 600; }
+.mk-sess[data-closed] { color: var(--dim); }
+.mk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.mk-dot.up { background: var(--up); box-shadow: 0 0 0 3px var(--up-fill); }
+.mk-dot.ext { background: var(--warn-text); box-shadow: 0 0 0 3px var(--warn-fill); }
+.mk-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1219px) { .mk-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .mk-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } }
+.mk-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 12px 14px; text-align: left; border: 1px solid var(--card-border); border-top: 2px solid var(--rule); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-card); color: var(--text); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
+.mk-tile:hover { background: linear-gradient(var(--hover), var(--hover)) var(--surface); }
+.mk-tile-h { display: flex; justify-content: space-between; gap: 8px; width: 100%; font-size: 12px; font-weight: 600; min-width: 0; }
+.mk-tile-h > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-tile-px { font-family: var(--font-num); font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.mk-tile-f { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12px; min-width: 0; max-width: 100%; }
+.mk-tile-f .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .mk-name { border: 0; padding: 0; border-radius: 0; background: none; color: var(--text); text-align: left; display: flex; align-items: center; gap: 12px; min-height: 44px; }
 .mk-name b { font-weight: 600; display: block; }
 .mk-name:hover b { text-decoration: underline; text-underline-offset: 3px; }
@@ -156,6 +201,16 @@
 .mk-iss-box p { margin: 0; line-height: 1.5; color: var(--dim); }
 /* a venue that keeps no price history for it, said quietly in its own words */
 .mk-quiet { font-size: 12px; color: var(--dim); margin: 6px 0 0; line-height: 1.5; }
+/* FINANCIALS (markets.js mkFinHtml), a US share's drawer: the fiscal years and the quarters as filed, each a small table — the period in
+   bold with its end and its filing under it, the money short and tabular — the shares outstanding in a line, and under it all whose figures
+   they are, in the account's quiet source line */
+.mk-fin-h { margin: 0; }
+.mk-fin-h + .t-wrap { margin-top: -8px; }
+.mk-fin-t td { white-space: nowrap; vertical-align: top; }
+.mk-fin-t td:first-child { white-space: normal; min-width: 150px; }
+.mk-fin-t td .why { margin-top: 2px; }
+.mk-fin-sh { margin: 0; font-size: 13px; line-height: 1.5; }
+.mk-fin-link { font-size: 13px; }
 
 /* a market's hover card (markets.js mkPeek): one for the pane, on the page's body, beside the market a mouse rests on or a key reached. Its
    whole name, what kind of thing it is with its countdown, who issues it, where it is listed (public prices quieter), where its price is
