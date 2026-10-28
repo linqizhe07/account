@@ -39,6 +39,15 @@ export const DESTINATION_COOLING_MS = DAY;
 export const EARN_NAMES = 'an earn limit names venues ("okx") or one product at a venue ("okx:savings:USDT"), not every account';
 /** steering (none of it is authority): markets watched, intents open, reports on one intent, and how long an owner's or an agent's words may be */
 export const MAX_WATCH = 50;
+/** price alerts (words to the owner, never an order): at most this many standing, each for this many days; the fired ones a page and an
+ * agent still see */
+export const MAX_ALERTS = 50;
+export const ALERT_DAYS = 90;
+export const FIRED_ALERTS_KEPT = 20;
+export const ALERT_CONDITIONS = ["above", "below"] as const;
+export type AlertCondition = (typeof ALERT_CONDITIONS)[number];
+/** a price alert's figure as the owner signs it: a plain positive decimal (63500, 0.62), at most twelve figures before the point */
+export const ALERT_PRICE = /^\d{1,12}(\.\d{1,10})?$/;
 export const MAX_INTENTS = 20;
 /** reports on one intent from one agent key, until the owner sets the intent's words again */
 export const MAX_REPORTS = 50;
@@ -143,6 +152,27 @@ export interface Watch {
   at: string;
 }
 
+/** A PRICE ALERT the owner set: told when the market's price rises to `price` or past it (`above`), or falls to it or under it (`below`).
+ * The venue need not be on the account (its public prices are read without a key). Words to the owner — and to the agents, which read it
+ * — never an order: nothing is placed when it fires, and no limit reads it */
+export interface Alert {
+  id: string;
+  venue: string;
+  symbol: string;
+  condition: AlertCondition;
+  /** in the market's quote: dollars, or dollars a contract for an event (0.62 is 62¢) */
+  price: number;
+  at: string;
+  /** an alert that has not fired by then lapses (ALERT_DAYS) */
+  expiresAt: string;
+}
+/** an alert that fired: the alert, the price that fired it and whose price that was (the source, in its own words), and when */
+export interface FiredAlert extends Alert {
+  seen: number;
+  from: string;
+  firedAt: string;
+}
+
 /** the latest an agent said about an intent */
 export interface AgentReport {
   status: (typeof REPORT_STATUSES)[number];
@@ -197,14 +227,15 @@ export interface AccountState {
   destinations: Destination[];
   /** payees paid before; the first payment to a new one is the owner's to approve */
   payees: string[];
-  /** the owner's watchlist and open intents: what agents read to know what the owner wants. Neither is authority */
+  /** the owner's watchlist, price alerts and open intents: what agents read to know what the owner wants. None is authority */
   watch: Watch[];
+  alerts: Alert[];
   intents: OwnerIntent[];
   seq: number;
 }
 
 export function emptyState(): AccountState {
-  return { abstraction: "disabled", owners: [], threshold: 1, pendingDevices: [], agents: [], tombstones: [], requests: [], fees: [], spends: [], subAccounts: [], destinations: [], payees: [], watch: [], intents: [], seq: 0 };
+  return { abstraction: "disabled", owners: [], threshold: 1, pendingDevices: [], agents: [], tombstones: [], requests: [], fees: [], spends: [], subAccounts: [], destinations: [], payees: [], watch: [], alerts: [], intents: [], seq: 0 };
 }
 
 export type AgentStatus = "ok" | "unknown" | "expired" | "revoked";
@@ -493,6 +524,28 @@ export function applyOwner(state: AccountState, action: OwnerAction, envelope: E
       if (others.length < s.watch.length) return s;
       if (s.watch.length >= MAX_WATCH) return limit(`at most ${MAX_WATCH} watched markets: stop watching one first`, { max: MAX_WATCH });
       return { ...s, watch: [...s.watch, { venue, symbol, at }] };
+    }
+    case "setAlert": {
+      const venue = action.venue.trim();
+      const symbol = action.symbol.trim();
+      if (action.on !== "true" && action.on !== "") return bad('"on" is "true" to set a price alert, or "" to remove one');
+      // alerts that lapsed are gone: they count for nothing, and one cannot be removed twice
+      const live = s.alerts.filter((x) => nowMs < Date.parse(x.expiresAt));
+      if (action.on === "") {
+        if (!action.id) return bad("a price alert is removed by its id");
+        return live.some((x) => x.id === action.id) ? { ...s, alerts: live.filter((x) => x.id !== action.id) } : bad(`there is no price alert "${action.id}" to remove`);
+      }
+      if (action.id) return bad('a new price alert has the id "": to change one, remove it and set another');
+      if (!VENUE_ID.test(venue)) return bad("a price alert names its venue: lower-case letters, digits and dashes");
+      if (!symbol || charCount(symbol) > 80 || !isPlain(symbol)) return bad("a price alert names its market's symbol: 1 to 80 characters of plain text");
+      if (!(ALERT_CONDITIONS as readonly string[]).includes(action.condition)) return bad('a price alert fires "above" a price or "below" it');
+      const typed = action.price.trim();
+      if (!ALERT_PRICE.test(typed) || !(Number(typed) > 0)) return bad("a price alert's price is a plain positive decimal in the market's quote (63500, 0.62)");
+      const price = Number(typed);
+      if (live.some((x) => x.venue === venue && x.symbol === symbol && x.condition === action.condition && x.price === price)) return bad(`a price alert for ${symbol} at ${venue} ${action.condition} ${typed} is set already`);
+      if (live.length >= MAX_ALERTS) return limit(`at most ${MAX_ALERTS} price alerts at a time: remove one first`, { max: MAX_ALERTS });
+      const seq = s.seq + 1;
+      return { ...s, seq, alerts: [...live, { id: `alert-${String(seq).padStart(4, "0")}`, venue, symbol, condition: action.condition as AlertCondition, price, at, expiresAt: new Date(nowMs + ALERT_DAYS * DAY).toISOString() }] };
     }
     case "setIntent": {
       // an intent that has lapsed is gone: it counts for nothing, and it cannot be changed or reported on

@@ -8,7 +8,8 @@
  *                 `id: <run>.<seq>` (the run is this process's own mark, the seq rises by one an event, so a page names where it stopped),
  *                 `event: <type>`, `data: <JSON>`. A heartbeat every 15 s: a comment line, and an `hb` event without an id, so a page
  *                 that hears nothing for longer knows the stream is silent (a comment alone never reaches a page's script)
- *   two kinds     ACCOUNT events — order, fill, position, balance, paper, statement, card, desk — go out at once, in order, to every page,
+ *   two kinds     ACCOUNT events — order, fill, position, balance, paper, statement, card, desk, alert (a price alert fired) — go out at
+ *                 once, in order, to every page,
  *                 and the last RING_SIZE of them are kept for a resume (the desk among them: a page that comes back after a gap hears that
  *                 its floor moved, and reads it again). COALESCED events — the market's quote, trades and book — go out at most once a
  *                 window per market (quote and trades 100 ms, book 250 ms): the first at once, the latest of what came within the window at
@@ -42,7 +43,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 /** what goes out at once and is kept for a resume */
-export const ACCOUNT_EVENTS = ["order", "fill", "position", "balance", "paper", "statement", "card", "desk"] as const;
+export const ACCOUNT_EVENTS = ["order", "fill", "position", "balance", "paper", "statement", "card", "desk", "alert"] as const;
 /** what goes out at most once a window per market, the latest of what came: the window, ms */
 export const COALESCE_MS: Readonly<Record<string, number>> = { quote: 100, trades: 100, book: 250 };
 export type AccountEvent = (typeof ACCOUNT_EVENTS)[number];

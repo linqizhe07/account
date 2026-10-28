@@ -130,6 +130,12 @@ export type OwnerAction =
   | { type: "liveLeverage"; venue: string; symbol: string; leverage: string; marginMode: string; nonce: number }
   /** a market the owner keeps an eye on — at a venue on the account or one that is not — which agents read: `on` "true" watches it, "" stops */
   | { type: "setWatch"; venue: string; symbol: string; on: string; nonce: number }
+  /** A PRICE ALERT (account/state.ts Alert): the owner is told when a market's price crosses a figure — `condition` "above" (it rises to
+   * the figure or past it) or "below" (it falls to it or under), `price` the figure as a plain decimal in the market's quote (dollars; an
+   * event contract's in dollars a contract: 0.62 for 62¢). `on` "true" sets one (`id` ""), "" removes the one `id` names. The account
+   * itself prices the market every half minute while it runs, says the alert on the page and the push channel when it fires, writes it to
+   * the ledger and lets agents read it. It places nothing and grants nothing: words to the owner, never an order */
+  | { type: "setAlert"; id: string; venue: string; symbol: string; condition: string; price: string; on: string; nonce: number }
   /** The owner's words to an agent (`agent`: its address) or to every agent ("*"): what the owner would like done, where, which way and about
    * how much. It grants nothing — the agent acts only inside its limits, and its cards are still the owner's to answer; `usd` guides it and
    * limits nothing. `id` "" is a new intent, an intent's id changes that one, and a `validUntil` of 0 withdraws it */
@@ -223,14 +229,15 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper", "signOut", "githubHello"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setAlert", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper", "signOut", "githubHello"] as const;
 export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
 export const MONEY_TYPES: ReadonlySet<string> = new Set(["sendAsset", "swap", "approveCard", "agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "liveMove", "agentLiveMove", "liveOrder", "agentLiveOrder", "liveAmend", "agentLiveAmend", "liveClose", "agentLiveClose", "liveLeverage", "agentLiveLeverage", "liveEarn", "agentLiveEarn"]);
-/** how the owner steers and the agents answer: a watchlist, intents, reports, asks. None moves money and none is read by a limit (state.ts
- * covers, spendFor): they are words between the owner and the agents, and authority still comes only from limits, cards and the cap */
-export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setIntent", "answerAsk", "agentReport", "agentAsk", "setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget", "setDesk", "agentDeskSay"]);
+/** how the owner steers and the agents answer: a watchlist, price alerts, intents, reports, asks. None moves money and none is read by a
+ * limit (state.ts covers, spendFor): they are words between the owner and the agents, and authority still comes only from limits, cards
+ * and the cap */
+export const STEER_TYPES: ReadonlySet<string> = new Set(["setWatch", "setAlert", "setIntent", "answerAsk", "agentReport", "agentAsk", "setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget", "setDesk", "agentDeskSay"]);
 /** what is kept in memory (account/memory.ts): their words never reach the ledger, so that what is forgotten is gone */
 export const MEMORY_TYPES: ReadonlySet<string> = new Set(["setMemory", "forgetMemory", "setMemoryRules", "agentRemember", "agentForget"]);
 export const MONEY_TTL_MS = 10 * 60_000;
@@ -321,6 +328,8 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   liveClose: { primary: "AccountTransaction:LiveClose", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "qty", type: "string" }, NONCE] },
   liveLeverage: { primary: "AccountTransaction:LiveLeverage", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "leverage", type: "string" }, { name: "marginMode", type: "string" }, NONCE] },
   setWatch: { primary: "AccountTransaction:SetWatch", fields: [{ name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "on", type: "string" }, NONCE] },
+  // the price is text, a plain decimal as the owner typed it: what the dialog shows is what is signed, and the account reads it back as a number
+  setAlert: { primary: "AccountTransaction:SetAlert", fields: [{ name: "id", type: "string" }, { name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "condition", type: "string" }, { name: "price", type: "string" }, { name: "on", type: "string" }, NONCE] },
   // `agent` is text, not an address: it may be "*", every agent
   setIntent: { primary: "AccountTransaction:SetIntent", fields: [{ name: "id", type: "string" }, { name: "agent", type: "string" }, { name: "venue", type: "string" }, { name: "symbol", type: "string" }, { name: "side", type: "string" }, { name: "usd", type: "string" }, { name: "text", type: "string" }, { name: "validUntil", type: "uint64" }, NONCE] },
   liveEarn: { primary: "AccountTransaction:LiveEarn", fields: [{ name: "venue", type: "string" }, { name: "kind", type: "string" }, { name: "product", type: "string" }, { name: "asset", type: "string" }, { name: "amount", type: "string" }, { name: "maxUsd", type: "string" }, { name: "lands", type: "string" }, { name: "deadline", type: "uint64" }, NONCE] },

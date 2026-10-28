@@ -67,6 +67,7 @@
 .pf-step-acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .pf-steps-h, .pf-wait-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .pf-steps-h h2, .pf-wait-h h2 { margin: 0; }
+.pf-wait-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* waiting for you (a warm card): agent by agent, a round tile and its name, then its cards and its asks, each with Reject (a pill on the
    second surface) and Approve (filled) side by side */

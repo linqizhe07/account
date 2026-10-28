@@ -430,6 +430,8 @@ dialog { color: var(--text); }
 .set { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 0; border-top: 1px solid var(--border); }
 .sheet-sec > .set:first-child { border-top: 0; padding-top: 0; }
 .set > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* more than one way to change it: side by side, wrapping under each other on a narrow sheet */
+.set > .btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .sheet-sec { display: flex; flex-direction: column; gap: 8px; }
 .sheet-sec + .sheet-sec { border-top: 1px solid var(--border); padding-top: 16px; }
 

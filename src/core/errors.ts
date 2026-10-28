@@ -43,6 +43,7 @@ export const CODES = {
   E_WALLET_NOT_CONNECTED: { layer: "WALLET", zh: "场所在连接器目录里，但钱包没有它的注资轨道或 float" },
   E_WALLET_EXPOSURE_CAP: { layer: "WALLET", zh: "超过钱包的总敞口上限" },
   E_WALLET_SESSION_EXPIRED: { layer: "WALLET", zh: "钱包会话已到期或已撤销，注资与提回都停" },
+  E_WALLET_AGENTS_STOPPED: { layer: "WALLET", zh: "owner 一键停掉了所有 agent：写入全停，读照常，直到 owner 签一个新会话" },
   E_WALLET_FLOAT_SHORT: { layer: "WALLET", zh: "场所里的 float 不够提回这么多" },
   E_WALLET_BAD_AMOUNT: { layer: "WALLET", zh: "金额必须大于 0" },
   E_WALLET_GRANT_REVOKED: { layer: "WALLET", zh: "该场所的授权已撤销：不再注资，仍可提回" },

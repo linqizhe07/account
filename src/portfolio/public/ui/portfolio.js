@@ -563,7 +563,12 @@ function pfWaitingHtml(l, owner) {
   const mem = (m) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>Wants to remember: “${esc(m.text)}”</b><span class="dim small">${esc([{ style: "Style", rules: "Rules", venues: "Venues and people" }[m.topic] || m.topic, m.how ? `it learned ${m.how}` : "it learned this", m.at ? pfWhen(m.at) : ""].filter(Boolean).join(" · "))}</span></div><div class="pf-btns pf-keys">${pfBtn("mem-forget", `${icon("x")}<span class="sr">Forget</span>`, { cls: "rkey", data: { agent: m.agent, note: m.id }, off, title: "Forget it" })}${pfBtn("mem-keep", `${icon("check")}<span class="sr">Keep</span>`, { cls: "rkey yes-k", data: { agent: m.agent, note: m.id }, off, title: "Keep it: a signature" })}</div></div>`;
   const knock = (r) => `<div class="pf-item pf-ask"><div class="pf-item-t"><b>${esc(r.name || "An agent")} asks to be let in</b><span class="dim small"><span class="mono">${esc(short(r.address))}</span> · ${esc(nyDay(r.at))} ${esc(nyTime(r.at))}</span></div><div class="pf-btns pf-keys">${pfBtn("letin", `${icon("check")}<span class="sr">Let in</span>`, { cls: "rkey yes-k", data: { agent: r.address }, off, title: "Let it in: opens the form you sign" })}</div></div>`;
   const groups = pfGroups(cards, asks, mems).map((g) => `<div class="pf-grp"><div class="pf-grp-h"><div class="who">${avatar((A.keys.find((k) => k.address === g.agent) || {}).code || g.name, "sm")}<div><b>${esc(g.name)}</b></div></div>${g.cards.length > 1 ? pfBtn("approve-all", `Approve all ${g.cards.length}`, { cls: "btn btn-sm", data: { agent: g.agent }, off }) : ""}</div>${g.cards.map(card).join("")}${g.asks.map(ask).join("")}${g.mems.map(mem).join("")}</div>`).join("");
-  return `<section class="callout pf-wait" aria-labelledby="pf-wait-h"><div class="pf-wait-h"><h2 class="label warn-t" id="pf-wait-h">Waiting for you · ${n}</h2></div>${groups}${knocks.map(knock).join("")}</section>`;
+  // beside the count: this browser told of the next card with the tab in the background (shell.js), and every agent stopped at once — free,
+  // as every tightening is, so offered to any browser here
+  const notify = cards.length && typeof shCardsOffer === "function" && shCardsOffer() ? pfBtn("notify-cards", "Notify me", { cls: "link dim", title: "This browser tells you when an agent's card waits, with the tab in the background" }) : "";
+  const stop = writesOn() && A.dial && !A.dial.sessionEnded && (cards.length || asks.length) ? pfBtn("stop-agents", "Stop all agents", { cls: "btn btn-sm btn-danger", title: "Every agent's orders, moves and payments stop at once; reads go on" }) : "";
+  const tools = notify || stop ? `<div class="pf-wait-tools">${notify}${stop}</div>` : "";
+  return `<section class="callout pf-wait" aria-labelledby="pf-wait-h"><div class="pf-wait-h"><h2 class="label warn-t" id="pf-wait-h">Waiting for you · ${n}</h2>${tools}</div>${groups}${knocks.map(knock).join("")}</section>`;
 }
 /* a venue by its name: a connected one's, or the name of the connection that would connect it */
 function pfVenueName(id) {
@@ -893,6 +898,8 @@ async function pfAct(act, d) {
       return;
     }
     case "approve-all": return void pfApproveAll(d.agent);
+    case "stop-agents": return void (typeof stopAgentsAsk === "function" && stopAgentsAsk());
+    case "notify-cards": return void (typeof shCardsTurnOn === "function" && shCardsTurnOn());
     case "mem-keep": {
       // its words signed as they are: kept, and still what the agent learned
       const m = (A.memoryAsks || []).find((x) => x.agent === d.agent && x.id === d.note);

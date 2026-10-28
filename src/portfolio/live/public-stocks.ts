@@ -87,7 +87,7 @@ export const CBOE = "https://cdn-api.cboe.com/api/global/delayed_quotes";
 /** how far behind the market Cboe's delayed quote is */
 export const CBOE_DELAY_MS = 15 * 60_000;
 /** the stocks and ETFs shown before anything is typed */
-export const US_SHARES: readonly string[] = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "SPY", "QQQ", "AMD", "NFLX", "COIN", "HOOD", "MSTR", "PLTR", "BRK.B", "JPM", "V", "LLY", "UNH", "XOM", "WMT", "COST"];
+export const US_SHARES: readonly string[] = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "SPY", "QQQ", "DIA", "IWM", "AMD", "NFLX", "COIN", "HOOD", "MSTR", "PLTR", "BRK.B", "JPM", "V", "LLY", "UNH", "XOM", "WMT", "COST"];
 /** the source's id, as it has always been: paper books name it as the source of what they hold */
 export const US_STOCKS_ID = "cboe";
 export const US_STOCKS_NAME = "US stocks";

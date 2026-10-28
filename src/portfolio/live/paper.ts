@@ -2685,8 +2685,11 @@ export async function paperSource(req: PaperRequest): Promise<{ source: LiveSour
       const got = await pricer.listAll(Q, LIST_LIMIT);
       // a query: every match, the market whose symbol or base IS the words first (AAPL the share before "aapl-close-above-350…:Yes")
       if (Q) {
+        // the exact ones go first BEFORE the few are picked, not after: a ticker that names a stock and twenty event contracts (NVDA: "Will
+        // NVIDIA (NVDA) close above…", Yes and No each) would otherwise fill the few with the contracts and drop the share itself — and a
+        // search for NVDA on Markets then listed the share with no line of this account to trade it on
         const exact = (m: Market): number => (m.symbol.toUpperCase() === Q.toUpperCase() || m.base.toUpperCase() === Q.toUpperCase() ? 0 : 1);
-        return pick(got.map(({ source, m }) => marketOf(source, m)), Q).sort((a, b) => exact(a) - exact(b));
+        return pick(got.map(({ source, m }) => marketOf(source, m)).sort((a, b) => exact(a) - exact(b)), Q);
       }
       const bySource = new Map<string, Array<{ source: PublicSource; m: Listing }>>();
       for (const x of got) bySource.set(x.source.id, [...(bySource.get(x.source.id) ?? []), x]);

@@ -468,10 +468,25 @@ $("drawer").addEventListener("close", () => {
   if (back && back.isConnected && back.focus) back.focus();
 });
 
-/* "/" searches, "t" opens the ticket, Escape closes the lens's menu or the drawer (a sheet closes on Escape by itself) */
+/* the search takes the focus: it is Markets' and Trade's, so from the Account's pages it comes with Markets */
+function shSearchFocus() {
+  if (ACCOUNT_TABS.includes(ROUTE.tab)) go("markets", {});
+  $("search").focus();
+  $("search").select();
+}
+/* "/" searches — and ⌘K (Ctrl+K elsewhere) from anywhere on the page, a field included, as every market screen has it — "t" opens the
+   ticket, Escape closes the lens's menu or the drawer (a sheet closes on Escape by itself) */
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.defaultPrevented || e.altKey) return;
   const modal = $("modal").open || $("ask").open;
+  if (e.metaKey || e.ctrlKey) {
+    // any other chord is the browser's own
+    if (!modal && !e.shiftKey && String(e.key).toLowerCase() === "k") {
+      e.preventDefault();
+      shSearchFocus();
+    }
+    return;
+  }
   if (e.key === "Escape") {
     if (!$("lens-menu").hidden) return void lensMenu(false);
     if ($("drawer").open && !modal) closeDrawer();
@@ -481,10 +496,7 @@ document.addEventListener("keydown", (e) => {
   if (typing || modal) return;
   if (e.key === "/") {
     e.preventDefault();
-    // the search is Markets' and Trade's: from the Account, "/" goes to Markets with it
-    if (ACCOUNT_TABS.includes(ROUTE.tab)) go("markets", {});
-    $("search").focus();
-    $("search").select();
+    shSearchFocus();
   } else if (e.key === "t" && A) {
     e.preventDefault();
     if (typeof openTicket === "function") openTicket({});
@@ -692,6 +704,140 @@ function shPushedDraw() {
   shPatch();
 }
 
+/* A PRICE ALERT FIRED (the account's `alert` event: account/state.ts FiredAlert with its venue's name — markets.js openAlertSheet set it,
+   service.ts lookAtAlerts found the price across it): said as a toast that stays a while — "Price alert · BTC/USD at Kraken rose above
+   $63,500: $63,512 (Kraken · live)" — and, where the owner asked this browser to (the alert sheet's switch, kept in this browser under
+   SH_NOTIFY_KEY, the browser's own permission asked once), as the browser's notification too, so the alert reaches the owner with the tab
+   in the background; clicking it opens the Alerts list under Watching. An event contract's prices are said in cents. The account's own
+   record of it — the Alerts list, the ledger's note — comes with the read that follows */
+const SH_NOTIFY_KEY = "account.alerts.notify";
+function shNotifyWanted() {
+  try {
+    return localStorage.getItem(SH_NOTIFY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function shNotifySet(on) {
+  try {
+    if (on) localStorage.setItem(SH_NOTIFY_KEY, "1");
+    else localStorage.removeItem(SH_NOTIFY_KEY);
+  } catch {
+    // a private window keeps nothing: the choice holds for this visit alone
+  }
+}
+/* a fired alert in one sentence: the market, where, which way it went and the figure, the price that fired it, whose price that was */
+function shAlertWords(f) {
+  const sym = String(f.symbol || "");
+  const ev = /:/.test(sym) && !/\//.test(sym);
+  const fig = (n) => (ev ? cents(n) : usd(n));
+  return `${sym} at ${f.venueName || nameOf(f.venue)} ${f.condition === "above" ? "rose above" : "fell below"} ${fig(f.price)}: ${fig(f.seen)}${f.from ? ` (${f.from})` : ""}`;
+}
+function shAlertToast(f) {
+  if (!f || !f.symbol) return;
+  const words = shAlertWords(f);
+  toast({ html: `<b>Price alert</b> · ${esc(words)}` }, "info", { ms: 15000 });
+  if (!shNotifyWanted() || typeof Notification !== "function" || Notification.permission !== "granted") return;
+  try {
+    const n = new Notification("Price alert", { body: words, tag: `alert-${f.id || sym}` });
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // a window the browser will not raise from here
+      }
+      go("markets", { tab: "watching" });
+    };
+  } catch {
+    // a browser that shows none: the toast said it
+  }
+}
+/* AN AGENT'S CARD, WITH THE TAB IN THE BACKGROUND (the account's `card` event: a card raised says what it asks, how much, until when and
+   which agent asks — service.ts toldRow). Where the owner asked this browser to (Settings › Cards in the background, or "Notify me" on
+   Waiting for you; kept in this browser under SH_CARDS_KEY, the browser's own permission asked as it is turned on), the browser's
+   notification says it, and stays until it is clicked or the card is answered: clicking it opens the card under Waiting for you. With the
+   page in front and focused the page shows the card itself, and nothing more is said. A card answered, expired or closed takes its
+   notification away. Nothing is answered from the notification: the card is signed on the page */
+const SH_CARDS_KEY = "account.cards.notify";
+const SH_CARD_NOTES = new Map();
+function shCardsWanted() {
+  try {
+    return localStorage.getItem(SH_CARDS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function shCardsSet(on) {
+  try {
+    if (on) localStorage.setItem(SH_CARDS_KEY, "1");
+    else localStorage.removeItem(SH_CARDS_KEY);
+  } catch {
+    // a private window keeps nothing: the choice holds for this visit alone
+  }
+}
+/* whether this browser tells the owner of cards now: asked for here, and allowed by the browser */
+const shCardsOn = () => typeof Notification === "function" && Notification.permission === "granted" && shCardsWanted();
+/* "Notify me" is worth offering: a browser that shows notifications, not blocked for this page, not on yet */
+const shCardsOffer = () => typeof Notification === "function" && Notification.permission !== "denied" && !shCardsOn();
+/* turned on: the browser's permission asked once; a browser that gives none leaves it off and says so */
+async function shCardsTurnOn() {
+  if (typeof Notification !== "function") return void toast("This browser shows no notifications: a card is still said on this page.", "info");
+  const p = Notification.permission === "granted" ? "granted" : await Notification.requestPermission().catch(() => "denied");
+  if (p !== "granted") {
+    shCardsSet(false);
+    toast("This browser gave no permission for notifications: a card is still said on this page.", "info");
+  } else {
+    shCardsSet(true);
+    toast("This browser tells you when an agent's card waits for you, with the tab in the background.", "ok");
+  }
+  render();
+}
+function shCardsTurnOff() {
+  shCardsSet(false);
+  for (const n of SH_CARD_NOTES.values()) {
+    try {
+      n.close();
+    } catch {
+      // gone already
+    }
+  }
+  SH_CARD_NOTES.clear();
+  render();
+}
+function shCardNote(e) {
+  if (!e || !e.id) return;
+  if (e.outcome !== "pending") {
+    const was = SH_CARD_NOTES.get(e.id);
+    if (was) {
+      try {
+        was.close();
+      } catch {
+        // the owner closed it already
+      }
+      SH_CARD_NOTES.delete(e.id);
+    }
+    return;
+  }
+  if (!shCardsOn() || (document.visibilityState === "visible" && document.hasFocus())) return;
+  const words = [e.reason, Number(e.usd) > 0 ? usd(Number(e.usd)) : "", e.expiresAt ? `answer by ${nyTime(e.expiresAt)}` : ""].filter(Boolean).join(" · ");
+  try {
+    const n = new Notification(`${e.agentName || "An agent"} is waiting for you`, { body: words, tag: `card-${e.id}`, requireInteraction: true });
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // a window the browser will not raise from here
+      }
+      n.close();
+      go("portfolio", { card: e.id });
+    };
+    SH_CARD_NOTES.set(e.id, n);
+    // a few dozen at most: the oldest goes first (the browser keeps its own anyway)
+    if (SH_CARD_NOTES.size > 30) SH_CARD_NOTES.delete(SH_CARD_NOTES.keys().next().value);
+  } catch {
+    // a browser that shows none: the page says it
+  }
+}
 /* a listener on the account's stream (ui/stream.js, loaded right after the contract; asked for, as any other script's names are) */
 const shOn = (type, fn) => (typeof stOn === "function" ? stOn(type, fn) : () => {});
 // an order whose status or fill did not move (a trailing stop's stop moved, a queued order's note) is drawn in place, and not read for
@@ -718,10 +864,22 @@ shOn("statement", () => {
   forget("/api/account/statement");
   shSoon();
 });
-shOn("card", () => shSoon());
-// the stream could not resume from where the page stopped (the account restarted, or more came than it keeps): everything read afresh
+// a card raised or answered: said to the owner with the tab in the background (where asked for), then read with the account
+shOn("card", (e) => {
+  shCardNote(e);
+  shSoon();
+});
+// a price alert fired: said now (and as this browser's own notification, where the owner asked for that); its record comes with the read
+shOn("alert", (f) => {
+  shAlertToast(f);
+  shSoon();
+});
+// the stream could not resume from where the page stopped (the account restarted, or more came than it keeps): everything read afresh —
+// a share's financials too: the drawer keeps them ten minutes (markets.js), and a refusal read before a restart (the account started
+// without SEC_CONTACT, then started again with it) would otherwise stand in the drawer until that time ran out
 shOn("snapshot", () => {
   afterAction();
+  forget("/api/account/financials");
   shSoon();
 });
 // focus left a field while a read was drawn only in part: the whole page now

@@ -16,6 +16,7 @@
  *   POST /api/order   {base, side, qty, agent}  route the order and fly it: one flight, one leg per slice, one card at most
  *   POST /api/mode    {mode}           open | guard
  *   POST /api/revoke  {account} · POST /api/restore {account}   an account's switch
+ *   POST /api/agents/stop                 every agent stopped at once: their session ends, Guard, waiting cards closed, the desk paused
  *   POST /api/reset
  *
  * With the account layer mounted (the default for this server; `--classic` runs the original accounts without it). It holds REAL accounts
@@ -132,6 +133,11 @@
  *                                                        with `more` (older bars exist) and, where the history ends, why: a connected
  *                                                        venue's own, or a venue not connected from its public data, without a key; kept
  *                                                        seconds to minutes in a bounded memory, nothing written
+ *   GET  /api/account/financials?symbol=AAPL               a US stock's figures as the company filed them: its last four fiscal years and
+ *                                                        quarters (revenue, net income, diluted EPS) and the shares outstanding, read without
+ *                                                        a key from SEC EDGAR's XBRL company facts (live/edgar.ts); the SEC asks every reader
+ *                                                        to say who they are, so SEC_CONTACT (an email address) names this account to it —
+ *                                                        unset, a refusal that says so. Nothing estimated; kept twelve hours in memory
  *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
  *                                                        bid and ask only, depth "top"); kept a second and a half
  *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds (a source that
@@ -149,7 +155,7 @@
  *
  * and the routes above change: /api/execute and /api/order take no unsigned caller (an agent signs `agentLiveOrder` / `agentLiveMove` at the
  * door; on a layered simulation `agentExecute` / `agentOrder`); /api/say, /api/approve, /api/restore, /api/reset and opening the dial are the
- * owner's and arrive as signed actions; tightening (Guard, an account off) stays free. On the real account /api/markets and /api/quote
+ * owner's and arrive as signed actions; tightening (Guard, an account off, every agent stopped) stays free. On the real account /api/markets and /api/quote
  * answer a refusal: the fixture's event contracts and the simulated router are not on it.
  *
  * Answers under /api/ are never stored by the browser (cache-control: no-store). The page's own files are read from disk once per process
@@ -512,7 +518,7 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     // the dial as the page needs it: the agents' session, the venues switched off for agents, the most leverage they may set
     // and how each venue connected live has answered lately (its health, for the Venues board)
     // and the command an agent's owner runs to add this account's seat (the server's own origin, the seat by its absolute path)
-    res.json({ ok: true, ...(view.real ? realPage(view) : view), mode: o.mode, live: svc.live, dial: { sessionExpiresAt: o.sessionExpiresAt, sessionEnded: Date.parse(o.sessionExpiresAt) <= Date.parse(view.now), revoked: o.revoked, maxLeverage: o.maxLeverage ?? 1 }, health: svc.venueHealth(), memoryAsks: svc.memoryAsks(), agentSetup: agentSetupOf(origin || `${req.protocol}://${req.get("host") ?? "127.0.0.1"}`) });
+    res.json({ ok: true, ...(view.real ? realPage(view) : view), mode: o.mode, live: svc.live, dial: { sessionExpiresAt: o.sessionExpiresAt, sessionEnded: Date.parse(o.sessionExpiresAt) <= Date.parse(view.now), ...(o.stoppedAt && Date.parse(o.sessionExpiresAt) <= Date.parse(view.now) ? { stoppedAt: o.stoppedAt } : {}), revoked: o.revoked, maxLeverage: o.maxLeverage ?? 1 }, health: svc.venueHealth(), memoryAsks: svc.memoryAsks(), agentSetup: agentSetupOf(origin || `${req.protocol}://${req.get("host") ?? "127.0.0.1"}`) });
   }));
 
   app.post("/api/account/pair", (req, res) => {
@@ -857,6 +863,16 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     answerOf(res, await svc.candles(q.venue, q.symbol, q.interval, { range: q.range, before: q.before, limit: q.limit }));
   }));
 
+  // FINANCIALS: a US company's own filed figures — the fiscal years and quarters as filed, with revenue, net income and earnings a share,
+  // and the shares outstanding — read keyless from SEC EDGAR's XBRL company facts with the contact the owner set (service.ts financials,
+  // live/edgar.ts); the stock drawer's Financials part. A read
+  app.get("/api/account/financials", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { symbol: 12 });
+    if (!q) return;
+    answerOf(res, await svc.financials(q.symbol));
+  }));
+
   // one market's order book (best first, `depth` levels a side, 1 to 50) and its latest trades (newest first, `limit`, 1 to 100): a connected
   // venue's own, or a public source's without a key; a market whose source has no book, its best bid and ask only (service.ts marketBook)
   app.get("/api/account/book", wrap(async (req, res) => {
@@ -1095,6 +1111,12 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     res.json(r);
   });
 
+  // EVERY AGENT STOPPED, at once: tightening, so free as Guard is — any browser on this account's page, or a script on this machine, may
+  // stop the agents; starting them again (a new session) is the owner's signature
+  app.post("/api/agents/stop", wrap(async (_req, res) => {
+    res.json(await svc.stopAgents());
+  }));
+
   app.post("/api/restore", (req, res) => {
     if (layer()) return ownerOnly(res, "switching an account back on");
     const { account } = req.body as { account?: string };
@@ -1223,6 +1245,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!classic && service.account) service.watchStreams();
   // while a page listens on the push channel, the account's door follows real venues' orders, payments and earn by itself
   if (!classic && service.account) service.watchDoor();
+  // the price alerts' clock: each standing alert's market priced every half minute, and the owner told the moment one fires (service.ts
+  // watchAlerts) — whether or not a page is open
+  if (!classic && service.account) service.watchAlerts();
   // the desk's clock (account/desk.ts): its cycles, its reports, its session's end
   if (!classic && service.account) service.watchDesk();
   const stop = () => srv.close().then(() => process.exit(0));

@@ -4,26 +4,27 @@
 
 **Your trading accounts on one page, and AI agents that trade only inside the limits you sign.**
 
-Gravit runs on your own computer. It puts your exchanges, brokers, wallets and prediction markets on one page, gives you a paper account with live prices to practise on, and lets AI agents — its own trading desk, or yours over MCP — trade, move and pay inside limits you sign. Website: [linqizhe07.github.io/buyer-agent-demo](https://linqizhe07.github.io/buyer-agent-demo/)
+Gravit runs on your own computer. It puts your exchanges, brokers, wallets and prediction markets on one page, gives you a paper account with live prices to practise on, and lets AI agents — its own trading desk, or yours over MCP — trade, move and pay inside limits you sign. Website: [linqizhe07.github.io/account](https://linqizhe07.github.io/account/)
 
 ## Start in five minutes
 
 You need [Node.js](https://nodejs.org) 22 or newer and Git. Tested on macOS; Linux should work the same way; Windows is untested.
 
 ```bash
-git clone https://github.com/linqizhe07/buyer-agent-demo.git
-cd buyer-agent-demo
+git clone https://github.com/linqizhe07/account.git
+cd account
 npm ci
 npm run account
 ```
 
-Open **http://127.0.0.1:4820** and type the pairing code the terminal printed. That browser is now the owner: everything that moves money is signed by it.
+`npm ci` may warn that a few packages' install scripts were skipped (npm 11.19 and newer ask before running them): nothing here needs them, so go on. Open **http://127.0.0.1:4820** and type the pairing code the terminal printed. That browser is now the owner: everything that moves money is signed by it.
 
 Then, on the page:
 
 1. **Start a paper account** — $10,000 of paper money, live public prices, nothing to connect.
 2. **Trade** — buy or sell crypto, US stocks, perpetuals and event contracts on paper.
 3. **Superagent** (Trade → Superagent) — paste an API key and press **Start the superagent**. The desk trades your paper account by itself: every trade lands on the chart, and each step it takes is played as it happens.
+4. **Watch** (Markets) — the day in six figures and the US session clock at the top; ★ a market to watch it, 🔔 to be told when it crosses a price — on the page, and as a notification if you ask. Your agents read both. ⌘K or `/` searches. Open a US stock and its **Financials** are there as the company filed them with the SEC — start the account with `SEC_CONTACT` set to your email, since the SEC asks every reader to say who they are.
 
 The superagent needs an AI model to think with. Paste a key from any of Anthropic, OpenAI, DeepSeek, Gemini, xAI, Kimi, Qwen, OpenRouter, Groq, Together or Meta — the account tells whose key it is and picks that provider's best model — or run a model on your machine with Ollama or vLLM (no key). Its calls are billed to your key.
 
@@ -48,6 +49,8 @@ Gravit has no server in the middle, and no analytics: your computer reads public
 - **You sign what matters.** Orders, movements and every agent's limit are signed by your browser's key; the account checks each signature.
 - **Guard or Beast.** In Guard, whatever an agent asks for waits for your yes on a card. In Beast, agents act at once — but only inside the limits you signed.
 - **Hard caps.** No order or movement is worth more than `--live-cap`, and money leaves a venue only for a place shown to be yours.
+- **One button stops them all.** *Stop all agents* ends every agent's session at once, back in Guard, with waiting cards closed and the desk paused. It needs no signature; starting them again is a new session, signed by you, and a restart keeps them stopped.
+- **Cards find you.** Turn on *Cards in the background* and this browser's notification tells you when an agent waits on you, with the tab in the background. What agents asked survives a restart; a card does not: it is closed, and its agent is told why.
 - **A record of everything** in a hash-chained log on your computer, and a Statement you can filter and export.
 - **Signing in with GitHub.** When Gravit asks you to sign in with GitHub before a new paper account, you type a short code on GitHub's own page. It reads your GitHub username, name and avatar — never your email — keeps them on your computer, and keeps GitHub's token in memory only. Saying hi in the project's GitHub thread is a box you tick yourself; it is never ticked for you. A paper account already on your computer opens without signing in.
 
@@ -61,7 +64,7 @@ Press **Copy setup command** (Portfolio's *Get started*, or under Agents) and ru
 npm run account:service -- install --live-cap 20
 ```
 
-It starts when you log in and restarts if it stops. Also `status`, `restart` (after an update), `logs`, `code` (the pairing code) and `uninstall`.
+It starts when you log in and restarts if it stops. Also `status`, `restart` (after an update), `logs`, `code` (the pairing code) and `uninstall`. The `SEC_CONTACT` set in the shell that runs `install` goes with it.
 
 ## Look around without anything real
 
@@ -76,6 +79,12 @@ The same page with stand-in venues at http://127.0.0.1:4821 — no network, no m
 - `npm run account -- --port 4825 --home ~/gravit-second` runs a second, separate account; `--fresh` starts one from nothing.
 - In Chinese: [docs/README.zh.md](docs/README.zh.md) (the full description), [COOKBOOK.md](COOKBOOK.md) (recipes) and [docs/account.md](docs/account.md) (how every part works).
 - `npm test` · `npm run typecheck`
-- Questions and bugs: [GitHub issues](https://github.com/linqizhe07/buyer-agent-demo/issues).
+- Questions and bugs: [GitHub issues](https://github.com/linqizhe07/account/issues).
+
+## License
+
+Apache-2.0: see [LICENSE](LICENSE). Copyright 2026 Linqi Zhe. You may use, change and redistribute it, including in something you sell, as long as the licence and notices travel with it; it comes with no warranty.
+
+To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md). A security problem goes privately, as [SECURITY.md](SECURITY.md) says, never in a public issue.
 
 Gravit is not financial advice. Real trading is at your own risk; paper money is not real money.
