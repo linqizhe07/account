@@ -27,7 +27,7 @@ import { networkNo, rateLimitedNo, unreachable, venueSaidNo, type Http, type Htt
 
 /** THE APP THIS BUILD SIGNS IN WITH. Its client id is public (GitHub's device flow needs no secret); empty, no sign-in is asked for and a
  * paper account opens as it always has. `discussion`: the number of the pinned thread in `repo` where the owner may say hi (0: none) */
-export const GITHUB_APP = { clientId: "", repo: "linqizhe07/buyer-agent-demo", discussion: 0 };
+export const GITHUB_APP = { clientId: "", repo: "linqizhe07/account", discussion: 0 };
 
 export interface GitHubConfig {
   clientId: string;

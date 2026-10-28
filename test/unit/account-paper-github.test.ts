@@ -21,7 +21,7 @@ import { PortfolioService } from "../../src/portfolio/service.ts";
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const START = Date.parse("2026-10-21T15:00:00Z");
 const owner = simKey("owner");
-const CONFIG = { clientId: "Iv23testclient0000000", repo: "linqizhe07/buyer-agent-demo", discussion: 7 };
+const CONFIG = { clientId: "Iv23testclient0000000", repo: "linqizhe07/account", discussion: 7 };
 const TOKEN = "ghu_16C7e42F292c6912E7710c838347Ae178B4a";
 const homes: string[] = [];
 afterAll(() => {

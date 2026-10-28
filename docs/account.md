@@ -475,7 +475,7 @@ Robinhood 的三条线都是它自己发布的接口（2026-10-05 读）：股�
 - 用户在 github.com/login/device 自己输入、批准：GitHub 自己的页面、用户自己的浏览器，这个页面看不到 GitHub 的密码。
 - 服务按 `interval` 问 `POST github.com/login/oauth/access_token`：`authorization_pending` 接着等；`slow_down` 以后每次多等 5 秒（或 GitHub 说的间隔）；`expired_token`、`access_denied`、`device_flow_disabled` 结束这个码，原话写在表单上；网络抖一下、429、5xx 下一轮再问。
 - 拿到令牌后 `GET api.github.com/user` 只读 `login`、`id`、`name`、`avatar_url`（头像只认 `avatars.githubusercontent.com` 的 https 地址）；**不读邮箱**，答复里有也不读。
-- App 的权限只有 Repository → Discussions: Read & write，只装在 `linqizhe07/buyer-agent-demo` 上：用户的令牌能做的就是在这个仓库的讨论里评论，碰不到用户自己的仓库和账户。
+- App 的权限只有 Repository → Discussions: Read & write，只装在 `linqizhe07/account` 上：用户的令牌能做的就是在这个仓库的讨论里评论，碰不到用户自己的仓库和账户。
 
 **存储**：`<home>/github/identity.json` = `{v:1, identity?: {login, id, name?, avatarUrl?, at}, hello?: {url, at}}`，0600，目录 0700；写法同大脑钥匙文件（新临时文件 `wx` 0600、fsync、rename、fsync 目录，链接一律拒绝），读法同钥匙文件（`readSecretFile` 加形状检查，不对就当没人登录）。令牌只在内存里，最多 8 小时，refresh token 不留；不进账本、日志、`/api/account`（MCP 席位也读它）、页面存储。重启以后身份还在（开新纸上账户不用再登），打招呼要重新登录（令牌没了）。
 
@@ -500,12 +500,12 @@ Robinhood 的三条线都是它自己发布的接口（2026-10-05 读）：股�
 边界情况：码 15 分钟过期；从不比 `interval` 问得快；登录中途重启，码就没了，页面回到 "Sign in with GitHub"；讨论锁了、Discussions 关了、app 没装：原话，什么都不发，纸上账户照样开；离线：新的纸上账户开不了，直到 GitHub 回答，已有的不受影响。替身：`npx tsx test/standin/ui-standin.ts --port 4824 --github`。
 
 **owner 在 GitHub 上要做的事**（不是代码）：
-1. Settings → Developer settings → GitHub Apps → New GitHub App：名字（如 "Gravit"），Homepage `https://linqizhe07.github.io/buyer-agent-demo/`，Callback URL 空着。
+1. Settings → Developer settings → GitHub Apps → New GitHub App：名字（如 "Gravit"），Homepage `https://linqizhe07.github.io/account/`，Callback URL 空着。
 2. 勾 **Enable Device Flow**；**Expire user authorization tokens** 保持勾着；Webhook 的 **Active** 取消。
 3. 权限只给 **Repository → Discussions: Read and write**。
 4. **Where can this GitHub App be installed? → Any account**（只能自己装的 app，别人授权不了）。
 5. 建好，复制 **Client ID**（公开值）。不要 client secret，不要私钥。
-6. **Install App** → 自己的账户 → Only select repositories → `buyer-agent-demo`。
+6. **Install App** → 自己的账户 → Only select repositories → `account`。
 7. 仓库 Settings → Features → 打开 **Discussions**；在 **Announcements** 分类里建一个讨论（"👋 Who uses Gravit"），**置顶**，不要锁；记下编号。
 
 然后把 Client ID 和讨论编号填进 `live/github.ts` 的 `GITHUB_APP`，闸门就开了。

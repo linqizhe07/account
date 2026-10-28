@@ -430,7 +430,7 @@ describe("the stand-in with --github: a new paper account asks for a GitHub sign
         return { status: r.status, body: await r.json() };
       };
       const first = await read("/api/account/github");
-      expect(first).toMatchObject({ on: true, thread: "https://github.com/linqizhe07/buyer-agent-demo/discussions/1" });
+      expect(first).toMatchObject({ on: true, thread: "https://github.com/linqizhe07/account/discussions/1" });
       expect(first.signedIn).toBeUndefined();
       expect((await read("/api/account")).venues.some((v: { id: string }) => v.id === "paper-momentum")).toBe(true);
       const refused = await seed({ type: "connectVenue", venue: "paper-2", connector: "live:paper", label: "", credentialRef: "" });
@@ -443,8 +443,8 @@ describe("the stand-in with --github: a new paper account asks for a GitHub sign
       expect(now.signedIn).toMatchObject({ login: "standin-octo", name: "Stand-in Octo" });
       expect(now.hello).toEqual({ words: "👋 @standin-octo started a paper account", can: true });
       expect((await seed({ type: "connectVenue", venue: "paper-2", connector: "live:paper", label: "", credentialRef: "" })).status).toBe(200);
-      const said = await seed({ type: "githubHello", repo: "linqizhe07/buyer-agent-demo", discussion: 1, body: "👋 @standin-octo started a paper account" });
-      expect(said.body).toMatchObject({ ok: true, kind: "result", result: { url: "https://github.com/linqizhe07/buyer-agent-demo/discussions/1#discussioncomment-1" } });
+      const said = await seed({ type: "githubHello", repo: "linqizhe07/account", discussion: 1, body: "👋 @standin-octo started a paper account" });
+      expect(said.body).toMatchObject({ ok: true, kind: "result", result: { url: "https://github.com/linqizhe07/account/discussions/1#discussioncomment-1" } });
       expect((await read("/api/account/github")).hello).toMatchObject({ can: false, said: { url: expect.stringContaining("#discussioncomment-1") } });
     } finally {
       await g.close();

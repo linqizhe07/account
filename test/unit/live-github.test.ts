@@ -22,7 +22,7 @@ afterAll(() => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
 });
 
-const CONFIG = { clientId: "Iv23testclient0000000", repo: "linqizhe07/buyer-agent-demo", discussion: 7 };
+const CONFIG = { clientId: "Iv23testclient0000000", repo: "linqizhe07/account", discussion: 7 };
 const DEVICE = "dc_3584d83530557fdd1f46af8289938c8ef79f9dc5";
 const TOKEN = "ghu_16C7e42F292c6912E7710c838347Ae178B4a";
 const REFRESH = "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c";
@@ -94,7 +94,7 @@ describe("which app a server signs in with", () => {
   it("is the build's (none until the owner names one), or the environment's; a value that is not one is said and the build's kept", () => {
     expect(GITHUB_APP.clientId).toBe("");
     expect(githubConfig({})).toBeUndefined();
-    expect(githubConfig({ PORTFOLIO_GITHUB_CLIENT_ID: "Iv23li8abcdEFGH12345", PORTFOLIO_GITHUB_DISCUSSION: "12" })).toEqual({ clientId: "Iv23li8abcdEFGH12345", repo: "linqizhe07/buyer-agent-demo", discussion: 12 });
+    expect(githubConfig({ PORTFOLIO_GITHUB_CLIENT_ID: "Iv23li8abcdEFGH12345", PORTFOLIO_GITHUB_DISCUSSION: "12" })).toEqual({ clientId: "Iv23li8abcdEFGH12345", repo: "linqizhe07/account", discussion: 12 });
     // an empty value turns it off, whatever the build names
     expect(githubConfig({ PORTFOLIO_GITHUB_CLIENT_ID: "" })).toBeUndefined();
     const said: string[] = [];
@@ -151,7 +151,7 @@ describe("the device flow, request by request", () => {
   it("checks the thread before saying anything in it, and posts nothing to one that is off, missing or locked", async () => {
     for (const [o, words] of [
       [{ discussions: false }, /Discussions are turned off/],
-      [{ thread: null }, /does not show linqizhe07\/buyer-agent-demo/],
+      [{ thread: null }, /does not show linqizhe07\/account/],
       [{ thread: {} }, /no discussion #7/],
       [{ thread: { id: "D_x", locked: true } }, /is locked/],
     ] as const) {
@@ -161,7 +161,7 @@ describe("the device flow, request by request", () => {
     }
     const forbidden = fakeGitHub({ mutation: () => json({ errors: [{ type: "FORBIDDEN", message: "Resource not accessible by integration (octo-cat)" }] }) });
     const no = refusal(await postHello(forbidden.http, TOKEN, CONFIG, helloWords("octo-cat")));
-    expect(no.message).toMatch(/may not comment in linqizhe07\/buyer-agent-demo/);
+    expect(no.message).toMatch(/may not comment in linqizhe07\/account/);
     // GitHub's own words are not kept: they may name who is signed in, and a refusal lands in the ledger
     expect(JSON.stringify(no)).not.toContain("octo-cat");
     const gh = fakeGitHub();
@@ -313,9 +313,9 @@ describe("who signed in, on disk", () => {
   it("keeps where hi was said when they sign out", () => {
     const h = home();
     keepIdentity(h, { login: "octo-cat", id: 1, at: "2026-10-21T08:00:00.000Z" });
-    keepHello(h, { url: "https://github.com/linqizhe07/buyer-agent-demo/discussions/7#discussioncomment-9", at: "2026-10-21T08:01:00.000Z" });
+    keepHello(h, { url: "https://github.com/linqizhe07/account/discussions/7#discussioncomment-9", at: "2026-10-21T08:01:00.000Z" });
     forgetIdentity(h);
-    expect(readGitHubFile(h)).toEqual({ v: 1, hello: { url: "https://github.com/linqizhe07/buyer-agent-demo/discussions/7#discussioncomment-9", at: "2026-10-21T08:01:00.000Z" } });
+    expect(readGitHubFile(h)).toEqual({ v: 1, hello: { url: "https://github.com/linqizhe07/account/discussions/7#discussioncomment-9", at: "2026-10-21T08:01:00.000Z" } });
     expect(existsSync(join(h, GITHUB_FILE))).toBe(true);
   });
 });

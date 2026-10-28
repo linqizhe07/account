@@ -44,7 +44,7 @@ async function boot(withGitHub = true) {
     publicMarkets: [],
     liveWrites: { capUsd: 100, pairingCode: "K7QX-M2PA" },
     account: { owners: [{ id: owner.address, kind: "eoa", label: "owner", addedAt: new Date(START).toISOString() }] },
-    ...(withGitHub ? { github: { clientId: "Iv23testclient0000000", repo: "linqizhe07/buyer-agent-demo", discussion: 7, http: github, schedule: (fn: () => void) => (due.push(fn), () => undefined) } } : {}),
+    ...(withGitHub ? { github: { clientId: "Iv23testclient0000000", repo: "linqizhe07/account", discussion: 7, http: github, schedule: (fn: () => void) => (due.push(fn), () => undefined) } } : {}),
   });
   const srv = await startPortfolioServer({ port: 0, service, snapshotMs: 0 });
   servers.push(srv);
@@ -77,7 +77,7 @@ describe("the GitHub sign-in's routes", () => {
     const { srv, due } = await boot();
     const page = { origin: srv.url, "sec-fetch-site": "same-origin" };
     const first = await send(srv.url, "/api/account/github");
-    expect(first.body).toMatchObject({ ok: true, on: true, repo: "linqizhe07/buyer-agent-demo", thread: "https://github.com/linqizhe07/buyer-agent-demo/discussions/7" });
+    expect(first.body).toMatchObject({ ok: true, on: true, repo: "linqizhe07/account", thread: "https://github.com/linqizhe07/account/discussions/7" });
     expect(first.body.signedIn).toBeUndefined();
     // a program that sends no browser's headers starts nothing
     expect((await send(srv.url, "/api/account/github/start", { method: "POST", body: "{}" })).status).toBe(403);

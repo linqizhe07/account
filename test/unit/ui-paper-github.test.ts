@@ -48,7 +48,7 @@ function page() {
   return { run, out, set: (name: string, value: unknown) => run(`${name} = ${JSON.stringify(value)}`) };
 }
 
-const THREAD = "https://github.com/linqizhe07/buyer-agent-demo/discussions/7";
+const THREAD = "https://github.com/linqizhe07/account/discussions/7";
 const WORDS = "👋 @octo-cat started a paper account";
 const panel = (p: ReturnType<typeof page>, g: unknown, books: unknown[] = []) => p.run<string>(`ghPanelHtml(${JSON.stringify(g)}, ${JSON.stringify(books)})`);
 
@@ -60,7 +60,7 @@ describe("the paper form's GitHub panel", () => {
   });
   it("signed out: one button, what it reads (never the email), and the books kept here to continue without it", () => {
     const p = page();
-    const h = panel(p, { on: true, repo: "linqizhe07/buyer-agent-demo", thread: THREAD, hello: { can: false } }, [{ venue: "paper-momentum", name: "Momentum", cashUsd: 25000 }]);
+    const h = panel(p, { on: true, repo: "linqizhe07/account", thread: THREAD, hello: { can: false } }, [{ venue: "paper-momentum", name: "Momentum", cashUsd: 25000 }]);
     expect(h).toContain('data-gh="start"');
     expect(h).toContain("Sign in with GitHub to open a paper account");
     expect(h).toMatch(/username, name and avatar — never your email/);
@@ -80,7 +80,7 @@ describe("the paper form's GitHub panel", () => {
   });
   it("signed in: who, Sign out, and the hi as a box left unticked with its exact words", () => {
     const p = page();
-    const h = panel(p, { on: true, repo: "linqizhe07/buyer-agent-demo", thread: THREAD, signedIn: { login: "octo-cat", name: "The Octocat", at: "2026-10-21T08:00:00Z" }, hello: { words: WORDS, can: true } });
+    const h = panel(p, { on: true, repo: "linqizhe07/account", thread: THREAD, signedIn: { login: "octo-cat", name: "The Octocat", at: "2026-10-21T08:00:00Z" }, hello: { words: WORDS, can: true } });
     expect(h).toContain("Signed in with GitHub as <b>@octo-cat</b>");
     expect(h).toContain('data-gh="out"');
     expect(h).toMatch(/<input type="checkbox" name="hello" \/>/);
