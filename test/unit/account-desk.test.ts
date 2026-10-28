@@ -409,6 +409,22 @@ describe("the floor, the clock, the words", () => {
     expect(v.session?.cycles).toBe(0);
   });
 
+  it("every agent stopped: the desk pauses and its room says why, no cycle runs; it resumes on the owner's signature, after a new session", async () => {
+    const { desk, hire, own, svc, home } = await boot();
+    await hire();
+    expect((await svc.stopAgents()).desk).toBe(true);
+    expect((await desk.view())!.session?.state).toBe("paused");
+    expect(readRoom(home).at(-1)?.text).toBe("You stopped every agent: the desk is paused, and no cycle runs until you start the agents again and resume it. Open leads keep their plan.");
+    await desk.cycle("test");
+    expect((await desk.view())!.funnel.scanned).toBe(0);
+    // paused already: a second stop has nothing to pause
+    expect((await svc.stopAgents()).desk).toBe(false);
+    expect(code(await own({ type: "setPolicy", change: "session", value: "30d" }))).toBe("account");
+    expect(code(await own({ type: "setDesk", desk: "desk", change: "resume", value: "" }))).toBe("account");
+    await desk.cycle("test");
+    expect((await desk.view())!.funnel.scanned).toBe(1);
+  });
+
   it("the objective and a charter change by signature; the venue cannot move with a lead open", async () => {
     const { desk, hire, own } = await boot();
     await hire();

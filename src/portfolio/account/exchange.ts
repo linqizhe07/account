@@ -66,11 +66,12 @@ import { actionHash, BRAIN_KEY_TTL_MS, PAPER_TTL_MS, PAPER_TYPES, SIGN_OUT_TTL_M
 import { deskBrainKeyProblem, fingerprintOf, setBrainKeyProblem } from "./brain-keys.ts";
 import { LiveMoves, type LiveMoney } from "./live-moves.ts";
 import { LiveOrders, type CloseQuote, type LiveOrder, type OrderQuote } from "./live-orders.ts";
+import { figure } from "./statement.ts";
 import { LiveEarns, type EarnDesk, type EarnQuote, type LiveEarn } from "./live-earn.ts";
 import type { KeptAuthorisation } from "./pay-real.ts";
 import { CARD_TTL_MS, modeRules, type ModeRule } from "./mode-rules.ts";
 import { TOPIC_WORDS, type MemoryStore } from "./memory.ts";
-import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, isOwner, MAX_ASKS, nameHolder, refsOf, renewSpend, spendFor, type AccountState, type AgentKey, type AgentReport, type AskKind, type OwnerKey, type SpendApproval, type SubAccount } from "./state.ts";
+import { activeAgents, agentStatus, applyOwner, applyReport, ASK_TTL_MS, askProblem, ASKS_PER_AGENT, ASKS_PER_HOUR, cleanName, covers, deviceKeys, EARN_NAMES, emptyState, FIRED_ALERTS_KEPT, isOwner, MAX_ASKS, nameHolder, refsOf, renewSpend, spendFor, type AccountState, type AgentKey, type AgentReport, type Alert, type AskKind, type FiredAlert, type OwnerKey, type SpendApproval, type SubAccount } from "./state.ts";
 
 const HUB = "metamask";
 /** devices that have asked to sign and wait for an owner, at most, at one time */
@@ -107,6 +108,8 @@ export interface CardLike {
   offer?: CardOffer | undefined;
   /** the spending approval this card holds its share of: released there, and nowhere else, when the card is answered */
   approval?: string | undefined;
+  /** why it closed without going through, in the account's words (rejected, expired, every agent stopped, the account restarted) */
+  closedWhy?: string | undefined;
 }
 
 export interface CardOffer {
@@ -301,6 +304,11 @@ export type DeclinedAsk = AgentAsk & { declinedAt: string };
 /** how long a declined ask is shown to the agent that asked it */
 export const DECLINED_SHOWN_MS = 86_400_000;
 
+/** what a card closed without an answer says, to the owner and to the agent that asked: every agent stopped (service.ts stopAgents), or
+ * the account started again while it waited (a card is this run's: what it showed the owner is not kept, account/live-orders.ts release) */
+export const STOPPED_CARD = "You stopped every agent before it was answered; nothing moved";
+export const RESTARTED_CARD = "The account restarted before it was answered; nothing moved. The agent asks again if it still wants it";
+
 export interface AccountSeed {
   owners?: OwnerKey[] | undefined;
 }
@@ -403,16 +411,19 @@ export class AccountEngine {
   private earnSeq = 0;
   /** wrong pairing codes since the server started: after a few, none is accepted until it restarts */
   private codeMisses = 0;
-  /** what agents have asked the owner for: in memory only, never rebuilt after a restart */
+  /** what agents have asked the owner for: brought back after a restart from the asks' own rows (adoptAsks) */
   private asks: AgentAsk[] = [];
   private askSeq = 0;
   /** per agent key, when its asks were taken in the last hour */
   private readonly askTimes = new Map<string, number[]>();
-  /** asks the owner declined: in memory only, shown to the agent that asked for a day */
+  /** asks the owner declined: shown to the agent that asked for a day, after a restart too (adoptAsks) */
   private declined: DeclinedAsk[] = [];
   /** an ask the agent asked again, by its old id: the id of the ask that took its place. A replaced ask takes a new id, so the owner's
    * answer, signed by id, is only ever about the words the owner was shown */
   private readonly askReplaced = new Map<string, string>();
+  /** price alerts that fired, newest first — this run's and, after a restart, earlier runs' (account/restore.ts): the page and the agents
+   * see the last few (FIRED_ALERTS_KEPT) */
+  firedAlerts: FiredAlert[] = [];
 
   constructor(
     readonly host: Host,
@@ -438,6 +449,7 @@ export class AccountEngine {
     this.asks = [];
     this.declined = [];
     this.askReplaced.clear();
+    this.firedAlerts = [];
     this.payer?.reset();
   }
 
@@ -666,6 +678,7 @@ export class AccountEngine {
       case "signOut":
       case "setDestination":
       case "setWatch":
+      case "setAlert":
       case "setIntent": {
         // "every venue" is the venues on the account when the owner signs: one plugged in later is not covered until it is named
         const here = action.type === "approveSpend" ? [...this.host.accounts().map((a) => a.id), ...this.state.subAccounts.map((x) => `sub:${x.name}`)] : [];
@@ -766,7 +779,7 @@ export class AccountEngine {
       case "agentReport":
         return this.report(action, envelope, signer, agent!);
       case "agentAsk":
-        return this.ask(action, agent!);
+        return this.ask(action, agent!, envelope);
       case "agentRemember":
       case "agentForget":
         return this.agentMemory(action, signer, agent!);
@@ -896,7 +909,12 @@ export class AccountEngine {
       case "setDestination":
         return a.address === "" ? `destination "${a.label}" removed` : `destination "${a.label}" added on ${a.chain}: usable in 24 hours`;
       case "setWatch":
-        return a.on === "true" ? `watching ${a.symbol.trim()} at ${a.venue.trim()}` : `no longer watching ${a.symbol.trim()} at ${a.venue.trim()}`;
+        return a.on === "true" ? `watching ${a.symbol.trim()} at ${this.name(a.venue.trim())}` : `no longer watching ${a.symbol.trim()} at ${this.name(a.venue.trim())}`;
+      case "setAlert": {
+        if (a.on !== "true") return `price alert ${a.id} removed`;
+        const set = this.state.alerts.find((x) => x.venue === a.venue.trim() && x.symbol === a.symbol.trim() && x.condition === a.condition && x.price === Number(a.price));
+        return `price alert${set ? ` ${set.id}` : ""}: ${a.symbol.trim()} at ${this.name(a.venue.trim())} ${a.condition === "above" ? "rises above" : "falls below"} ${figure(Number(a.price))}${set ? ` · until ${etDate(Date.parse(set.expiresAt))}` : ""}`;
+      }
       case "setIntent": {
         if (a.validUntil === 0) return `intent ${a.id} withdrawn`;
         const it = this.state.intents.find((x) => x.envelope.action === a);
@@ -939,9 +957,11 @@ export class AccountEngine {
     return this.asks;
   }
 
-  /** An agent asks the owner for something only the owner signs. Kept in memory for a day, one ask per agent, kind and venue (asking again
-   * replaces it, under a new id), a few at a time per agent so that one cannot crowd out the others, and five an hour per key. It grants nothing */
-  private ask(a: Extract<AgentAction, { type: "agentAsk" }>, agent: AgentKey): Outcome {
+  /** An agent asks the owner for something only the owner signs. Kept for a day, one ask per agent, kind and venue (asking again replaces
+   * it, under a new id), a few at a time per agent so that one cannot crowd out the others, and five an hour per key. It grants nothing.
+   * Its row carries the ask and the agent's signed envelope: a restart brings back the asks still waiting, the signature checked again
+   * (account/restore.ts) */
+  private ask(a: Extract<AgentAction, { type: "agentAsk" }>, agent: AgentKey, envelope: Envelope): Outcome {
     const now = this.nowMs();
     const wrong = askProblem(a);
     if (wrong) return no("E_ACCOUNT_BAD_ACTION", { message: wrong });
@@ -974,7 +994,7 @@ export class AccountEngine {
       // a bounded memory, oldest out first: a day's askings again at most, and one older than a day has nothing waiting behind it
       if (this.askReplaced.size > MAX_ASKS * 24) this.askReplaced.delete(this.askReplaced.keys().next().value!);
     }
-    this.host.log({ kind: "action", venue: a.venue || "*", tool: a.type, signer: agent.address, outcome: "asked", reason: `${agent.name} asks the owner: ${a.kind}${a.venue ? ` at ${a.venue}` : ""}${a.usd ? ` · $${a.usd}` : ""}${entry.text ? ` · ${entry.text}` : ""}`, agent: slug(agent.name) });
+    this.host.log({ kind: "action", venue: a.venue || "*", tool: a.type, signer: agent.address, envelope: ledgered(envelope), outcome: "asked", reason: `${agent.name} asks the owner: ${a.kind}${a.venue ? ` at ${a.venue}` : ""}${a.usd ? ` · $${a.usd}` : ""}${entry.text ? ` · ${entry.text}` : ""}`, agent: slug(agent.name), native: { ask: entry, ...(same ? { replaces: same.id } : {}) } });
     return { ok: true, kind: "result", result: { ask: entry, replaced: !!same } };
   }
 
@@ -1017,6 +1037,15 @@ export class AccountEngine {
    * or topped up (topup), a venue connected (venue), a new session, a leverage cap, a mode. Run only after the action went through. An ask
    * that names a venue is answered by an action about that venue; one that names none, by any */
   private answered(a: OwnerAction, envelope: Envelope): void {
+    const had = this.asks;
+    this.answer(a, envelope);
+    // the asks this answered, on the record: a restart brings back only what no answer closed (account/restore.ts)
+    const closed = had.filter((x) => !this.asks.includes(x)).map((x) => x.id);
+    if (closed.length) this.host.log({ kind: "note", venue: "*", tool: "asks answered", reason: `${a.type} answered ${closed.join(", ")}`, detail: { asksAnswered: closed } });
+  }
+
+  /** the closing itself, kind by kind (answered keeps the record of what it closed) */
+  private answer(a: OwnerAction, envelope: Envelope): void {
     const close = (kind: AskKind, agent?: string, venues?: string[]) => {
       this.asks = this.asks.filter((x) => !(x.kind === kind && (agent === undefined || x.agent === agent) && (venues === undefined || x.venue === "" || venues.includes(x.venue))));
     };
@@ -1194,11 +1223,39 @@ export class AccountEngine {
   }
 
   /** the account as a restart rebuilt it from its ledgers (account/restore.ts): its owners, agents, limits — and the ids it had reached */
-  adopt(state: AccountState, ids: { order: number; payment: number; earn?: number | undefined }): void {
+  adopt(state: AccountState, ids: { order: number; payment: number; earn?: number | undefined }, fired: FiredAlert[] = []): void {
     this.state = state;
     this.orderSeq = Math.max(this.orderSeq, ids.order);
     this.earnSeq = Math.max(this.earnSeq, ids.earn ?? 0);
     this.seq = Math.max(this.seq, ids.payment);
+    // the price alerts earlier runs fired, as their ledgers said them (newest first), before any this run fires
+    this.firedAlerts = [...this.firedAlerts, ...fired].slice(0, FIRED_ALERTS_KEPT);
+  }
+
+  /** WHAT AGENTS ASKED, AFTER A RESTART (account/restore.ts): the asks still waiting, each signature checked again; the ones the owner
+   * declined in the last day, still shown to the agent that asked; which ask took the place of which; when each key asked in the last
+   * hour (five an hour, across a restart as within a run); and the ids, continued — so that an answer signed for ask-0003 is only ever
+   * about the words of ask-0003 */
+  adoptAsks(back: { waiting: AgentAsk[]; declined: DeclinedAsk[]; replaced: Array<[string, string]>; times: Array<[string, number[]]>; seq: number }): void {
+    this.asks = [...back.waiting, ...this.asks];
+    this.declined = [...back.declined, ...this.declined];
+    for (const [was, now] of back.replaced) this.askReplaced.set(was, now);
+    for (const [key, at] of back.times) this.askTimes.set(key, [...at, ...(this.askTimes.get(key) ?? [])]);
+    this.askSeq = Math.max(this.askSeq, back.seq);
+  }
+
+  /** A PRICE ALERT FIRED (service.ts lookAtAlerts priced its market and found the price at the figure or across it): the alert leaves the
+   * standing ones, joins the fired ones the page and the agents see, and is written to the ledger as a note a restart reads back
+   * (account/restore.ts). `seen` is the price that fired it, `from` whose price that was in the source's own words. Nothing is placed and
+   * nothing moves: words to the owner. Undefined where no such alert stands (it lapsed, was removed, or fired already) */
+  fireAlert(id: string, seen: number, from: string): FiredAlert | undefined {
+    const a = this.state.alerts.find((x) => x.id === id);
+    if (!a) return undefined;
+    const fired: FiredAlert = { ...a, seen, from, firedAt: this.host.now() };
+    this.state = { ...this.state, alerts: this.state.alerts.filter((x) => x.id !== id) };
+    this.firedAlerts = [fired, ...this.firedAlerts].slice(0, FIRED_ALERTS_KEPT);
+    this.host.log({ kind: "note", venue: a.venue, reason: `price alert ${a.id} fired: ${a.symbol} at ${this.name(a.venue)} ${a.condition === "above" ? "rose above" : "fell below"} ${figure(a.price)} — ${figure(seen)} (${from})`, detail: { alertFired: fired } });
+    return fired;
   }
 
   /** is the approval still the owner's? Its own signed envelope is checked against the account's CURRENT owners, every time it is used */
@@ -1292,6 +1349,8 @@ export class AccountEngine {
     const card = this.host.card(action.card);
     // a card that ran out of time was closed by the account already (expireCards): an answer that comes now is told so
     if (card && card.status !== "pending" && this.expired.has(card.id)) return no("E_ACCOUNT_CARD_EXPIRED", { detail: { card: card.id, expiredAt: card.expiresAt } });
+    // a card that closed without going through (rejected, every agent stopped, the account restarted) says why, to an answer that comes late
+    if (card && card.status !== "pending" && card.closedWhy) return no("E_CARD_NOT_GRANTED", { message: `${card.id} is closed: ${card.closedWhy}`, detail: { card: card.id } });
     if (!card || card.status !== "pending") return no("E_CARD_NOT_GRANTED", { message: `no pending card ${action.card}` });
     if (action.action !== cardHash(card)) return no("E_ACCOUNT_BAD_SIGNATURE", { message: "this approval names a different instruction than the one the card holds", detail: { card: card.id } });
     let held = card.action !== undefined;
@@ -1374,6 +1433,31 @@ export class AccountEngine {
       this.expired.add(card.id);
       if (this.expired.size > 500) this.expired.delete(this.expired.values().next().value!);
       this.host.closeCard(card.id, "rejected", "The card expired before it was answered; nothing moved");
+    }
+  }
+
+  /** Every card still waiting, closed now without an answer (the owner stopped every agent): each gives back what it held of its limit,
+   * as an answer would, and nothing it holds is run. Called in the door's own line (serially), so a card being answered is either released
+   * or closed here, never both. How many it closed */
+  closeWaiting(note: string): number {
+    let n = 0;
+    for (const card of this.host.cards()) {
+      if (card.status !== "pending") continue;
+      if (card.action !== undefined && card.approval) this.patchSpend(card.approval, (x) => ({ ...x, reservedMicro: Math.max(0, x.reservedMicro - micro(String(card.usd))) }));
+      this.trade.forget(card.id);
+      this.earn.forget(card.id);
+      this.host.closeCard(card.id, "rejected", note);
+      n++;
+    }
+    return n;
+  }
+
+  /** cards an earlier run left waiting, closed as the account restarted (service.ts): one whose time had run out by then is an expired
+   * card, as expireCards would have closed it — an answer that comes now is told it expired */
+  expiredBefore(ids: string[]): void {
+    for (const id of ids) {
+      this.expired.add(id);
+      if (this.expired.size > 500) this.expired.delete(this.expired.values().next().value!);
     }
   }
 
@@ -1505,6 +1589,9 @@ export class AccountEngine {
       destinations: this.state.destinations.map((d) => ({ ...d, usable: now >= Date.parse(d.usableAt), usableOn: etDate(Date.parse(d.usableAt)) })),
       activeKeys: activeAgents(this.state, now).length,
       watch: this.state.watch.map((w) => ({ venue: w.venue, symbol: w.symbol, at: w.at })),
+      // an alert that lapsed is gone from the page before the next signed change takes it off the state
+      alerts: this.state.alerts.filter((x) => now < Date.parse(x.expiresAt)).map((x) => ({ ...x, venueName: this.name(x.venue) })),
+      alertsFired: this.firedAlerts.map((x) => ({ ...x, venueName: this.name(x.venue) })),
       intents: this.state.intents.filter((x) => now < x.validUntil).map((x) => ({ id: x.id, agent: x.agent, agentName: x.agent === "*" ? "every agent" : this.agentName(x.agent), venue: x.venue, symbol: x.symbol, side: x.side, usd: x.usd, text: x.text, validUntil: new Date(x.validUntil).toISOString(), at: x.at, reports: x.reports, ...(x.report ? { report: { ...x.report, byName: this.agentName(x.report.by) } } : {}), byAgent: x.byAgent.map((r) => ({ ...r, byName: this.agentName(r.by) })) })),
       asks: this.waitingAsks(now).map((x) => ({ ...x })),
       declinedAsks: this.declinedAsks(now).map((x) => ({ ...x })),
@@ -1690,6 +1777,10 @@ export interface AccountPage {
   restore?: unknown;
   /** the markets the owner watches, which agents read */
   watch: Array<{ venue: string; symbol: string; at: string }>;
+  /** the owner's price alerts standing (account/state.ts Alert), each with its venue's name — and the ones that fired lately, newest first,
+   * each with the price that fired it (FiredAlert). Words to the owner, which agents read too; none is an order */
+  alerts: Array<Alert & { venueName: string }>;
+  alertsFired: Array<FiredAlert & { venueName: string }>;
   /** the owner's open intents — words to an agent (`agent` its address) or to every agent (`*`), none of them a limit — each with how many
    * reports agents made on it since the owner last set its words, the latest of them, and each agent's own latest (`byAgent`) */
   intents: Array<{ id: string; agent: string; agentName: string; venue: string; symbol: string; side: string; usd: string; text: string; validUntil: string; at: string; reports: number; report?: AgentReport & { byName: string }; byAgent: Array<AgentReport & { byName: string }> }>;

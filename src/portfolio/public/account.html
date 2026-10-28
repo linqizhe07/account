@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Account</title>
+<!-- the tab's mark, the Account's own green square (ui/tokens.css --ok): inline, so no browser asks this server for /favicon.ico and logs a 404 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300843D'/%3E%3Ctext x='16' y='22.5' font-family='Inter,Helvetica,Arial,sans-serif' font-size='19' font-weight='700' fill='%23fff' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E" />
 <script>/* the background before the first paint: Light (stored as "cream"), unless this browser chose Black; a link straight to the trading
    area (Trade, either mode) wears the area's grammar from its first paint, in the same background (ui/tokens.css, html[data-area]) */
 (function () { var t = "cream"; try { t = localStorage.getItem("account.theme") || t; } catch (e) {}
@@ -42,6 +44,7 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></symbol>
   <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 4 2.4 5 5.6.8-4 3.9.9 5.5L12 16.6 7.1 19.2l.9-5.5-4-3.9 5.6-.8z" /></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20a2 2 0 0 0 4 0" /></symbol>
   <symbol id="i-move" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
   <symbol id="i-receive" viewBox="0 0 24 24"><path d="M12 4v12M6 10l6 6 6-6M5 20h14" /></symbol>
   <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h13l-3-3M20 16H7l3 3" /></symbol>

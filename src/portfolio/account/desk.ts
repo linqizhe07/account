@@ -1362,6 +1362,18 @@ export class Desk {
    * uses that key, so a refusal of it stands, and the line says so. A provider the desk does not hold: nothing. No desk hired: the fault
    * (there is none without a desk's call) has nothing to clear, and there is no room to write in. `keyless`: a local server's base URL and
    * model were saved with no key (brain-keys.ts applyBrainKey) — said as that, not as a key taken away */
+  /** EVERY AGENT STOPPED (service.ts stopAgents): a session that runs is paused as the owner's Pause pauses it — no cycle runs, the leads
+   * keep their plan for a resume — and the room says why. Unsigned, as every tightening is; the resume is the owner's signature, after a
+   * new session for the agents. True when it paused */
+  stopped(): boolean {
+    const s = this.file?.session;
+    if (!s || s.endedAt || s.pausedAt) return false;
+    s.pausedAt = this.world.now();
+    this.save();
+    this.room("you", "you", "You stopped every agent: the desk is paused, and no cycle runs until you start the agents again and resume it. Open leads keep their plan.");
+    return true;
+  }
+
   keyChanged(provider: string, fingerprint: string, o: { keyless?: boolean | undefined } = {}): void {
     const b = this.brains.find((x) => x.id === provider);
     if (!b || !this.file) return;

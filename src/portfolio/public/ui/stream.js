@@ -8,7 +8,8 @@
    account by its polls, as it did before it had a stream.
 
      stOn(type, fn) → off()   fn(data, type) for each event of that type: order · fill · position · balance · paper · statement · card ·
-                              desk · snapshot (a page that could not resume: read everything again), "*" for every one of them, and
+                              desk · alert — a price alert fired: account/state.ts FiredAlert, with its venue's name — · snapshot (a
+                              page that could not resume: read everything again), "*" for every one of them, and
                               "health" (fn(health)) when the health changes
      stHealth()               "connected" — open, and heard from in the last ST_STALE_MS (the account sends a heartbeat every 15 s) ·
                               "stale" — open, and silent for longer (a stream the network froze: closed and opened again after
@@ -49,7 +50,7 @@
    so the account knows which markets this tab follows. */
 
 /* the events the account sends, each heard by name (a browser hands an event with a name only to a listener for that name) */
-const ST_EVENTS = ["snapshot", "order", "fill", "position", "balance", "paper", "statement", "card", "desk", "quote", "trades", "book", "hb"];
+const ST_EVENTS = ["snapshot", "order", "fill", "position", "balance", "paper", "statement", "card", "desk", "alert", "quote", "trades", "book", "hb"];
 const ST_STALE_MS = 20_000;
 const ST_DEAD_MS = 45_000;
 const ST_WATCH_MS = 5_000;

@@ -49,6 +49,8 @@ export interface Openness {
   sessionExpiresAt: string;
   /** the most leverage an agent may set on a perpetual (live-orders.ts); 1 unless the owner signed more */
   maxLeverage?: number | undefined;
+  /** when the owner stopped every agent (service.ts stopAgents): the session ended then, and stays ended until the owner signs a new one */
+  stoppedAt?: string | undefined;
 }
 
 export function parseOpenness(raw: unknown): Openness {
@@ -83,6 +85,14 @@ export function sessionFrom<T extends { sessionExpiresAt?: string | undefined }>
 
 export function isExpired(now: string, until: string): boolean {
   return Date.parse(now) >= Date.parse(until);
+}
+
+/** AN AGENT'S WRITE AFTER THE OWNER STOPPED EVERY AGENT: the session ended at the stop, and the refusal says so in its own code, so that an
+ * agent does not read the owner's stop as a session that ran out. Null while the session runs, or when it ran out by itself (each door
+ * keeps its own words for that) */
+export function stoppedRefusal(o: Openness, now: string): { code: "E_WALLET_AGENTS_STOPPED"; message: string; detail: { stoppedAt: string } } | null {
+  if (!o.stoppedAt || !isExpired(now, o.sessionExpiresAt)) return null;
+  return { code: "E_WALLET_AGENTS_STOPPED", message: `the owner stopped every agent at ${o.stoppedAt}: every write stops, reads continue, until the owner signs a new session`, detail: { stoppedAt: o.stoppedAt } };
 }
 
 /** what the agent may actually do at an account: native scope ∩ the user's reach; a revoked account keeps only `read` */
@@ -120,6 +130,8 @@ export function evaluate(i: EvaluateInput): Verdict {
   const a = i.account;
   const o = i.openness;
   const tool = `portfolio_${cap}`;
+  const stopped = stoppedRefusal(o, i.now);
+  if (stopped) return no(stopped.code, { venue: a.id, tool, message: stopped.message, detail: stopped.detail });
   if (isExpired(i.now, o.sessionExpiresAt)) {
     return no("E_WALLET_SESSION_EXPIRED", { venue: a.id, tool, message: "the agent's session has expired: every write stops, reads continue", detail: { sessionExpiresAt: o.sessionExpiresAt, now: i.now } });
   }

@@ -1,12 +1,17 @@
 /* Markets: what there is to trade — at the venues the owner connected, and (read without a key, "Connect to trade") at the venues not
    connected — from GET /api/account/explore, in the tabs it returns: All (one table, sorted here), Crypto, Stocks, RWAs, Perps, Pre-IPO,
    Predictions (Yes/No cards whose prices are asked again only while a card is in view and the page is in view: GET /api/account/quotes),
-   and Watching. One market in THE ONE DRAWER (openMarket; a holding opens it by its key through openAsset, asset.js): its price, its
-   history, every venue's price for it, what is held — positions to close, orders to cancel, what was paid — what the agents are doing in it,
-   and its lines on the statement. Markets manages no accounts: connections live under Portfolio › Accounts and the Connect picker.
-   Every button does what it says through the account's own door: an order opens the ticket and is signed there; ★ is a signed setWatch;
-   "Connect to trade" opens that connection's own form; Cancel is a signed liveCancel (core cancelOrder); Close… is the Trade pane's signed
-   close. Where a venue refuses, its own words are shown, and what fixes it. Nothing here is a sample. */
+   and Watching — the owner's watchlist, and under it the owner's PRICE ALERTS. Over the All tab THE PULSE (after OpenStock's dashboard):
+   the US stock market's session with a countdown, and the day in six figures — the S&P 500, Nasdaq 100, Dow and Russell 2000 by the ETFs
+   that track them, Bitcoin and Ethereum — each a tile that opens the market. One market in THE ONE DRAWER (openMarket; a holding opens it
+   by its key through openAsset, asset.js): its price, its history, every venue's price for it, what is held — positions to close, orders to
+   cancel, what was paid — its price alerts, what the agents are doing in it, and its lines on the statement. Markets manages no accounts:
+   connections live under Portfolio › Accounts and the Connect picker.
+   Every button does what it says through the account's own door: an order opens the ticket and is signed there; ★ is a signed setWatch; 🔔
+   opens the alert sheet, whose Set is a signed setAlert (the account itself prices the market every half minute and says the alert when it
+   fires: service.ts watchAlerts, shell.js shAlertToast) and whose Remove is a signed setAlert too; "Connect to trade" opens that connection's
+   own form; Cancel is a signed liveCancel (core cancelOrder); Close… is the Trade pane's signed close. Where a venue refuses, its own words
+   are shown, and what fixes it. Nothing here is a sample. */
 
 /* what the pane holds between draws: the shell's last ctx; each explore read by its path ({ at, body, good, pending }); the rows drawn, by
    their data-i; fresh prices by "venue|symbol"; the cards in view; the market in the drawer; whether the footer is unfolded */
@@ -393,6 +398,15 @@ function mkStar(item, i, since) {
   const can = on || !!mkWatchTarget(item);
   return can ? `<button type="button" class="icon-btn mk-star" data-act="watch" data-i="${i}" data-fk="watch:${esc(item.key)}" aria-pressed="${String(on)}" aria-label="${on ? "Stop watching" : "Watch"} ${esc(item.name)}"${since ? ` title="Watching since ${esc(nyDay(since))}"` : ""}${mkDis()}>${icon("star")}</button>` : "";
 }
+/* 🔔: the row's price alerts — pressed while one stands on it, how many in its title — opens the alert sheet (openAlertSheet); drawn
+   wherever ★ is, for the same markets */
+function mkBell(item, i) {
+  const n = mkAlertsOf(item).length;
+  if (!n && !mkWatchTarget(item)) return "";
+  return `<button type="button" class="icon-btn mk-bell" data-act="alert" data-i="${i}" data-fk="alert:${esc(item.key)}" aria-pressed="${String(n > 0)}" aria-label="${n ? `${plural(n, "price alert")} on` : "Set a price alert for"} ${esc(item.name)}" title="${n ? `${plural(n, "price alert")} standing: set another, or remove one` : "Price alert: be told when it rises above, or falls below, a price"}"${mkDis()}>${icon("bell")}</button>`;
+}
+/* ★ and 🔔 together, a row's first cell */
+const mkKeys = (item, i, since) => `<span class="mk-keys">${mkStar(item, i, since)}${mkBell(item, i)}</span>`;
 /* where a row is listed: the connected venues, then the public ones (read without a key) */
 function mkWhere(item) {
   const seen = new Set();
@@ -466,11 +480,11 @@ function mkClosedTag(item) {
 }
 /* the volume cell: dollars, or contracts where the venue counts those */
 const mkVolCell = (item) => (item.volumeUsd24h !== undefined ? mkVol(item.volumeUsd24h) : item.contracts24h !== undefined ? `${mkCount(item.contracts24h)} contracts` : "—");
-/** the table: ★ · Market · Where · Price · 24h · Volume · one action, a row one line high. An event is a row too (All, a search): its
+/** the table: ★ 🔔 · Market · Where · Price · 24h · Volume · one action, a row one line high. An event is a row too (All, a search): its
  * short name, its lead outcome in cents; its question and its countdown are in its hover card */
 function mkTable(items, empty) {
   const cols = [
-    { label: "", sr: "Watch", cell: (x) => mkStar(x.item, x.i) },
+    { label: "", sr: "Watch, price alert", cls: "mk-c-keys", cell: (x) => mkKeys(x.item, x.i) },
     { label: "Market", cls: "mk-c-name", cell: (x) => mkNameBtn(x.item, x.i) },
     { label: "Where", cls: "mk-c-where", cell: (x) => mkWhere(x.item) },
     { label: "Price", r: true, cell: (x) => mkPriceCell(x.item) },
@@ -516,13 +530,14 @@ const mkSkelCards = (n) => `<div class="cards-grid" aria-hidden="true">${Array.f
 const mkSkel = () => `<div class="mk-block" aria-busy="true"><span class="sr" role="status">Reading the markets…</span>${mkSkelCards(3)}<div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div></div>`;
 
 /* the tabs the explore read returned, in its order (a legacy `now` is All; All first either way), "All results" while searching, then
-   Watching (when anything is watched) */
+   Watching (when anything is watched, or a price alert stands or fired) */
 function mkTabIds(body) {
   const from = ((body && body.tabs) || []).map((t) => (t.id === "now" ? ["all", "All"] : [t.id, t.label]));
   return from.some(([id]) => id === "all") ? from : [["all", "All"], ...from];
 }
+const mkHasWatching = () => !!A && ((A.watch || []).length > 0 || (A.alerts || []).length > 0 || (A.alertsFired || []).length > 0);
 function mkTabs(p, body) {
-  const items = [...(p.q ? [["", "All results"]] : []), ...mkTabIds(body), ...((A.watch || []).length ? [["watching", "Watching"]] : [])];
+  const items = [...(p.q ? [["", "All results"]] : []), ...mkTabIds(body), ...(mkHasWatching() ? [["watching", "Watching"]] : [])];
   return `<div class="tabs mk-tabs" role="group" aria-label="Markets">${items.map(([id, l]) => `<button type="button" data-act="tab" data-tab="${esc(id)}" data-fk="tab:${esc(id)}" aria-pressed="${String(id === p.tab)}">${esc(l)}</button>`).join("")}</div>`;
 }
 
@@ -586,7 +601,7 @@ function mkWatchingHtml(lens) {
   }).filter((x) => mkInLens(x.item, lens));
   if (!rows.length) return '<div class="card"><p class="empty">Nothing watched. Press ★ on a market to watch it: your agents read the watchlist.</p></div>';
   const cols = [
-    { label: "", sr: "Watch", cell: (x) => mkStar(x.item, x.i, x.w.at) },
+    { label: "", sr: "Watch, price alert", cls: "mk-c-keys", cell: (x) => mkKeys(x.item, x.i, x.w.at) },
     { label: "Market", cls: "mk-c-name", cell: (x) => mkNameBtn(x.item, x.i) },
     { label: "Where", cls: "mk-c-where", cell: (x) => mkWhere(x.item) },
     { label: "Price", r: true, cell: (x) => {
@@ -601,6 +616,128 @@ function mkWatchingHtml(lens) {
     { label: "", sr: "Actions", r: true, cell: (x) => mkActs(x.item, x.i) },
   ];
   return `<div class="card">${table(cols, rows.map((x) => ({ ...x, i: mkReg(x.item) })), { cls: "mk-t", rowAttr: (x) => `data-k="${esc(`${x.w.venue}|${x.w.symbol}`)}"${mkVenue(x.w.venue) ? ` data-pairs="${esc(`${x.w.venue}|${x.w.symbol}`)}"` : ""}` })}</div>`;
+}
+
+// ---- price alerts (account/state.ts Alert): the owner's, signed as setAlert; agents read them too -------------------------------------
+
+/* an alert is on one of this row's markets (any venue, any outcome), as a watch is: the standing ones, and the ones that fired */
+const mkAlertsOf = (item) => (A && Array.isArray(A.alerts) && item && item.at ? A.alerts.filter((x) => mkIsWatch(item, x)) : []);
+const mkFiredOf = (item) => (A && Array.isArray(A.alertsFired) && item && item.at ? A.alertsFired.filter((x) => mkIsWatch(item, x)) : []);
+/* an alert's figure as the market says its prices: cents for an event contract, dollars for the rest */
+const mkAlertFig = (item, n) => (item && item.kind === "event" ? mkCents(n) : mkUsd(n));
+/* a figure as the account signs it: a plain decimal, at most ten places, no exponent and no trailing zeros */
+const mkPlain = (n) => Number(n).toFixed(10).replace(/0+$/, "").replace(/\.$/, "");
+/** which way, in words: on a standing alert, what it will say; on a fired one, what happened */
+const mkAlertWay = (x, past = false) => (x.condition === "above" ? (past ? "rose above" : "Rises above") : past ? "fell below" : "Falls below");
+/** this market's alerts, as lines: the standing ones (each with Remove, a signed setAlert with on "" — only for a browser that signs) and
+ * the fired ones, newest first, each with the price that fired it and whose price that was. "" where it has none */
+function mkAlertLinesHtml(item) {
+  const standing = mkAlertsOf(item);
+  const fired = mkFiredOf(item).slice(0, 5);
+  if (!standing.length && !fired.length) return "";
+  const owner = owns();
+  const lines = [
+    ...standing.map((x) => `<div><span class="mk" aria-hidden="true">·</span><div><div class="t1">${esc(mkAlertWay(x))} ${esc(mkAlertFig(item, x.price))}</div><div class="t2">${esc(x.venueName || nameOf(x.venue))} · since ${esc(nyDay(x.at))} · until ${esc(nyDay(x.expiresAt))} · ${esc(x.id)}</div></div>${owner ? `<button type="button" class="btn btn-sm btn-ghost" data-act="alert-off" data-id="${esc(x.id)}" data-fk="alert-off:${esc(x.id)}">Remove</button>` : ""}</div>`),
+    ...fired.map((f) => `<div><span class="mk ok" aria-hidden="true">✓</span><div><div class="t1">${esc(mkAlertWay(f, true))} ${esc(mkAlertFig(item, f.price))}: ${esc(mkAlertFig(item, f.seen))}</div><div class="t2">${esc(f.venueName || nameOf(f.venue))} · ${esc(nyDay(f.firedAt))} ${esc(nyTime(f.firedAt))} New York${f.from ? ` · ${esc(f.from)}` : ""}</div></div></div>`),
+  ];
+  return `<div class="feed mk-al-feed">${lines.join("")}</div>`;
+}
+/* the price now of an alert's market, for the Alerts list: fresh from its venue where that is connected (the poll moves it in place: data-q),
+   else as the Markets list read the row; and how far the figure is from it */
+function mkAlertNowCell(r) {
+  const ev = r.item.kind === "event";
+  const m = mkVenue(r.x.venue) ? mkFresh(`${r.x.venue}|${r.x.symbol}`) : null;
+  const now = m ? (m.price ?? m.ask) : mkPriceOf(r.item);
+  const n = Number(now);
+  const dist = Number.isFinite(n) && n > 0 ? ((r.x.price - n) / n) * 100 : null;
+  const live = mkVenue(r.x.venue) ? ` data-q="${esc(`${r.x.venue}|${r.x.symbol}`)}" data-fmt="${ev ? "c-last" : "usd"}"` : "";
+  return `<span${live}>${ev ? mkCents(now) : mkUsd(now)}</span>${dist !== null ? `<span class="dim small"> · ${dist > 0 ? "+" : ""}${dist.toFixed(1)}% to go</span>` : ""}`;
+}
+/** THE ALERTS, under the watchlist on the Watching tab: each standing alert — its market (the row Markets lists, else a row of its own, as
+ * a watched market no read carries), which way and the figure, the price now, since and until when — and Remove; then the ones that fired,
+ * newest first. What the account says of them: checked about every 30 seconds while it runs, each standing 90 days. "" with none at all */
+function mkAlertsHtml(lens) {
+  const alerts = A.alerts || [];
+  const fired = A.alertsFired || [];
+  if (!alerts.length && !fired.length) return "";
+  const body = (MKT.got.get(MKT_ALL) || {}).good;
+  const all = mkRows(body);
+  const rowOf = (x) => all.find((r) => mkIsWatch(r, x)) || mkPseudo(x, body);
+  const rows = alerts.map((x) => ({ x, item: rowOf(x) })).filter((r) => mkInLens(r.item, lens));
+  const owner = owns();
+  const cols = [
+    { label: "Market", cls: "mk-c-name", cell: (r) => mkNameBtn(r.item, r.i) },
+    { label: "Tells you when", cell: (r) => `<span class="mk-al-cond">${esc(mkAlertWay(r.x))} <b>${esc(mkAlertFig(r.item, r.x.price))}</b></span>` },
+    { label: "Now", r: true, cell: (r) => mkAlertNowCell(r) },
+    { label: "Since", cell: (r) => `<span class="dim small">${esc(nyDay(r.x.at))} · until ${esc(nyDay(r.x.expiresAt))}</span>` },
+    { label: "", sr: "Actions", r: true, cell: (r) => (owner ? `<div class="acts"><button type="button" class="btn btn-sm btn-ghost" data-act="alert-off" data-id="${esc(r.x.id)}" data-fk="alert-off:${esc(r.x.id)}">Remove</button></div>` : "") },
+  ];
+  const standing = rows.length
+    ? table(cols, rows.map((r) => ({ ...r, i: mkReg(r.item) })), { cls: "mk-t mk-al-t", rowAttr: (r) => `data-k="${esc(r.x.id)}"${mkVenue(r.x.venue) ? ` data-pairs="${esc(`${r.x.venue}|${r.x.symbol}`)}"` : ""}` })
+    : `<p class="empty">${alerts.length ? "No price alert in this lens." : "No price alert standing. Press 🔔 on a market to be told when it crosses a price."}</p>`;
+  const firedHtml = fired.length
+    ? `<div class="feed mk-al-feed">${fired.slice(0, 8).map((f) => { const it = rowOf(f); return `<div><span class="mk ok" aria-hidden="true">✓</span><div><div class="t1">${esc(f.symbol)} at ${esc(f.venueName || nameOf(f.venue))} ${esc(mkAlertWay(f, true))} ${esc(mkAlertFig(it, f.price))}: ${esc(mkAlertFig(it, f.seen))}</div><div class="t2">${esc(nyDay(f.firedAt))} ${esc(nyTime(f.firedAt))} New York${f.from ? ` · ${esc(f.from)}` : ""}</div></div></div>`; }).join("")}</div>`
+    : "";
+  return `<section class="sec" aria-label="Price alerts"><div class="sec-head"><h2 class="h2">Price alerts</h2><span class="dim small">${esc(plural(alerts.length, "alert"))} standing · checked about every 30 seconds while the account runs · each stands 90 days</span></div>${standing}${firedHtml ? `<h3 class="label">Fired</h3>${firedHtml}` : ""}</section>`;
+}
+
+// ---- the pulse (after OpenStock's dashboard): the session and the day in six figures, over the All tab -------------------------------
+
+/* the six: the index ETFs the US stocks line prices without a key, and the two coins every exchange lists — by what a row is (its base and
+   kind), never by a venue's name */
+const MK_PULSE = [["SPY", "stock", "S&P 500"], ["QQQ", "stock", "Nasdaq 100"], ["DIA", "stock", "Dow 30"], ["IWM", "stock", "Russell 2000"], ["BTC", "coin", "Bitcoin"], ["ETH", "coin", "Ethereum"]];
+/* the rows the pulse draws from: the tab's own read (the two coins are among All's busiest), and the Stocks tab's (the index ETFs are stock
+   lines, which say no dollar volume and so stand far down All's list), read once and kept like any read */
+const MKT_STOCKS = "/api/account/explore?tab=stocks";
+function mkPulseRows(body) {
+  const g = MKT.got.get(MKT_STOCKS);
+  if (!g || (!g.pending && Date.now() - (g.at || 0) > MKT_TTL)) mkFetch(MKT_STOCKS);
+  const seen = new Set();
+  return [...mkRows(body), ...mkRows(g && g.good)].filter((x) => x && !seen.has(x.key) && seen.add(x.key));
+}
+/* how long until a moment, after its word: "opens in 1h 07m" · "closes in 12m 30s" · "opens in 2d 15h"; "opens now" once it has come */
+function mkIn(word, ms) {
+  if (!(ms > 0)) return `${word} now`;
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86_400);
+  const h = Math.floor((s % 86_400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${word} in ${d ? `${d}d ${h}h` : h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`}`;
+}
+/** THE SESSION LINE: the US stock market as the stocks' own session words say it (mkSessionOf: the venue's clock, or the market calendar
+ * behind the US stocks line — never the page's own clock) — a dot (green open, amber an extended session, grey closed), the state, a
+ * countdown on the page's clock (.mk-sess, ticked with the countdowns: mkTickPlan) to the close, the open or the end of the extended
+ * session, and that moment in New York and in the viewer's time. "" where no stock row says a session */
+function mkSessionLine(rows) {
+  const it = rows.find((x) => x.kind === "stock" && mkSessionOf(x));
+  const s = it ? mkSessionOf(it) : null;
+  if (!s) return "";
+  const ph = mkPhase(s);
+  const state = s.open ? "Open" : ph ? MK_PHASE_TAGS[ph] || ph : "Closed";
+  const at = s.open ? s.closesAt : ph && s.phaseEndsAt ? s.phaseEndsAt : s.opensAt;
+  const word = s.open ? "closes" : ph === "pre" ? "opens" : ph ? "ends" : "opens";
+  const ok = !!at && Number.isFinite(Date.parse(at));
+  const dot = s.open ? "up" : ph ? "ext" : "off";
+  return `<span class="mk-dot ${dot}" aria-hidden="true"></span><b>US stocks</b> · ${esc(state)}${ok ? ` · <span class="mk-sess" data-at="${esc(at)}" data-word="${esc(word)}"${Date.parse(at) - Date.now() > 0 ? "" : " data-closed"}>${esc(mkIn(word, Date.parse(at) - Date.now()))}</span><span class="dim"> · ${esc(word)} ${esc(nyDay(at))} ${esc(nyTime(at))} New York${esc(yourTime(at))}</span>` : ""}${ph && s.extendedHours ? '<span class="dim"> · a limit order with extended hours trades now</span>' : ""}`;
+}
+/** THE PULSE: the session line and the six tiles, each a button that opens its market — its name, its symbol, its price now (ticking in
+ * place where its venue is connected: data-q, with the rows), its 24 hours and whose price it is (a US stock's: which source, how far
+ * behind). Only figures the read has: a tile with no row is left out, and with no row and no session nothing is drawn */
+function mkPulseHtml(body) {
+  const rows = mkPulseRows(body);
+  const tiles = MK_PULSE.map(([base, kind, label]) => ({ label, item: rows.find((x) => x.kind === kind && String(x.base || "").toUpperCase() === base && !mkIsPreipo(x)) })).filter((t) => t.item);
+  const session = mkSessionLine(rows);
+  if (!tiles.length && !session) return "";
+  const tile = (t) => {
+    const it = t.item;
+    const i = mkReg(it);
+    const lead = mkLeadLeg(it);
+    const q = lead ? ` data-q="${esc(`${lead.venue}|${lead.symbol}`)}" data-fmt="usd"` : "";
+    const pairs = mkAllPairs(it).slice(0, 2);
+    const from = mkPriceFrom(it) || (it.at[0] ? it.at[0].venueName : "");
+    return `<button type="button" class="mk-tile" data-act="open" data-i="${i}" data-fk="pulse:${esc(it.key)}" data-k="${esc(it.key)}"${pairs.length ? ` data-pairs="${esc(pairs.join(","))}"` : ""} aria-label="${esc(t.label)}: open ${esc(it.name)}"><span class="mk-tile-h"><span>${esc(t.label)}</span><span class="dim">${esc(it.base || "")}</span></span><span class="mk-tile-px"${q}>${mkUsd(mkPriceOf(it))}</span><span class="mk-tile-f">${chg(it.changePct24h)}${from ? `<span class="dim">${esc(from)}</span>` : ""}</span></button>`;
+  };
+  return `<section class="mk-pulse" aria-label="Pulse">${session ? `<p class="mk-sess-line">${session}</p>` : ""}${tiles.length ? `<div class="mk-tiles">${tiles.map(tile).join("")}</div>` : ""}</section>`;
 }
 
 // ---- the pane ----------------------------------------------------------------------------------------
@@ -674,7 +811,7 @@ function renderMarkets(ctx) {
   let foot = "";
   let tabsFrom = null;
   if (p.tab === "watching") {
-    body = mkWatchingHtml(ctx.lens);
+    body = `${mkWatchingHtml(ctx.lens)}${mkAlertsHtml(ctx.lens)}`;
     foot = mkFootHtml(null);
   } else {
     const path = mkPath(p);
@@ -686,7 +823,11 @@ function renderMarkets(ctx) {
     // a tab this read does not have (nothing is in it now): every result while searching, else All
     if (got && got.tabs.length && p.tab && p.tab !== "all" && !mkTabIds(got).some(([id]) => id === p.tab)) return void go("markets", { ...ctx.params, tab: p.q ? "" : "all", sort: "" }, { replace: true });
     if (got) {
-      body = `${mkListHtml(p, got, ctx.lens)}${failed ? `<p class="mk-missing">Couldn't read the markets again just now: ${esc(mkSaid(failed))}. This is what was read at ${esc(nyTime(g.goodAt))}.</p>` : ""}`;
+      // the pulse over All (not over a search, whose rows are the answer): the session and the six figures. The list is drawn first, so its
+      // rows keep the places (data-i) they have always had; the tiles take the places after them
+      const list = mkListHtml(p, got, ctx.lens);
+      const pulse = p.tab === "all" && !p.q ? mkPulseHtml(got) : "";
+      body = `${pulse}${list}${failed ? `<p class="mk-missing">Couldn't read the markets again just now: ${esc(mkSaid(failed))}. This is what was read at ${esc(nyTime(g.goodAt))}.</p>` : ""}`;
       foot = mkFootHtml(got);
     } else if (failed) body = `<div class="mk-fail"><div class="msg no">Couldn't read the markets: ${esc(mkSaid(failed))}.</div><button type="button" class="btn btn-sm" data-act="retry" data-fk="retry">Try again</button></div>`;
     else body = mkSkel();
@@ -710,6 +851,7 @@ function mkPaneClick(e) {
     case "clear-q": return void go("markets", { ...ROUTE.params, q: "", tab: ROUTE.params.tab || "" }, { replace: true });
     case "retry": for (const g of MKT.got.values()) g.at = 0; return void mkRedraw();
     case "connect": return void connectVia(b.dataset.connector, { name: b.dataset.name });
+    case "alert-off": return void mkAlertOff(b.dataset.id);
     default: return void (item && mkAct(b, item));
   }
 }
@@ -723,6 +865,7 @@ function mkAct(b, item) {
   const act = b.dataset.act;
   if (act === "open") return void openMarket(item);
   if (act === "watch") return void mkToggleWatch(item);
+  if (act === "alert") return void openAlertSheet(item);
   if (act === "trade") return void mkTrade(item, "buy");
   if (act === "yn") return void mkTrade(item, "buy", Number(b.dataset.o));
   if (act === "hand") return void mkHand(item);
@@ -768,6 +911,96 @@ function mkHandTarget(item) {
 async function mkToggleWatch(item) {
   const d = mkWatchDraft(item);
   if (d && owns()) await own(d);
+}
+/** Remove, on an alert: a signed setAlert with on "", naming the alert as it stands (What you sign shows it) */
+async function mkAlertOff(id) {
+  const x = (A && A.alerts ? A.alerts : []).find((a) => a.id === id);
+  if (!x || !owns()) return;
+  await own({ type: "setAlert", id: x.id, venue: x.venue, symbol: x.symbol, condition: x.condition, price: mkPlain(x.price), on: "" });
+}
+/** THE ALERT SHEET for one market (🔔 on a row, Alert in the drawer): Rises above | Falls below, the figure — the price now to start with;
+ * an event contract's in cents — how far from the price now, and a warning where the price is there already (it fires at the next look,
+ * within half a minute). Prepared by the account as it is typed and shown field by field before the signature (core quoteDialog): Set is a
+ * signed setAlert through the account's door. Under the form, this market's alerts standing (each with Remove) and the ones that fired. A
+ * switch asks this browser to show alerts as its own notifications too (the browser's permission asked once; kept in this browser alone:
+ * shell.js SH_NOTIFY_KEY). The market the alert names is the one ★ would watch: at the first connected venue, else at the venue its public
+ * prices would be once connected (mkWatchTarget) */
+function openAlertSheet(item) {
+  if (!A || !item) return;
+  const t = mkWatchTarget(item);
+  const had = mkAlertsOf(item);
+  if (!t && !had.length) return void toast("No venue lists this market right now, so no price alert can name it.", "info");
+  const ev = item.kind === "event";
+  const venue = t ? t.venue : had[0].venue;
+  const symbol = t ? t.symbol : had[0].symbol;
+  const venueName = (item.at.find((a) => a.venue === venue || mkVenueOfLeg(item, a.venue) === venue) || {}).venueName || (had[0] && had[0].venueName) || nameOf(venue);
+  const now = Number(mkPriceOf(item));
+  const hasNow = Number.isFinite(now) && now > 0;
+  // what the field starts with: the price now, as the owner types one (cents for an event contract: 62 for 62¢)
+  const start = hasNow ? (ev ? mkPlain(Math.round(now * 10000) / 100) : mkPlain(Number(now.toPrecision(8)))) : "";
+  const fmt = (n) => mkAlertFig(item, n);
+  const cond = (form) => (form.elements.condition && form.elements.condition.value === "below" ? "below" : "above");
+  const d = quoteDialog({
+    title: "Price alert",
+    sub: `You are told when ${esc(item.name)} crosses the price — on this page as it happens, and as this browser's notification if you ask. It places nothing.`,
+    fields: `<div class="who mk-al-who">${mkAv(item)}<div><b>${esc(item.name)}</b><span class="dim">${esc(venueName)} · ${esc(symbol)} · now ${esc(hasNow ? fmt(now) : "no price read")}</span></div></div>
+      <input type="hidden" name="condition" value="above" />
+      <div><div class="label">Tell me when it</div><div data-al-cond></div></div>
+      <label class="fld">${ev ? "Price, in cents (62 is 62¢)" : "Price, in dollars"}<input name="price" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${esc(start || (ev ? "62" : "63500"))}" value="${esc(start)}" /></label>
+      <label class="chk1"><input type="checkbox" name="notify"${typeof shNotifyWanted === "function" && shNotifyWanted() ? " checked" : ""} /> Also show it as this browser's own notification</label>`,
+    draft: (form) => {
+      const typed = String(formFields(form).price || "").trim();
+      if (!typed) return `Type the price you want to be told at${hasNow ? ` (now ${fmt(now)})` : ""}.`;
+      if (!/^\d{1,12}(\.\d{1,10})?$/.test(typed) || !(Number(typed) > 0)) return ev ? "A price in cents is a plain positive number: 62 for 62¢, 0.5 for half a cent." : "A price is a plain positive number: 63500, or 0.1212.";
+      const price = ev ? mkPlain(Number(typed) / 100) : typed;
+      return { type: "setAlert", id: "", venue, symbol, condition: cond(form), price, on: "true" };
+    },
+    show: (p) => {
+      const a = p.action;
+      const target = Number(a.price);
+      const dist = hasNow ? ((target - now) / now) * 100 : null;
+      const met = hasNow && (a.condition === "above" ? target <= now : target >= now);
+      const where = !hasNow ? "No price was read for it just now: the alert stands, and fires once a read reaches the price." : met ? `The price is ${a.condition === "above" ? "at or above" : "at or below"} this already: it fires at the account's next look, within half a minute.` : `Now ${fmt(now)} · ${dist > 0 ? "+" : ""}${dist.toFixed(2)}% away.`;
+      return `<div class="big"><span>${esc(item.name)} ${a.condition === "above" ? "rises above" : "falls below"}</span><span>${esc(fmt(target))}</span></div><div class="path${met ? " warn-t" : ""}">${esc(where)}</div><div class="path">The account prices it about every 30 seconds while it runs, whether or not this page is open, and says the alert once; it stands 90 days, then lapses. It places nothing: your agents read it as what you watch for, never as an instruction.</div>`;
+    },
+    done: (r) => saidOf(r.body) || "Price alert set",
+    go: "Sign and set the alert",
+  });
+  const form = d.form;
+  form.querySelector("[data-al-cond]").innerHTML = seg([["above", "Rises above"], ["below", "Falls below"]], "above", (v) => {
+    form.elements.condition.value = v;
+    d.requote();
+  }, { label: "Tell me when it" });
+  // the notification switch: the browser's permission is asked as it is turned on, and a browser that gives none leaves it off and says so
+  form.elements.notify.addEventListener("change", async (e) => {
+    const on = !!e.target.checked;
+    if (on && typeof Notification === "function" && Notification.permission !== "granted") {
+      const p = await Notification.requestPermission().catch(() => "denied");
+      if (p !== "granted") {
+        e.target.checked = false;
+        if (typeof shNotifySet === "function") shNotifySet(false);
+        return void toast("This browser gave no permission for notifications: an alert is still said on this page.", "info");
+      }
+    }
+    if (typeof shNotifySet === "function") shNotifySet(on);
+  });
+  // this market's alerts, under the form, drawn again after each read while the sheet is open (a Remove signed here, an alert that fires)
+  form.insertAdjacentHTML("afterend", '<div class="mk-al-list" data-al-list></div>');
+  const list = form.parentElement ? form.parentElement.querySelector("[data-al-list]") : null;
+  const drawList = () => {
+    if (!list || !list.isConnected) return;
+    const again = mkResolve({ key: item.key }) || item;
+    const html = mkAlertLinesHtml(again);
+    paint(list, html ? `<h3 class="label">On this market</h3>${html}` : "");
+  };
+  if (list) {
+    list.addEventListener("click", (e) => {
+      const b = e.target && e.target.closest && e.target.closest("[data-act='alert-off']");
+      if (b && !b.disabled) mkAlertOff(b.dataset.id);
+    });
+    drawList();
+    if (SHEET) SHEET.redraw = drawList;
+  }
 }
 
 // ---- fresh prices and countdowns ---------------------------------------------------------------------------
@@ -901,7 +1134,7 @@ function mkTickPlan() {
   // the countdowns on the page, and the table rows whose countdown is in their hover card (data-ends: only their end is watched), looked
   // for again only after something was drawn
   if (!MKT.closes || MKT.closeGen !== paintGen) {
-    MKT.closes = [...document.querySelectorAll(".mk-close[data-close]"), ...document.querySelectorAll(".mk-t tr[data-ends]")];
+    MKT.closes = [...document.querySelectorAll(".mk-close[data-close]"), ...document.querySelectorAll(".mk-sess[data-at]"), ...document.querySelectorAll(".mk-t tr[data-ends]")];
     MKT.closeGen = paintGen;
   }
   const now = Date.now();
@@ -909,6 +1142,14 @@ function mkTickPlan() {
   const ended = [];
   for (const el of MKT.closes) {
     if (el.isConnected === false) continue;
+    // the pulse's session countdown: its words each second; the moment come, the next read says the session as it then is
+    if (el.dataset.at) {
+      const left = Date.parse(el.dataset.at) - now;
+      const t = mkIn(el.dataset.word || "opens", left);
+      if (el.textContent !== t) texts.push([el, t]);
+      if (left <= 0 && !el.hasAttribute("data-closed")) ended.push(el);
+      continue;
+    }
     const words = !!el.dataset.close;
     if (words && (!MKT.watched.has(el) || MKT.seen.has(el))) {
       const t = mkCloseText(el, now);
@@ -1095,7 +1336,7 @@ function openMarket(item) {
   if (!A) return;
   const it = mkResolve(item);
   if (!it) return void mkLookup(item);
-  MKT.open = { item: it, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [] };
+  MKT.open = { item: it, range: "1M", interval: "1h", asset: undefined, assetFor: "", compare: undefined, candles: undefined, ipoRead: undefined, ipo: [], fin: undefined };
   const body = openDrawer(`<div class="mk-d" data-mk-drawer>${mkDrawerHtml(MKT.open)}</div>`, { title: it.name, redraw: mkDrawerRedraw });
   if (!MKT.drawerWired) {
     $("drawer").addEventListener("close", () => {
@@ -1178,6 +1419,17 @@ function mkDrawerLoad(o) {
     api(`/api/account/compare?base=${encodeURIComponent(base)}&side=buy`, { ttl: 15_000 }).then((b) => {
       if (MKT.open !== o) return;
       o.compare = b;
+      mkDrawerRedraw();
+    });
+  }
+  // a US share's own filed figures (SEC EDGAR: GET /api/account/financials, live/edgar.ts), read once a drawer and kept ten minutes — the
+  // filings change twice a quarter — never for a pre-IPO contract or anything that is not a share
+  const ticker = !pre ? mkTicker(o.item) : "";
+  if (ticker && o.fin === undefined) {
+    o.fin = null;
+    api(`/api/account/financials?symbol=${encodeURIComponent(ticker)}`, { ttl: 600_000, timeout: 20_000 }).then((b) => {
+      if (MKT.open !== o) return;
+      o.fin = b;
       mkDrawerRedraw();
     });
   }
@@ -1472,6 +1724,44 @@ function mkChartHtml(o, it, leg, key) {
   return fromAsset || `<p class="empty">${esc(((a.missing || []).find((m) => m.part === "candles") || {}).why || (mkPublicOnly(it) ? "Price history comes from a connected venue that trades it: connect one to see it." : ev ? "The venue keeps price history for a contract you hold." : "No venue on the account keeps price history for it."))}</p>`;
 }
 
+// ---- a share's financials (SEC EDGAR, live/edgar.ts) -----------------------------------------------------------------------------
+
+/* a US share's ticker as the SEC's reader takes one: a stock row's base — letters, a class letter after a dot or a dash (BRK.B); "" for
+   anything else (a pre-IPO contract's company, a coin, a token) */
+const mkTicker = (item) => (item && item.kind === "stock" && /^[A-Z]{1,6}([.-][A-Z]{1,2})?$/.test(String(item.base || "").toUpperCase()) ? String(item.base).toUpperCase() : "");
+/* a filing's date (YYYY-MM-DD) as a person reads it, the day the SEC wrote, never moved to another zone: "27 Sep 2025" */
+function mkDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return String(iso || "—");
+  return `${Number(m[3])} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1] || m[2]} ${m[1]}`;
+}
+/* a filed figure in money, short, with its sign: $416B · −$2.5B · $94.0B; a dash where the filing tagged none */
+const mkFinMoney = (n) => (n === undefined || n === null || !Number.isFinite(Number(n)) ? '<span class="flat">—</span>' : `${Number(n) < 0 ? "−" : ""}${mkVol(Math.abs(Number(n)))}`);
+/** THE FINANCIALS PART, a US share's drawer: the fiscal years as filed, then the quarters as filed (a 10-Q's own quarter; a fourth quarter
+ * is in the 10-K and is not a row) — each with its revenue, net income and earnings a share, the period's end and its filing — the shares
+ * outstanding as the latest cover says, whose figures they are and which tagged concept each column is. A skeleton while the SEC answers;
+ * where it does not, its refusal in its own words (no contact set: what to set). Nothing here is estimated */
+function mkFinHtml(o) {
+  if (o.fin === undefined || o.fin === null) return '<div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel" style="width:60%"></span></div>';
+  const f = o.fin.ok !== false ? o.fin : null;
+  if (!f) return `<p class="mk-quiet">${esc(mkSaid(refusalOf(o.fin)) || "The SEC did not answer")}.</p>`;
+  const annual = Array.isArray(f.annual) ? f.annual : [];
+  const quarterly = Array.isArray(f.quarterly) ? f.quarterly : [];
+  const rowsOf = (list, year) => list.map((p) => ({ p, label: year ? `FY${p.fy || String(p.end || "").slice(0, 4)}` : `${p.fp || "Q"} FY${p.fy || String(p.end || "").slice(0, 4)}` }));
+  const cols = [
+    { label: "Period", cell: (r) => `<b>${esc(r.label)}</b><span class="why">ended ${esc(mkDate(r.p.end))} · ${esc(r.p.form || "")} filed ${esc(mkDate(r.p.filed))}</span>` },
+    { label: "Revenue", r: true, cell: (r) => mkFinMoney(r.p.revenue) },
+    { label: "Net income", r: true, cell: (r) => mkFinMoney(r.p.netIncome) },
+    { label: "EPS", r: true, cell: (r) => (r.p.eps === undefined || r.p.eps === null ? '<span class="flat">—</span>' : esc(px(r.p.eps))) },
+  ];
+  const tableOf = (title, list, year) => (list.length ? `<h3 class="label mk-fin-h">${esc(title)}</h3>${table(cols, rowsOf(list, year), { cls: "mk-fin-t" })}` : "");
+  const shares = f.shares && Number.isFinite(Number(f.shares.value)) ? `<p class="mk-fin-sh"><b>${esc(mkCount(f.shares.value))}</b> shares outstanding as of ${esc(mkDate(f.shares.asOf))} <span class="dim">(${esc(f.shares.form || "")} filed ${esc(mkDate(f.shares.filed))})</span></p>` : "";
+  const c = f.concepts || {};
+  const named = [c.revenue ? `revenue is ${c.revenue}` : "", c.netIncome ? `net income ${c.netIncome}` : "", c.eps ? `earnings a share ${c.eps}` : ""].filter(Boolean).join(", ");
+  const foot = `<p class="mk-src">${esc(f.source || "SEC EDGAR")}${f.currency ? ` · in ${esc(f.currency)}` : ""}${named ? ` · ${esc(named)}` : ""}${f.latest ? ` · latest filing ${esc(f.latest.form)} filed ${esc(mkDate(f.latest.filed))}` : ""} · as filed, nothing estimated; a fourth quarter is in the year's 10-K</p>`;
+  return `${tableOf("Fiscal years", annual, true)}${tableOf("Quarters", quarterly, false)}${shares}${foot}`;
+}
+
 /** the drawer, part by part (each painted on its own, so a fresh read repaints only what changed): the head — name · countdown · price with
  * its 24 hours said once · facts · issuer · outcomes · Buy · Sell · Hand to agent · ★ · why not — then the chart, Across venues, (a pre-IPO
  * company's) IPO markets, You hold, Agents on it, On the statement */
@@ -1538,6 +1828,7 @@ function mkDrawerParts(o) {
     sell && !perpNow ? `<button type="button" class="btn" data-act="sell" data-venue="${esc(sell.venue)}" data-symbol="${esc(sell.symbol)}" data-fk="d-sell"${mkDis()}>Sell</button>` : "",
     (r.act === "trade" || r.act === "connect") && typeof openHandToAgent === "function" ? `<button type="button" class="btn" data-act="hand" data-fk="d-hand"${mkDis()}>${icon("agent", "sm")}Hand to agent</button>` : "",
     watchedNow || mkWatchTarget(it) ? `<button type="button" class="btn" data-act="watch" data-fk="d-watch" aria-pressed="${String(watchedNow)}"${mkDis()}>${icon("star", `sm${watchedNow ? " mk-on" : ""}`)}${watchedNow ? "Watching" : "Watch"}</button>` : "",
+    mkWatchTarget(it) || mkAlertsOf(it).length ? `<button type="button" class="btn" data-act="alert" data-fk="d-alert" aria-pressed="${String(mkAlertsOf(it).length > 0)}"${mkDis()}>${icon("bell", "sm")}${mkAlertsOf(it).length ? plural(mkAlertsOf(it).length, "Alert") : "Alert"}</button>` : "",
   ].filter(Boolean);
   // a dollar held (a stablecoin, cash) is moved, not traded: nothing to explain
   // a state in a word (Not served here, Close only here) is said as that, the venue's own words folded away; an issuer's rule or another
@@ -1561,10 +1852,18 @@ function mkDrawerParts(o) {
   // a dollar held (a stablecoin, cash) is compared with nothing: a dollar is a dollar
   const across = it.kind === "stable" || it.kind === "cash" ? "" : `<section class="sec" aria-label="Across venues"><h2 class="h2">Across venues</h2>${mkAcrossHtml(o)}</section>`;
   const lines = `<section class="sec" aria-label="On the statement"><div class="sec-head"><h2 class="h2">On the statement</h2>${typeof openStatement === "function" ? '<button type="button" class="link" data-act="statement" data-fk="d-statement">Open the Statement →</button>' : ""}</div>${mkLinesHtml(o)}</section>`;
+  // its price alerts (standing, with Remove; fired), where it has any — "Set another" opens the sheet
+  const alertLines = mkAlertLinesHtml(it);
+  const alerts = alertLines ? `<section class="sec" aria-label="Price alerts"><div class="sec-head"><h2 class="h2">Price alerts</h2>${mkWatchTarget(it) ? `<button type="button" class="link" data-act="alert" data-fk="d-alert2"${mkDis()}>Set another →</button>` : ""}</div>${alertLines}</section>` : "";
+  // a US share's own filed figures from the SEC (mkFinHtml), with the company's filings there one click away
+  const finOk = o.fin && o.fin.ok !== false && typeof o.fin.filingsUrl === "string" && /^https:\/\/www\.sec\.gov\//.test(o.fin.filingsUrl) ? o.fin : null;
+  const financials = !pre && mkTicker(it) ? `<section class="sec" aria-label="Financials"><div class="sec-head"><h2 class="h2">Financials</h2>${finOk ? `<a class="link mk-fin-link" href="${esc(finOk.filingsUrl)}" target="_blank" rel="noopener noreferrer">Filings at the SEC ${icon("external", "sm")}</a>` : ""}</div>${mkFinHtml(o)}</section>` : "";
   return {
     head,
     chart,
+    alerts,
     across,
+    financials,
     ipo: pre ? mkIpoHtml(o) : "",
     held: `<section class="sec" aria-label="You hold"><h2 class="h2">You hold</h2>${mkHeldHtml(o)}</section>`,
     agents: `<section class="sec" aria-label="Agents on it"><h2 class="h2">Agents on it</h2>${mkAgentsHtml(it)}</section>`,

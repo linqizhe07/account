@@ -30,7 +30,7 @@ import { decodeEventLog, keccak256, parseAbiItem, stringToHex, type Hex } from "
 import { isRefusal, type Refusal } from "../../core/errors.ts";
 import { canonical } from "../../core/hash.ts";
 import { no } from "../refuse.ts";
-import { isExpired } from "../openness.ts";
+import { isExpired, stoppedRefusal } from "../openness.ts";
 import { CHAIN_BY_ID, CHAINS, STABLECOINS, type ChainName, type ChainReader } from "../live/chain.ts";
 import type { PayHttp, PayResponse } from "../live/guarded-http.ts";
 import { edgeRefused, edgeWords, REGION } from "../live/types.ts";
@@ -238,6 +238,8 @@ export class RealPayer implements Payer {
     if (isRefusal(spend)) return spend;
     if (!(await e.stillSigned(spend))) return no("E_ACCOUNT_BAD_SIGNATURE", { message: "the spending approval's own signature no longer checks out against the account's owners", detail: { approval: spend.id } });
     if (!spend.allow.includes(url.host) && !spend.allow.includes("*")) return no("E_MANDATE_RECIPIENT", { venue: url.host, message: `"${url.host}" is not a payee the owner approved (${spend.allow.join(", ")}): nothing was sent to it`, detail: { approval: spend.id, allow: spend.allow, host: url.host } });
+    const stopped = stoppedRefusal(e.host.policy(), e.host.now());
+    if (stopped) return no(stopped.code, { message: stopped.message, detail: stopped.detail });
     if (isExpired(e.host.now(), e.host.policy().sessionExpiresAt)) return no("E_WALLET_SESSION_EXPIRED", { message: "the agents' session has ended: every write stops, reads continue" });
     // 2 · the source: an agent wallet of this agent's
     const sub = e.sub(action.fromSubAccount);

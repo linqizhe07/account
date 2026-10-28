@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { isRefusal, type Refusal } from "../../src/core/errors.ts";
 import { no } from "../../src/portfolio/refuse.ts";
 import { tradeKinds } from "../../src/portfolio/accounts.ts";
@@ -9,14 +9,15 @@ import { cardHash, type Outcome } from "../../src/portfolio/account/exchange.ts"
 import type { Payment } from "../../src/portfolio/account/payments.ts";
 import { MONEY_TYPES, shownFields, signAgent, signOwner, simKey, STEER_TYPES, type AgentAction, type OwnerAction, type SimKey } from "../../src/portfolio/account/sign.ts";
 import { paymentLine } from "../../src/portfolio/account/statement.ts";
-import { ASK_TTL_MS, ASKS_PER_HOUR, cleanName, MAX_INTENTS, MAX_REPORTS, MAX_WATCH, spendFor } from "../../src/portfolio/account/state.ts";
+import { ALERT_DAYS, ASK_TTL_MS, ASKS_PER_HOUR, cleanName, MAX_ALERTS, MAX_INTENTS, MAX_REPORTS, MAX_WATCH, spendFor } from "../../src/portfolio/account/state.ts";
 import { register, type LiveDeps } from "../../src/portfolio/live/index.ts";
+import type { Listing, PublicSource } from "../../src/portfolio/live/public-markets.ts";
 import type { LiveTrader, Market, OrderState } from "../../src/portfolio/live/trade.ts";
 import { PortfolioService } from "../../src/portfolio/service.ts";
 
 /** How the owner steers and the agents answer: a watchlist and intents the owner signs, reports and asks the agents sign. None of it is
- * authority — it never makes or widens a limit — and the account keeps it the way it keeps the rest: signed, re-verified on restore (all but
- * the asks, which live a day in memory). Cards and statement lines say which agent did what. */
+ * authority — it never makes or widens a limit — and the account keeps it the way it keeps the rest: signed, re-verified on restore (the asks
+ * too: each agent's own signature, checked again). Cards and statement lines say which agent did what. */
 type NoNonce<T> = T extends unknown ? Omit<T, "nonce"> : never;
 const START = Date.parse("2026-10-05T14:00:00.000Z");
 const HOUR = 3_600_000;
@@ -62,12 +63,12 @@ const fresh = () => {
 };
 
 /** one run of the real account on `home`, `at` ms after the start, the owner an address given at start; its clock can be moved */
-async function run(home: string, at = 0, o: { real?: boolean } = {}) {
+async function run(home: string, at = 0, o: { real?: boolean; /** the keyless public sources beside the connected venues (none unless said) */ publicMarkets?: PublicSource[] } = {}) {
   let t = START + at;
   let n = 0;
   const liveDeps: Partial<LiveDeps> = { clock: () => t, http: async () => ({ status: 599, body: undefined, text: "" }), price: async () => undefined };
   const real = o.real !== false;
-  const svc = await PortfolioService.create({ home, now: () => new Date(t).toISOString(), venues: "frontline", ...(real ? { real: true, liveDeps, liveWrites: { capUsd: 1000, pairingCode: "K7QX-M2PA" } } : {}), account: { owners: [{ id: owner.address, kind: "eoa" as const, label: "owner", addedAt: new Date(START).toISOString() }] } });
+  const svc = await PortfolioService.create({ home, now: () => new Date(t).toISOString(), venues: "frontline", ...(real ? { real: true, liveDeps, liveWrites: { capUsd: 1000, pairingCode: "K7QX-M2PA" } } : {}), ...(o.publicMarkets ? { publicMarkets: o.publicMarkets } : {}), account: { owners: [{ id: owner.address, kind: "eoa" as const, label: "owner", addedAt: new Date(START).toISOString() }] } });
   await svc.restoring;
   const engine = svc.account!;
   const nonce = () => t + ++n;
@@ -77,8 +78,8 @@ async function run(home: string, at = 0, o: { real?: boolean } = {}) {
 }
 
 /** an account with the stand-in venue connected and Claude Code let in */
-async function account(home = fresh(), at = 0) {
-  const x = await run(home, at);
+async function account(home = fresh(), at = 0, o: Parameters<typeof run>[2] = {}) {
+  const x = await run(home, at, o);
   ok(await x.own({ type: "connectVenue", venue: "ex", connector: "live:standin-steer", label: "Ex", credentialRef: "" }));
   ok(await x.own({ type: "approveAgent", agentAddress: cc.address, agentName: "Claude Code", validUntil: START + 30 * DAY }));
   return x;
@@ -116,6 +117,113 @@ describe("the owner's watchlist", () => {
     for (let i = 1; i < MAX_WATCH; i++) ok(await x.own({ type: "setWatch", venue: "kalshi", symbol: `KX-${i}:YES`, on: "true" }));
     expect(x.engine.state.watch.length).toBe(MAX_WATCH);
     expect(code(await x.own({ type: "setWatch", venue: "kalshi", symbol: "KX-ONE-MORE:YES", on: "true" }))).toBe("E_ACCOUNT_LIMIT");
+  });
+});
+
+/** PRICE ALERTS (after OpenStock's alerts; account/state.ts Alert): words to the owner, signed as setAlert and read by agents, never an
+ * order. The account itself prices each standing alert's market (service.ts lookAtAlerts) — at its venue when connected, else from the
+ * venue's public side — and fires the alert when the price is at the figure or across it: it leaves the standing ones, stays among the fired
+ * with the price that fired it, gets a note on the ledger (which a restart reads back) and reaches the pages as an `alert` event */
+describe("the owner's price alerts", () => {
+  const alert = (o: Partial<{ id: string; venue: string; symbol: string; condition: string; price: string; on: string }> = {}) => ({ type: "setAlert" as const, id: "", venue: "ex", symbol: "BTC/USDT", condition: "above", price: "61000", on: "true", ...o });
+  const exName = async (x: Awaited<ReturnType<typeof run>>) => (await x.page()).venues.find((v) => v.id === "ex")!.name;
+
+  it("is set above or below a price, at a venue on the account or not, takes its id from the sequence, is refused where malformed, doubled or an agent's, and is removed by id — at most 50", async () => {
+    const x = await account();
+    ok(await x.own(alert()));
+    ok(await x.own(alert({ venue: "kraken", symbol: "BTC/USD", condition: "below", price: "55000.5" })));
+    const page = await x.page();
+    expect(page.alerts.map((a) => [a.id, a.venue, a.venueName, a.symbol, a.condition, a.price])).toEqual([["alert-0001", "ex", await exName(x), "BTC/USDT", "above", 61000], ["alert-0002", "kraken", "kraken", "BTC/USD", "below", 55000.5]]);
+    expect(Date.parse(page.alerts[0]!.expiresAt) - Date.parse(page.alerts[0]!.at)).toBe(ALERT_DAYS * DAY);
+    expect(page.alertsFired).toEqual([]);
+    // the same alert twice is one; an id on a new one; a condition that is neither; a price that is not a plain positive decimal; a venue that is not an id; an `on` that is neither
+    expect(code(await x.own(alert()))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await x.own(alert({ id: "alert-0001", price: "62000" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await x.own(alert({ condition: "crosses" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    for (const price of ["", "0", "-5", "1e5", "63,500", "abc", "63500.", ".5"]) expect([price, code(await x.own(alert({ price })))]).toEqual([price, "E_ACCOUNT_BAD_ACTION"]);
+    expect(code(await x.own(alert({ venue: "Kraken!" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await x.own(alert({ on: "yes" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    // the owner's to sign: an agent key, let in or not, is refused at the door
+    expect(code(await x.own(alert({ price: "70000" }), cc))).toBe("E_ACCOUNT_OWNER_ONLY");
+    // removed by id, once; a removal names an id
+    ok(await x.own(alert({ id: "alert-0001", on: "" })));
+    expect(code(await x.own(alert({ id: "alert-0001", on: "" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect(code(await x.own(alert({ id: "", on: "" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    expect((await x.page()).alerts.map((a) => a.id)).toEqual(["alert-0002"]);
+    // at most MAX_ALERTS standing
+    for (let i = 1; i < MAX_ALERTS; i++) ok(await x.own(alert({ price: String(61000 + i) })));
+    expect(x.engine.state.alerts.length).toBe(MAX_ALERTS);
+    expect(code(await x.own(alert({ price: "99999" })))).toBe("E_ACCOUNT_LIMIT");
+    // a steering type: no money, and no limit reads it; signed field by field, the price as text
+    expect([STEER_TYPES.has("setAlert"), MONEY_TYPES.has("setAlert")]).toEqual([true, false]);
+    expect(shownFields({ ...alert(), nonce: 1 } as OwnerAction).map((f) => `${f.name}=${f.value}`)).toEqual(["id=", "venue=ex", "symbol=BTC/USDT", "condition=above", "price=61000", "on=true", "nonce=1"]);
+  });
+
+  it("fires when the account's own look finds the price at the figure or across it: the standing one leaves, the fired one stays with the price that fired it and whose it was, the ledger has its note, and every page is told", async () => {
+    // no public sources: what the look prices is the stand-in venue alone, never the real Kraken over the network
+    const x = await account(fresh(), 0, { publicMarkets: [] });
+    const told: unknown[] = [];
+    vi.spyOn(x.svc.stream, "emit").mockImplementation((type, data) => void (type === "alert" && told.push(data)));
+    const name = await exName(x);
+    ok(await x.own(alert({ condition: "above", price: "61000" }))); // BTC at 60,000: stands
+    ok(await x.own(alert({ condition: "below", price: "61000" }))); // 60,000 is under it: fires
+    ok(await x.own(alert({ condition: "above", price: "60000" }))); // at the figure: fires
+    ok(await x.own(alert({ venue: "kraken", symbol: "BTC/USD", condition: "below", price: "70000" }))); // nothing here prices Kraken: stands
+    const fired = await x.svc.lookAtAlerts();
+    expect(fired.map((f) => [f.id, f.seen, f.from])).toEqual([["alert-0002", 60000, name], ["alert-0003", 60000, name]]);
+    const page = await x.page();
+    expect(page.alerts.map((a) => a.id)).toEqual(["alert-0001", "alert-0004"]);
+    expect(page.alertsFired.map((f) => [f.id, f.condition, f.price, f.seen, f.from, f.venueName])).toEqual([["alert-0003", "above", 60000, 60000, name, name], ["alert-0002", "below", 61000, 60000, name, name]]);
+    expect((told as Array<{ id: string; venueName: string; at: string }>).map((e) => [e.id, e.venueName, !!e.at])).toEqual([["alert-0002", name, true], ["alert-0003", name, true]]);
+    // the ledger's note, in words, with the alert itself (which a restart reads back)
+    const notes = x.svc.ledgerRows().filter((r) => r.kind === "note" && !!(r.detail as { alertFired?: unknown } | undefined)?.alertFired);
+    expect(notes.map((r) => (r.detail as { alertFired: { id: string; seen: number } }).alertFired).map((f) => [f.id, f.seen])).toEqual([["alert-0002", 60000], ["alert-0003", 60000]]);
+    expect(notes[0]!.reason).toBe(`price alert alert-0002 fired: BTC/USDT at ${name} fell below 61,000 — 60,000 (${name})`);
+    expect(notes[1]!.reason).toBe(`price alert alert-0003 fired: BTC/USDT at ${name} rose above 60,000 — 60,000 (${name})`);
+    // a second look fires nothing more, and a fired alert stands no more to be removed
+    expect(await x.svc.lookAtAlerts()).toEqual([]);
+    expect(code(await x.own(alert({ id: "alert-0002", on: "" })))).toBe("E_ACCOUNT_BAD_ACTION");
+    // the next alert takes the next id: the fired ones used theirs
+    ok(await x.own(alert({ price: "65000" })));
+    expect(x.engine.state.alerts.map((a) => a.id)).toEqual(["alert-0001", "alert-0004", "alert-0005"]);
+  });
+
+  it("prices a market at a venue that is not connected from the venue's public side (its listings), in that source's words, and leaves an alert standing where nothing prices its market", async () => {
+    const line: Listing = { symbol: "BTC/USD", name: "BTC/USD", kind: "spot", base: "BTC", quote: "USD", price: 50_000, bid: 49_990, ask: 50_010, open: true, types: ["market", "limit"] };
+    const kraken: PublicSource = { id: "kraken", name: "Kraken", kind: "exchange", connectTo: "kraken", connector: "live:exchange:kraken", listings: async () => [line] };
+    const x = await run(fresh(), 0, { publicMarkets: [kraken] });
+    ok(await x.own({ type: "connectVenue", venue: "ex", connector: "live:standin-steer", label: "Ex", credentialRef: "" }));
+    ok(await x.own(alert({ venue: "kraken", symbol: "BTC/USD", condition: "below", price: "52000" })));
+    ok(await x.own(alert({ venue: "kraken", symbol: "ETH/USD", condition: "below", price: "5000" }))); // Kraken's public side lists no ETH/USD here: stands
+    ok(await x.own(alert({ venue: "nowhere", symbol: "X/Y", condition: "above", price: "1" }))); // no venue, no source: stands
+    expect((await x.svc.lookAtAlerts()).map((f) => [f.id, f.seen, f.from])).toEqual([["alert-0001", 50000, "Kraken"]]);
+    expect((await x.page()).alerts.map((a) => a.id)).toEqual(["alert-0002", "alert-0003"]);
+    expect((await x.page()).alertsFired.map((f) => [f.id, f.venueName])).toEqual([["alert-0001", "kraken"]]);
+  });
+
+  it("comes back after a restart: the standing alerts verified again, the fired ones from their notes, a lapsed one gone, and ids continue", async () => {
+    const home = fresh();
+    // no public sources in any of the three runs: the Kraken alert is priced by nothing, so it stands through them all
+    const none = { publicMarkets: [] };
+    const a = await account(home, 0, none);
+    ok(await a.own(alert({ condition: "above", price: "61000" }))); // alert-0001 stands
+    ok(await a.own(alert({ condition: "below", price: "61000" }))); // alert-0002 fires
+    ok(await a.own(alert({ venue: "kraken", symbol: "BTC/USD", condition: "above", price: "1" }))); // alert-0003: nothing prices it here, stands
+    expect((await a.svc.lookAtAlerts()).map((f) => f.id)).toEqual(["alert-0002"]);
+
+    const b = await run(home, HOUR, none);
+    expect(b.svc.restored?.skipped).toEqual([]);
+    const page = await b.page();
+    expect(page.alerts.map((x) => x.id)).toEqual(["alert-0001", "alert-0003"]);
+    expect(page.alertsFired.map((f) => [f.id, f.seen, f.condition])).toEqual([["alert-0002", 60000, "below"]]);
+    ok(await b.own(alert({ price: "65000" })));
+    expect(b.engine.state.alerts.map((x) => x.id)).toEqual(["alert-0001", "alert-0003", "alert-0004"]);
+
+    // ninety-one days on, the standing ones have lapsed: a restart brings none of them back, the fired one still shows, and none is there to remove
+    const c = await run(home, 91 * DAY, none);
+    expect((await c.page()).alerts).toEqual([]);
+    expect((await c.page()).alertsFired.map((f) => f.id)).toEqual(["alert-0002"]);
+    expect(code(await c.own(alert({ id: "alert-0001", on: "" })))).toBe("E_ACCOUNT_BAD_ACTION");
   });
 });
 
@@ -362,7 +470,7 @@ describe("what each venue's trader offers", () => {
 });
 
 describe("after a restart", () => {
-  it("the watchlist and the intents come back verified, each with its latest report; the asks do not; ids continue", async () => {
+  it("the watchlist, the intents and the asks still waiting come back verified, each intent with its latest report; ids continue", async () => {
     const home = fresh();
     const a = await account(home);
     ok(await a.own({ type: "setWatch", venue: "kraken", symbol: "BTC/USD", on: "true" }));
@@ -381,7 +489,8 @@ describe("after a restart", () => {
     const page = await b.page();
     expect(page.watch.map((w) => `${w.venue} ${w.symbol}`)).toEqual(["kraken BTC/USD"]);
     expect(page.intents.map((i) => [i.id, i.text, i.reports, i.report?.status, i.report?.note, i.report?.byName])).toEqual([["intent-0001", "Buy BTC under 59k this week", 2, "done", "bought 0.001", "Claude Code"]]);
-    expect(page.asks).toEqual([]);
+    // the ask still waits for the owner, under its own id, its agent's signature checked again (account/restore.ts)
+    expect(page.asks.map((x) => [x.id, x.kind, x.venue, x.text])).toEqual([["ask-0001", "limit", "ex", "a trading limit at Ex, please"]]);
     ok(await b.own(intent({ text: "the next one" })));
     expect(b.engine.state.intents.map((i) => i.id)).toEqual(["intent-0001", "intent-0003"]);
   });

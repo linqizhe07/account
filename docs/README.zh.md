@@ -46,6 +46,8 @@ Node ≥ 22。常用开关：`--live-cap 50`（单笔上限，默认 $100）、`
 
   切到 Guard 一键，切到 Beast 要签名；卡 30 分钟没人答自动过期。十扇门的完整对照在页面的 Mode 弹层（服务器给的 `modeRules`）。接口上的值仍是 `guard` | `open`。
 - **不变的线**：单笔上限（启动时 `--live-cap`，之后在 Settings 里改，升降都是 owner 一次签名 `setPolicy cap`，重启按最后一次签的恢复；纸上账户不受它）；钱只去你自己的地方；随时撤销；场所自己的地区规则不绕。
+- **一下全停**：Settings、Agents 弹层或 Waiting for you 上的红按钮 **Stop all agents**，不用签名：每个 agent 的会话立刻结束（写一律拒绝 `E_WALLET_AGENTS_STOPPED`，读照常），切回 Guard，等着的卡全部关掉、额度退回，desk 暂停；钥匙、额度和 agent 留在场所的挂单不动。重新开始是你的签名（新会话），重启后照样是停的。
+- **卡找得到你**：Settings 里打开 **Cards in the background**，标签页不在前台时这个浏览器用系统通知说谁在等你、要做什么、几点前答。agent 的请求、敲门的 agent 跨重启接回来；等着的卡重启时关掉，agent 读到为什么，再问一次。
 
 ## 能接什么
 
@@ -128,7 +130,7 @@ agent 记得的你放在账户里，不放在某一个 agent 程序里：换一�
 
 ## 网站
 
-公开介绍页：[linqizhe07.github.io/buyer-agent-demo](https://linqizhe07.github.io/buyer-agent-demo/)（源码在 `site/`，GitHub Pages，推到 main 自动发布）。页上的数字由 `npm run site:numbers` 从仓库算出来写进 `site/data/numbers.json`，过期时 `test/unit/site-numbers.test.ts` 失败、发布停下；行情由访客自己的浏览器直接从 Hyperliquid、Kraken、Coinbase、OKX、Polymarket 的公开接口读，读不到的不画；截图来自替身账户，图下写明。本地预览 `npm run site`（http://127.0.0.1:4870/buyer-agent-demo/）。
+公开介绍页：[linqizhe07.github.io/account](https://linqizhe07.github.io/account/)（源码在 `site/`，GitHub Pages，推到 main 自动发布）。页上的数字由 `npm run site:numbers` 从仓库算出来写进 `site/data/numbers.json`，过期时 `test/unit/site-numbers.test.ts` 失败、发布停下；行情由访客自己的浏览器直接从 Hyperliquid、Kraken、Coinbase、OKX、Polymarket 的公开接口读，读不到的不画；截图来自替身账户，图下写明。本地预览 `npm run site`（http://127.0.0.1:4870/buyer-agent-demo/）。
 
 ## 文档
 
@@ -146,3 +148,7 @@ test/             unit · attack（攻击复现，必须失败）· standin（�
 docs/             细节
 site/             公开介绍页（GitHub Pages）；scripts/ 它的数字和本地预览
 ```
+
+## 许可
+
+Apache-2.0（仓库根目录的 [LICENSE](../LICENSE)），版权 2026 Linqi Zhe：可以用、改、再分发，包括放进你卖的东西里，只要许可证和声明跟着走；不提供任何担保。要贡献先读 [CONTRIBUTING.md](../CONTRIBUTING.md)；安全问题按 [SECURITY.md](../SECURITY.md) 私下报，不要开公开的 issue。
