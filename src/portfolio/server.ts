@@ -42,6 +42,11 @@
  *   POST /api/account/signin/start {connector}     a venue's own OAuth sign-in (Robinhood): the page to open, and its state
  *   GET  /api/account/signin/status?state=         how that sign-in stands
  *   GET  /api/account/signin/callback              where the venue sends the owner's browser back
+ *   GET  /api/account/github                       the GitHub sign-in a new paper account asks for (live/github.ts): who is signed in,
+ *                                                  a code waiting to be entered at github.com/login/device, the hi — {on: false} when
+ *                                                  this server asks for none. Never a token, never GitHub's device code
+ *   POST /api/account/github/start {again?}        a code to enter at GitHub (the one waiting, or a new one); GitHub is asked from here
+ *   POST /api/account/github/signout               signed out here: the token forgotten, who it was taken off this machine
  *   GET  /api/account/statement        every transaction at the real venues, across the account's runs, newest first
  *   GET  /api/account/stream[?since=&client=&markets=]  THE PUSH CHANNEL (account/stream.ts): text/event-stream, one a tab (ui/stream.js) —
  *                                      what changes on the account as it happens: order, fill, position, balance, paper, statement, card,
@@ -181,6 +186,7 @@ import { AgentSession, PRESETS } from "./agent.ts";
 import { BRIDGE_CHAINS } from "./live/bridge.ts";
 import { STABLECOINS } from "./live/chain.ts";
 import { exchangeList } from "./live/exchange.ts";
+import { githubConfig } from "./live/github.ts";
 import { positionIcon } from "./live/icons.ts";
 import { STABLES } from "./live/types.ts";
 import { parseEventSymbol } from "./events.ts";
@@ -601,6 +607,32 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const r = signIn ? await signIn.finish({ state, code: text(q.code), error: text(q.error), error_description: text(q.error_description), iss: text(q.iss) }) : no("E_ACCOUNT_BAD_ACTION", { message: "this sign-in is not one this server started, or it ran out: start it again from the account page" });
     res.status(isRefusal(r) ? 400 : 200).type("html").send(signedInPage(isRefusal(r) ? r.message : undefined));
   }));
+
+  // THE GITHUB SIGN-IN a new paper account asks for (live/github.ts): GitHub's device flow — the owner types a short code on GitHub's own
+  // page, in their own browser, and this server asks GitHub until it is entered. Nothing is connected by it and nothing is signed: opening the
+  // paper account is still the owner's signed connectVenue, and hi in the project's thread their signed githubHello. Like brain-test, these
+  // ask for a browser's own headers (Sec-Fetch-Site: same-origin, or the Origin the guard above checked): not authentication, only that a
+  // program sending neither does not start or end a sign-in by accident
+  const browserOnly = (req: express.Request, res: express.Response): boolean => {
+    if (req.headers["sec-fetch-site"] === "same-origin" || typeof req.headers.origin === "string") return true;
+    res.status(403).json({ ok: false, error: "The GitHub sign-in is asked from the account's own page: a request without a browser's headers is not taken." });
+    return false;
+  };
+  app.get("/api/account/github", (_req, res) => {
+    res.json(svc.github ? { ok: true, ...svc.github.view() } : { ok: true, on: false });
+  });
+  app.post("/api/account/github/start", wrap(async (req, res) => {
+    if (!svc.github) return void res.status(404).json({ ok: false, error: "this server asks for no GitHub sign-in" });
+    if (!browserOnly(req, res)) return;
+    const r = await svc.github.start((req.body as { again?: unknown } | undefined)?.again === true);
+    res.status(isRefusal(r) ? (r.code === "E_VENUE_UNREACHABLE" ? 502 : 400) : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, ...r });
+  }));
+  app.post("/api/account/github/signout", (req, res) => {
+    if (!svc.github) return void res.status(404).json({ ok: false, error: "this server asks for no GitHub sign-in" });
+    if (!browserOnly(req, res)) return;
+    const r = svc.github.signOut();
+    res.status(isRefusal(r) ? 400 : 200).json(isRefusal(r) ? { ok: false, refusal: r } : { ok: true, ...r });
+  });
 
   // the statement: every transaction at the real venues, from every ledger in this home (so it outlives a restart), newest first
   app.get("/api/account/statement", wrap(async (_req, res) => {
@@ -1146,6 +1178,8 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
       // streams closed, and every paper book's last change written
       svc.stream.end();
       svc.closeStreams();
+      // nothing more asked of GitHub for a code no one will enter now
+      svc.github?.stop();
       await svc.flushPaper();
       await snapping;
       await new Promise<void>((resolve) => {
@@ -1185,7 +1219,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // a real account continues its earlier runs — the owner's device, the venues, the agents and their limits come back (account/restore.ts);
   // --fresh starts it from nothing
   const fresh = args.includes("--fresh");
-  const service = await PortfolioService.create({ home: at("--home") ?? defaultHome(), live, fresh, ...(liveWrites ? { liveWrites } : {}), ...(code ? { pairingCode: code } : {}), ...(classic ? {} : { venues: "frontline" as const, real: true, openness }) });
+  // opening a paper account asks for a GitHub sign-in when this build names a GitHub app (live/github.ts GITHUB_APP), or the environment does
+  const github = classic ? undefined : githubConfig(process.env, (line) => console.log(line));
+  const service = await PortfolioService.create({ home: at("--home") ?? defaultHome(), live, fresh, ...(liveWrites ? { liveWrites } : {}), ...(code ? { pairingCode: code } : {}), ...(classic ? {} : { venues: "frontline" as const, real: true, openness }), ...(github ? { github } : {}) });
   const srv = await startPortfolioServer({ port, service }).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "EADDRINUSE") throw e;
     // the usual reason: this server is already running in another terminal
@@ -1201,6 +1237,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // where the owner can connect, kept fresh without anyone asking: the venues' own answers to this network, and their terms matched to where
   // it is (live/availability.ts) — so the page and the agents know before anyone makes a key
   if (!classic && service.account) service.watchVenues();
+  if (!classic && service.account) console.log(github ? `GitHub sign-in: a new paper account asks for one (app ${github.clientId}${github.discussion ? ` · hi, if the owner ticks it, in github.com/${github.repo}/discussions/${github.discussion}` : ""})` : "GitHub sign-in: off (this build names no GitHub app): a paper account opens without one");
   // the paper accounts' own clock: their resting orders, stops, days and funding looked at every few seconds (service.ts watchPaper)
   if (!classic && service.account) service.watchPaper();
   // the venues' own live streams (live/stream-hub.ts): started lazily — nothing opens until a paper order or a page wants a market — so

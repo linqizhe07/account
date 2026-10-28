@@ -417,3 +417,37 @@ describe("the Stand-in Broker keeps New York's market hours: a stand-in started 
     expect((await get("/api/account/market?venue=broker&symbol=SPY")).body.market.session).toEqual({ open: false, opensAt: new Date(stockSession(clockMs).opensAt).toISOString() });
   });
 });
+
+describe("the stand-in with --github: a new paper account asks for a GitHub sign-in first", () => {
+  it("starts signed out with its own paper account on it, signs in against the stand-in GitHub, then opens one and says hi once", async () => {
+    const g = await startStandin({ port: 0, tickMs: 0, agentMs: 0, github: true });
+    try {
+      const read = async (path: string) => (await fetch(`${g.url}${path}`)).json();
+      const page = { "content-type": "application/json", origin: g.url, "sec-fetch-site": "same-origin" };
+      const seed = async (a: Record<string, unknown>): Promise<{ status: number; body: any }> => {
+        const action = { ...a, nonce: (await read("/api/now")).ms as number } as OwnerAction;
+        const r = await fetch(`${g.url}/api/exchange`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, nonce: action.nonce, signature: signDevice(g.seed, action) }) });
+        return { status: r.status, body: await r.json() };
+      };
+      const first = await read("/api/account/github");
+      expect(first).toMatchObject({ on: true, thread: "https://github.com/linqizhe07/account/discussions/1" });
+      expect(first.signedIn).toBeUndefined();
+      expect((await read("/api/account")).venues.some((v: { id: string }) => v.id === "paper-momentum")).toBe(true);
+      const refused = await seed({ type: "connectVenue", venue: "paper-2", connector: "live:paper", label: "", credentialRef: "" });
+      expect([refused.status, refused.body.refusal.detail]).toEqual([409, { github: "sign-in" }]);
+      const started = await (await fetch(`${g.url}/api/account/github/start`, { method: "POST", headers: page, body: "{}" })).json();
+      expect(started.waiting.code).toBe("STAN-D1N0");
+      // the stand-in GitHub takes the code at its first check, two seconds on
+      let now = await read("/api/account/github");
+      for (let i = 0; i < 60 && !now.signedIn; i++) now = (await new Promise((r) => setTimeout(r, 100)), await read("/api/account/github"));
+      expect(now.signedIn).toMatchObject({ login: "standin-octo", name: "Stand-in Octo" });
+      expect(now.hello).toEqual({ words: "👋 @standin-octo started a paper account", can: true });
+      expect((await seed({ type: "connectVenue", venue: "paper-2", connector: "live:paper", label: "", credentialRef: "" })).status).toBe(200);
+      const said = await seed({ type: "githubHello", repo: "linqizhe07/account", discussion: 1, body: "👋 @standin-octo started a paper account" });
+      expect(said.body).toMatchObject({ ok: true, kind: "result", result: { url: "https://github.com/linqizhe07/account/discussions/1#discussioncomment-1" } });
+      expect((await read("/api/account/github")).hello).toMatchObject({ can: false, said: { url: expect.stringContaining("#discussioncomment-1") } });
+    } finally {
+      await g.close();
+    }
+  }, 30_000);
+});

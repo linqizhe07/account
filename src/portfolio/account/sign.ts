@@ -174,7 +174,12 @@ export type OwnerAction =
   | { type: "resetPaper"; venue: string; usd: string; nonce: number }
   /** paper money added to a paper account the account keeps itself: `usd` dollars more in its cash, written in its book as paper money put
    * in (its curve and what it made or lost since it started count it as put in, never as a gain) */
-  | { type: "topUpPaper"; venue: string; usd: string; nonce: number };
+  | { type: "topUpPaper"; venue: string; usd: string; nonce: number }
+  /** HI IN THE PROJECT'S THREAD (live/github.ts): one comment, from the owner's own GitHub account — signed in on this machine — in the
+   * pinned discussion `discussion` of `repo`, with the words `body`. All three are the account's own: prepare fills them in (the build's
+   * thread, helloWords of who is signed in) and the door posts only those, once from a machine. Opt-in: opening a paper account never
+   * signs it. The ledger keeps it with `body` blanked (exchange.ts ledgered): who signed in stays out of the record */
+  | { type: "githubHello"; repo: string; discussion: number; body: string; nonce: number };
 
 export type AgentAction =
   | { type: "agentSendAsset"; destination: string; sourceDex: string; destinationDex: string; token: string; amount: string; fromSubAccount: string; maxFee: string; nonce: number }
@@ -224,7 +229,7 @@ export type AgentAction =
 
 export type Action = OwnerAction | AgentAction;
 
-export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setAlert", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper", "signOut"] as const;
+export const OWNER_TYPES = ["sendAsset", "swap", "approveAgent", "approveBuilderFee", "approveSpend", "createSubAccount", "userSetAbstraction", "convertToMultiSigUser", "setDestination", "approveCard", "setPolicy", "connectVenue", "disconnectVenue", "liveMove", "liveOrder", "liveCancel", "liveAmend", "liveClose", "liveLeverage", "setWatch", "setAlert", "setIntent", "liveEarn", "answerAsk", "setMemory", "forgetMemory", "setMemoryRules", "setDesk", "setBrainKey", "resetPaper", "topUpPaper", "signOut", "githubHello"] as const;
 export const AGENT_TYPES = ["agentSendAsset", "agentSwap", "agentPay", "agentExecute", "agentOrder", "agentLiveMove", "agentLiveOrder", "agentLiveCancel", "agentLiveAmend", "agentLiveClose", "agentLiveLeverage", "agentReport", "agentAsk", "agentLiveEarn", "agentRemember", "agentForget", "agentDeskSay"] as const;
 /** an instruction that moves money — or, like a leverage change, changes what a position risks — is good for minutes after it is signed,
  * not for the two days of the nonce window */
@@ -245,6 +250,8 @@ export const PAPER_TYPES: ReadonlySet<string> = new Set(["resetPaper", "topUpPap
 export const PAPER_TTL_MS = MONEY_TTL_MS;
 /** a sign-out is signed and sent at once: an envelope kept for later is never one that signs a browser out of the account days after */
 export const SIGN_OUT_TTL_MS = MONEY_TTL_MS;
+/** hi in the project's thread is signed and sent at once, as the paper account it comes with is opened: never an envelope kept to post later */
+export const GITHUB_HELLO_TTL_MS = MONEY_TTL_MS;
 
 export function isOwnerAction(a: { type: string }): a is OwnerAction {
   return (OWNER_TYPES as readonly string[]).includes(a.type);
@@ -337,6 +344,7 @@ const OWNER_FIELDS: Record<OwnerAction["type"], { primary: string; fields: Field
   resetPaper: { primary: "AccountPaper:Reset", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
   topUpPaper: { primary: "AccountPaper:TopUp", fields: [{ name: "venue", type: "string" }, { name: "usd", type: "string" }, NONCE] },
   signOut: { primary: "AccountDevice:SignOut", fields: [{ name: "device", type: "string" }, NONCE] },
+  githubHello: { primary: "AccountGitHub:Hello", fields: [{ name: "repo", type: "string" }, { name: "discussion", type: "uint64" }, { name: "body", type: "string" }, NONCE] },
 };
 /** a spending approval that answers an intent names it: one more signed field, before the nonce */
 const INTENT_FIELD: Field = { name: "intent", type: "string" };

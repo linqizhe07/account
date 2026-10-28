@@ -52,6 +52,7 @@ Gravit has no server in the middle, and no analytics: your computer reads public
 - **One button stops them all.** *Stop all agents* ends every agent's session at once, back in Guard, with waiting cards closed and the desk paused. It needs no signature; starting them again is a new session, signed by you, and a restart keeps them stopped.
 - **Cards find you.** Turn on *Cards in the background* and this browser's notification tells you when an agent waits on you, with the tab in the background. What agents asked survives a restart; a card does not: it is closed, and its agent is told why.
 - **A record of everything** in a hash-chained log on your computer, and a Statement you can filter and export.
+- **Signing in with GitHub.** When Gravit asks you to sign in with GitHub before a new paper account, you type a short code on GitHub's own page. It reads your GitHub username, name and avatar — never your email — keeps them on your computer, and keeps GitHub's token in memory only. Saying hi in the project's GitHub thread is a box you tick yourself; it is never ticked for you. A paper account already on your computer opens without signing in.
 
 ## Bring your own agent
 

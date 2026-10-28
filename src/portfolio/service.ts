@@ -91,11 +91,12 @@ import { realMm } from "./live/metamask.ts";
 import { publicPrices } from "./live/prices.ts";
 import { ROBINHOOD_MCP } from "./live/robinhood.ts";
 import { OAuthSignIn } from "./live/signin.ts";
+import { GitHubSignIn, paperGateNo, type GitHubConfig, type GitHubSignInOptions } from "./live/github.ts";
 import { reachBanUntil, reachKeepMs, reachOf, type Reach } from "./live/reach.ts";
 import { EDITIONS, KNOWN_EXCHANGES, venuesHere, verdictOf, type AvailabilityDeps, type VenueHere } from "./live/availability.ts";
 import { termsHere, VENUE_TERMS } from "./live/eligibility.ts";
 import { locator, type Locator } from "./live/location.ts";
-import { isStable, realHttp, type PaperControls } from "./live/types.ts";
+import { isStable, realHttp, type Http, type PaperControls } from "./live/types.ts";
 import { isPlain } from "./account/state.ts";
 import type { AgentAction, Envelope, Hex, OwnerAction } from "./account/sign.ts";
 import { Desk, type Brain, type BrainStatus, type BrainTest, type DeskWorld } from "./account/desk.ts";
@@ -166,6 +167,10 @@ export interface ServiceOptions {
    * the Anthropic API and each OpenAI-format preset — each ready when its key is there; a scripted one in tests. `env`: the environment
    * those brains read before their key files, as the answer to a key typed on the page says it (envWins); the process's own by default */
   desk?: { brain?: Brain | Brain[] | undefined; tickMs?: number | undefined; firstCycleMs?: number | undefined; env?: NodeJS.ProcessEnv | undefined } | undefined;
+  /** THE GITHUB SIGN-IN asked for before a paper account is opened (live/github.ts): the build's app and its thread (githubConfig) — and,
+   * in tests and the stand-in, GitHub itself (`http`) and the pace it is asked at (`schedule`). Absent: no sign-in is asked for, and a paper
+   * account opens as it always has */
+  github?: (GitHubConfig & { http?: Http | undefined; schedule?: GitHubSignInOptions["schedule"] }) | undefined;
   /** THE VENUES' LIVE STREAMS as a test hands them in (a hub over a stand-in WebSocket, or test/standin's stand-in prices): the real server
    * starts its own instead (watchStreams), and without either nothing is streamed — every price is a REST read, as before */
   streams?: MarketHub | undefined;
@@ -327,6 +332,8 @@ export class PortfolioService {
   readonly live: boolean;
   /** the account layer, when it is mounted */
   readonly account: AccountEngine | undefined;
+  /** the GitHub sign-in a new paper account asks for (live/github.ts), when this server has one: with the account layer only */
+  readonly github: GitHubSignIn | undefined;
   /** what the agents remember, kept with the account layer (account/memory.ts): the conversation, their notes, the owner's About you */
   readonly memory: MemoryStore | undefined;
   /** the simulated payees an agent's payment can reach (x402, MPP, ACP, AP2), mounted with the account layer */
@@ -392,7 +399,9 @@ export class PortfolioService {
     this.ledger = this.openLedger();
     this.mount();
     this.memory = opts.account !== undefined || opts.venues === "frontline" ? new MemoryStore(join(opts.home, "memory"), () => Date.parse(this.now())) : undefined;
-    this.account = opts.account !== undefined || opts.venues === "frontline" ? new AccountEngine(this.host(), opts.account ?? {}) : undefined;
+    const layered = opts.account !== undefined || opts.venues === "frontline";
+    this.github = layered && opts.github ? new GitHubSignIn({ home: opts.home, config: { clientId: opts.github.clientId, repo: opts.github.repo, discussion: opts.github.discussion }, http: opts.github.http ?? realHttp, clock: opts.liveDeps?.clock ?? Date.now, schedule: opts.github.schedule, onChange: () => this.githubChanged() }) : undefined;
+    this.account = layered ? new AccountEngine(this.host(), opts.account ?? {}) : undefined;
     if (this.account) this.catalog = opts.connectable ?? loadConnectable();
     // the desk lives on a real account only: its seats are keys at the real door, its leads orders at a venue connected live
     this.desk = this.account && opts.real ? new Desk(this.deskWorld(), { brain: opts.desk?.brain ?? brainProviders(opts.home, { env: opts.desk?.env }), tickMs: opts.desk?.tickMs, firstCycleMs: opts.desk?.firstCycleMs, onChange: (c) => this.stream.emit("desk", { ...c, at: this.now() }) }) : undefined;
@@ -538,6 +547,8 @@ export class PortfolioService {
           if (!isRefusal(r)) this.onConnection?.({ kind: "connect", venue, name: this.nameOf(venue) });
           return r;
         }
+        const gate = connector === "live:paper" ? this.paperGate(venue) : undefined;
+        if (gate) return gate;
         const kept = connector === "live:paper" ? this.paperKeptRule(venue, credentialRef) : null;
         if (kept) return kept;
         const r = await this.plugOrWait(venue, connector, label, credentialRef);
@@ -627,6 +638,10 @@ export class PortfolioService {
       // a paper account the account keeps itself, as its owner runs it (live/paper.ts): started again, or paper money added
       paper: (action) => this.paperControl(action),
       paperWords: (action) => this.paperControlWords(action),
+      // a new paper account asks for a GitHub sign-in first, when this server has one; hi in the project's thread, on the owner's signature
+      paperGate: (venue) => this.paperGate(venue),
+      githubHelloDraft: () => this.github?.helloDraft() ?? no("E_ACCOUNT_BAD_ACTION", { message: "this server has no GitHub sign-in" }),
+      githubHello: (action) => this.github?.hello(action) ?? Promise.resolve(no("E_ACCOUNT_BAD_ACTION", { message: "this server has no GitHub sign-in" })),
       ...(real && this.opts.liveWrites
         ? {
             agentWalletAddress: (name: string) => {
@@ -1866,7 +1881,7 @@ export class PortfolioService {
         const id = c.replace(/^live:(exchange:)?/, "");
         const banned = this.marketReads.banOf(id);
         if (banned) return Promise.resolve<Reach>({ connector: c, state: "unreachable", said: banned.refusal.message, at: new Date(banned.at).toISOString() });
-        const pending = reachOf(c, { http: deps.http, clock: deps.clock, open: deps.openExchange, mm: deps.mm, signIn: (k) => this.signIn(k), where: this.where() })
+        const pending = reachOf(c, { http: deps.http, clock: deps.clock, open: deps.openExchange, mm: deps.mm, signIn: (k) => this.signIn(k), where: this.where(), paperSetup: () => this.github?.paperSetup() })
           .catch((): Reach => ({ connector: c, state: "unreachable", said: "no answer just now; connecting asks again", at: new Date(deps.clock()).toISOString() }))
           .then((r) => {
             const now = deps.clock();
@@ -2645,6 +2660,20 @@ export class PortfolioService {
     const untouched = !Object.keys(b.orders ?? {}).length && !(b.fills ?? []).length && !Object.keys(b.holdings ?? {}).length && !Object.keys(b.positions ?? {}).length && !(b.deposits ?? []).length;
     if (untouched && b.startCashUsd === sum && b.cashUsd === sum) return null;
     return no("E_ACCOUNT_CREDENTIAL", { venue, message: `${b.name} is kept on this machine as ${venue}, with ${cents(b.cashUsd)} of paper cash: connecting ${venue} continues that book, so the ${cents(sum)} named would not be used. Connect it with no starting money to continue it, start it again with ${cents(sum)}, or open a paper account under another name`, detail: { field: "credentialRef", book: summaryOf(b) } });
+  }
+  /** OPENING A NEW PAPER ACCOUNT asks for a GitHub sign-in first, when this server has one (live/github.ts): refused while nobody is signed
+   * in and `venue` has no book on this machine. A book kept here continues without it, and so does everything done with one (reset,
+   * paper money added, a restart's restore, which never comes through here) */
+  paperGate(venue: string): Refusal | undefined {
+    if (!this.github || this.github.identity()) return undefined;
+    // an id that is not one is the connection's to refuse, in its own words
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(venue) || existsSync(paperBookPath(this.opts.home, venue))) return undefined;
+    return paperGateNo(venue);
+  }
+  /** someone signed in or out with GitHub: the paper connection's answer is asked again now, so the list of venues says it at once */
+  private githubChanged(): void {
+    this.reaches.delete("live:paper");
+    void this.reachEach(["live:paper"], false).catch(() => undefined);
   }
   /** each paper account the account keeps itself that is connected now: its book's own controls (live/paper.ts), by venue */
   private readonly paperControls = new Map<string, PaperControls>();

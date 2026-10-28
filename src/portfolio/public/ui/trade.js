@@ -352,8 +352,18 @@ function tkOnboard(box, owner) {
   const books = TK.paperBooks || [];
   const look = owner ? "" : ` disabled title="${esc("This browser only looks: pair it to sign")}"`;
   const keep = books.slice(0, 2).map((b) => tkKeptButton(b, look)).join("");
+  // a new paper account waits for a GitHub sign-in when the server asks for one (connect.js ghGate): the button opens the paper form, where
+  // the sign-in is; a book kept here continues without it. What the server asks is read once a minute
+  const gh = typeof ghGate === "function" && ghGate();
+  if (typeof ghRead === "function" && (!TK.ghAt || Date.now() - TK.ghAt > 60_000)) {
+    TK.ghAt = Date.now();
+    ghRead().then(() => {
+      if (box.isConnected && !box.hidden && typeof ghGate === "function" && ghGate() !== gh) tkOnboard(box, owns());
+    });
+  }
+  const go = gh ? `<button type="button" class="btn btn-primary" data-ob-github data-fk="ob-github"${look}>Sign in with GitHub to open one</button>` : `<label class="fld">Paper money<input name="usd" inputmode="decimal" placeholder="${esc(String(TK_PAPER_CASH))}" autocomplete="off" /></label><button type="submit" class="btn btn-primary" data-ob-go data-fk="ob-go"${look}>Open a paper account</button>`;
   // drawn once and kept: the amount typed in it stands while the page refreshes (paint keeps a focused field's words)
-  paint(box, `<div class="tt-ob"><div class="tt-ob-t"><b>Practise on paper first</b><span class="dim">A paper account trades the public venues' real prices with paper money, by the account's own fill rule. Nothing real moves, and it says Paper wherever it shows. Opening it is signed, as any connection is.</span></div><form class="tt-ob-f" data-ob-form novalidate><label class="fld">Paper money<input name="usd" inputmode="decimal" placeholder="${esc(String(TK_PAPER_CASH))}" autocomplete="off" /></label><button type="submit" class="btn btn-primary" data-ob-go data-fk="ob-go"${look}>Open a paper account</button>${keep}<button type="button" class="link" data-ob-off data-fk="ob-off">Not now</button></form><p class="msg" data-ob-msg role="status"></p></div>`);
+  paint(box, `<div class="tt-ob"><div class="tt-ob-t"><b>Practise on paper first</b><span class="dim">A paper account trades the public venues' real prices with paper money, by the account's own fill rule. Nothing real moves, and it says Paper wherever it shows. Opening it is signed, as any connection is${gh ? ", and a new one asks you to sign in with GitHub first" : ""}.</span></div><form class="tt-ob-f" data-ob-form novalidate>${go}${keep}<button type="button" class="link" data-ob-off data-fk="ob-off">Not now</button></form><p class="msg" data-ob-msg role="status"></p></div>`);
   // the books kept on this machine, read once a while (a minute): the card is drawn again with them
   if (!TK.paperBooksAt || Date.now() - TK.paperBooksAt > 60_000) {
     TK.paperBooksAt = Date.now();
@@ -404,7 +414,8 @@ function tkOnboard(box, owner) {
   box.addEventListener("submit", (e) => {
     e.preventDefault();
     const f = e.target.closest && e.target.closest("[data-ob-form]");
-    if (!f) return;
+    // no amount on the card while a GitHub sign-in comes first: the paper form opens instead
+    if (!f || !f.elements.usd) return;
     const usd = String(f.elements.usd.value || "").trim().replace(/,/g, "");
     if (usd && !/^\$?\d{1,9}(\.\d{1,2})?$/.test(usd)) return void say(`Paper money is a number of dollars, like 25000; leave it empty for ${money(TK_PAPER_CASH)}.`, "no");
     void openNew(usd.replace(/^\$/, ""));
@@ -412,6 +423,8 @@ function tkOnboard(box, owner) {
   box.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest("button");
     if (!b || !box.contains(b) || b.disabled) return;
+    // the paper form, where the GitHub sign-in is
+    if (b.hasAttribute("data-ob-github")) return void (typeof openConnect === "function" && typeof optionOf === "function" && openConnect(optionOf("paper"), { name: "Paper account" }));
     if (b.hasAttribute("data-ob-off")) {
       TK.obOff = true;
       try {

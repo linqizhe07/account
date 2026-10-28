@@ -20,6 +20,7 @@
  *   live:robinhood         the sign-in's discovery: its two public metadata documents, and that a client may register itself (OAuthSignIn)
  *   live:metamask          `mm auth status` on this machine: installed, and signed in — a check mm makes with MetaMask's servers each time,
  *                          so a network that does not reach them is no answer just now, not a missing sign-in
+ *   live:paper             asks no venue: `setup` while opening one wants a GitHub sign-in first (live/github.ts) and nobody is signed in
  *
  * The connections read by address read public data, but from hosts a network may refuse or filter (Ukraine's order to block
  * polymarket.com), so each asks its host one keyless question too, about nobody — no address of the user's is sent:
@@ -71,6 +72,9 @@ export interface ReachDeps {
   /** the account's own place for this network (the service's one Locator, kept in memory as for the list of venues), so a place already
    * learned decides Hyperliquid's line with no second lookup; without it a place is asked for this answer alone */
   where?: Locator | undefined;
+  /** what opening a paper account wants first on this machine (live/github.ts: a GitHub sign-in), or nothing: live:paper answers setup
+   * with these words while there is something */
+  paperSetup?: (() => string | undefined) | undefined;
 }
 
 /** the venues' names, for the sentences */
@@ -255,6 +259,11 @@ export async function reachOf(connector: string, deps: ReachDeps): Promise<Reach
   if (kind === "hyperliquid") return answersHere(connector, "Hyperliquid", HL_INFO, deps, at, { type: "meta" });
   if (kind === "wallet") return chainsAnswer(connector, Object.keys(CHAINS) as ChainName[], deps, at);
   if (kind === "ondo") return chainsAnswer(connector, ["Ethereum"], deps, at);
+  // a paper account the account keeps itself asks no venue: only what this machine wants first (a GitHub sign-in, when the server asks for one)
+  if (kind === "paper") {
+    const first = deps.paperSetup?.();
+    return first ? { connector, state: "setup", said: first, at } : { connector, state: "ok", at };
+  }
   // a connection with no question of its own
   return { connector, state: "ok", at };
 }

@@ -466,10 +466,55 @@ Robinhood 的三条线都是它自己发布的接口（2026-10-05 读）：股�
 
 再后来的三个文件：`earn-pair-holes`（earn 里的钱和场所余额只算一次：同名的份额代币不冒认别人的钱，迟到或失败的 earn 读数不和新的余额配对）、`ask-reworded-decline`（agent 改口再问是一条新请求，owner 对旧话签的拒绝不落到新话上）、`review2-account`（第二轮审阅在门、额度和重建上该成立的每一条：重启后场所没回来不锁死、没人答的卡到点自己过期、卖掉持有的平仓算卖单、owner 改大 agent 的单也过额度、撤销额度不关请求、名字是明文、金额不超过 15 位）。
 
+## GitHub 登录：开新纸上账户之前（`live/github.ts`）
+
+为什么：Gravit 开源、跑在每个用户自己的电脑上，项目方没有服务器，不知道谁在用，也联系不到用户。开新纸上账户之前要求用 GitHub 登录，用户还可以自己选择在项目的置顶讨论里打个招呼——项目方在那里看到每个打过招呼的人，可以 @ 他们。
+
+**机制：GitHub App 的 device flow**（docs.github.com，2026-10-21 读）。不需要任何密钥：device flow 只要 client id，client id 是公开值；代码里没有 client secret，也没有私钥。
+- 要码：`POST github.com/login/device/code {client_id}` → `device_code`、`user_code`、`verification_uri`（必须是 `https://github.com/login/device`，否则不认）、`expires_in`（15 分钟）、`interval`（5 秒）。
+- 用户在 github.com/login/device 自己输入、批准：GitHub 自己的页面、用户自己的浏览器，这个页面看不到 GitHub 的密码。
+- 服务按 `interval` 问 `POST github.com/login/oauth/access_token`：`authorization_pending` 接着等；`slow_down` 以后每次多等 5 秒（或 GitHub 说的间隔）；`expired_token`、`access_denied`、`device_flow_disabled` 结束这个码，原话写在表单上；网络抖一下、429、5xx 下一轮再问。
+- 拿到令牌后 `GET api.github.com/user` 只读 `login`、`id`、`name`、`avatar_url`（头像只认 `avatars.githubusercontent.com` 的 https 地址）；**不读邮箱**，答复里有也不读。
+- App 的权限只有 Repository → Discussions: Read & write，只装在 `linqizhe07/account` 上：用户的令牌能做的就是在这个仓库的讨论里评论，碰不到用户自己的仓库和账户。
+
+**存储**：`<home>/github/identity.json` = `{v:1, identity?: {login, id, name?, avatarUrl?, at}, hello?: {url, at}}`，0600，目录 0700；写法同大脑钥匙文件（新临时文件 `wx` 0600、fsync、rename、fsync 目录，链接一律拒绝），读法同钥匙文件（`readSecretFile` 加形状检查，不对就当没人登录）。令牌只在内存里，最多 8 小时，refresh token 不留；不进账本、日志、`/api/account`（MCP 席位也读它）、页面存储。重启以后身份还在（开新纸上账户不用再登），打招呼要重新登录（令牌没了）。
+
+**闸门**（`service.ts` `paperGate`）：
+- 只在这个服务配了 client id 时开：`GITHUB_APP.clientId`，环境变量 `PORTFOLIO_GITHUB_CLIENT_ID`（空字符串 = 关）、`PORTFOLIO_GITHUB_REPO`、`PORTFOLIO_GITHUB_DISCUSSION` 给 fork 用。启动时终端一行写开没开。
+- 只管"开新的"：`connector === "live:paper"` 且 `<home>/paper/<venue>/book.json` 还不存在。已有账本接着记、`resetPaper`、`topUpPaper`、重启恢复（`plugAgain`，不经过 `host.connect`）一律不管。
+- 两处拦：`prepare`（签之前，页面看到原话）和门口的 `host.connect`（不经页面签的也拦）；拒绝是 `E_ACCOUNT_CREDENTIAL`，`detail.github: "sign-in"`，什么都不写。
+- 没人登录时 `live:paper` 的 reach 答 `setup`（"Sign in with GitHub first…"），场所列表和 `portfolio_venues` 跟着写 `setup`；登录、退出的一刻丢掉留着的答案重问，列表马上翻。页面上纸上账户的卡片和表单不因为这个 `setup` 关上（别的场所的 `setup` 照旧关表单）：表单自己就是登录的地方。Trade 的纸上账户引导卡在要登录时把按钮换成 "Sign in with GitHub to open one"，打开这张表单。
+
+**打招呼**（owner 动作 `githubHello {repo, discussion, body, nonce}`，`AccountGitHub:Hello`）：
+- 自愿：表单里一个**默认不勾**的框，旁边是原话。开户从来不依赖它（GitHub 的 Acceptable Use Policies 不许要求或奖励互动）。
+- 三个字段都是账户自己的：prepare 不管页面送什么，填成这个版本的讨论和 `helloWords(login)` = `👋 @<login> started a paper account`；门口再对一遍，不一样就拒（`E_ACCOUNT_BAD_ACTION`），什么都不发。
+- 十分钟有效（`GITHUB_HELLO_TTL_MS`）；一台机器只说一次（`identity.json` 的 `hello`，退出登录也留着）。
+- 先查讨论：Discussions 开着、有这个编号、没锁，才发一条 `addDiscussionComment`。GitHub 收了却没说地址：记成讨论本身的地址（发过了，不再发）；答复在路上丢了：直说"可能发了也可能没发，先去看"，不记成说过。
+- 账本：taken 那一行的 `body` 抹成 ""（`ledgered` → `helloless`），成功那一行不带信封、只写评论的地址；GitHub 的用户名不进账本，GitHub 的原话也不进拒绝；restore 不重放它。
+
+**路由**（不签名；在 origin 守卫后面，还要浏览器自己的头：`Sec-Fetch-Site: same-origin` 或 Origin，同 brain-test）：
+- `GET /api/account/github`：谁登录了、等着输入的码、上一个码怎么结束的、打招呼的状态；没配 app 时 `{on: false}`。从不带令牌，从不带 GitHub 的 device code。
+- `POST /api/account/github/start {again?}`：等着的那个码（几个浏览器共用一个），或者新的（最多每 10 秒一个；GitHub 一个 app 一小时只收 50 次输入）。
+- `POST /api/account/github/signout`：在这台机器上退出（忘掉令牌、删掉身份，招呼记录留着）。授权本身在 GitHub 那边：用户去 Settings → Applications → Authorized GitHub Apps 收回——在这里收回要 app 的 secret，这里没有。
+
+边界情况：码 15 分钟过期；从不比 `interval` 问得快；登录中途重启，码就没了，页面回到 "Sign in with GitHub"；讨论锁了、Discussions 关了、app 没装：原话，什么都不发，纸上账户照样开；离线：新的纸上账户开不了，直到 GitHub 回答，已有的不受影响。替身：`npx tsx test/standin/ui-standin.ts --port 4824 --github`。
+
+**owner 在 GitHub 上要做的事**（不是代码）：
+1. Settings → Developer settings → GitHub Apps → New GitHub App：名字（如 "Gravit"），Homepage `https://linqizhe07.github.io/account/`，Callback URL 空着。
+2. 勾 **Enable Device Flow**；**Expire user authorization tokens** 保持勾着；Webhook 的 **Active** 取消。
+3. 权限只给 **Repository → Discussions: Read and write**。
+4. **Where can this GitHub App be installed? → Any account**（只能自己装的 app，别人授权不了）。
+5. 建好，复制 **Client ID**（公开值）。不要 client secret，不要私钥。
+6. **Install App** → 自己的账户 → Only select repositories → `account`。
+7. 仓库 Settings → Features → 打开 **Discussions**；在 **Announcements** 分类里建一个讨论（"👋 Who uses Gravit"），**置顶**，不要锁；记下编号。
+
+然后把 Client ID 和讨论编号填进 `live/github.ts` 的 `GITHUB_APP`，闸门就开了。
+
 ## 这一层的诚实边界
 
 - **脑子的钥匙在页面上填，落地仍是一个明文文件**（`account/brain-keys.ts`）：`credentials/brains/<id>.json` 只有本人可读，但同一个系统用户下的每个进程——agent 席位也在内——都读得到它，和场所的钥匙文件一样；页面上填只是省了开终端，不是保险箱。钥匙在内存里暂存的那几毫秒，和浏览器里输入框清空之前，都是普通的进程内存。各家的 base URL、建议的模型和怪癖是 2026-10-15 从各家文档读的，会变：建议的模型从不说是全的，页面上写着日期；Muse、Grok Bot、Instinct 没有能调的 API（2026-10-15 查的），这一层没有接它们；让它们反过来经一个公网的 MCP connector 接进账户，2026-10-15 决定不做。Test the saved key 不要签名：本机的程序带上浏览器的头也能问，得到的只是那一家不计费的模型列表和抹过钥匙的话。挡钥匙进模型那一格、进 Desk 的话靠的是形状（`keyShaped`、`prefixedKey`）：不到 32 个字符、又没有认得的前缀的钥匙（比如一串 24 位的字母数字），粘进模型那一格认不出——钥匙那一格同时填着同一把钥匙时才抓得住；Desk 的话里只认自报家门的钥匙，光秃秃的一串十六进制不拦（为了让 `0x` 地址过）。
 - **Paste an API key 认钥匙靠形状加一次真调用，两样都会过时**（`account/brain-detect.ts`）：前缀表是 2026-10-21 从各家文档和 gitleaks、TruffleHog、GitHub 的扫描规则读的；DeepSeek、Kimi 的钥匙形状各家文档没写，普通的 `sk-` 钥匙会依次给 DeepSeek、Kimi、OpenAI 看到（只有被拒才往下问，连不上就停），这在格子下面按 Connect 之前就写着；OpenAI 的 `T3BlbkFJ` 记号是扫描器都用、OpenAI 自己没写的；Together 的 `tgp_v1_` 只在公开代码里见过；64 位十六进制可能是 Together 的老钥匙，但也是钱包私钥的样子，所以一律不送，请到 Together 那张卡上填。Google 新的 `AQ.` 钥匙在 2026 年 10 月被它自己的模型列表拒（Google 论坛上还没解决），这时只能说被拒了；`sk-ant-api01-` 可能是 Claude Enterprise 的管理钥匙，只有调用能分辨；xAI 只在访问列表为空时拦。挑的模型是当天各家推荐的旗舰，会换，签名之前的那句话里写着挑的是谁。钥匙经本机回环送两次（认、存），两次之间只在页面那一个函数的局部变量里。
+- **GitHub 登录是账户的规矩，不是锁**（`live/github.ts`）：代码是开源的，`identity.json` 可以手写，闸门可以改掉。它的用处是让愿意的人和项目方连上线（打招呼是自愿的），不是验证谁能用。一个非协作者能不能在置顶讨论里评论，GitHub 的文档只说公开仓库的讨论人人可评论，没明说 GitHub App 的用户令牌也一样：要用第二个 GitHub 账户实际试一次。
 - **记忆（`account/memory.ts`）是话，不是墙也不是权限**：同一个系统用户下的 agent 席位互相读得到 `<home>/memory/` 的文件，MCP 席位只读它该读的是席位的约定；门不读记忆，所以一条记忆骗不到任何权限，但它能骗读它的 agent——"别的 agent 也能读"关着时一个 agent 记的别的 agent 读不到，开着"先问我"时它学的在你记下之前谁都不读。挡钥匙、密钥、助记词、IP 的是一组模式（`memoryProblem`），不是保证：换个写法写进来的秘密它认不出。用户所在的地方账户自己从不写进去，agent 自己写的话账户不审。来自额度的那几句是照实写的，不是额度本身：额度只在你签的那份里。
 
 - **两处场所自己的话互相矛盾，照记不裁决**：Polymarket 的 API 文档说美国"只能平仓"（网页和 API 都是），它的帮助中心（2026-08-14）把美国列在"完全限制"里。账户照 API 文档让美国用户卖出、撤单，每一笔卖出最终由它的订单簿答复。LI.FI 的通用条款（2025-09-04 §2.6）排除美国人，但写明管的是网站、SDK 和 Widget；它的商业 API 条款（2026-05-13）只排除受全面制裁的地方，而且不管不带钥匙的公开调用。账户换币、跨链用的正是不带钥匙的 li.quest，哪份条款管它，LI.FI 没说。

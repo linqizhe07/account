@@ -48,6 +48,21 @@
 #modal-form .wallets img { border-radius: 50%; }
 #modal-form .or { font-size: 12px; color: var(--dim); text-align: center; margin: -4px 0; }
 #live-body { display: flex; flex-direction: column; gap: 14px; }
+/* the GitHub sign-in a new paper account asks for (connect.js ghPanelHtml): signed out, a code waiting, or signed in — with the hi, a box
+   left unticked */
+#modal-form .gh { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--card-border); border-radius: var(--radius-s); background: var(--surface); }
+#modal-form .gh-h { display: flex; flex-direction: column; gap: 2px; line-height: 1.45; }
+#modal-form .gh-h b { font-weight: 600; font-size: 14px; }
+#modal-form .gh-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#modal-form .gh-code { display: flex; gap: 12px; align-items: center; background: var(--surface-2); border-radius: var(--radius-s); padding: 8px 12px; }
+#modal-form .gh-code code { font-family: var(--font-mono); font-size: 22px; font-weight: 600; letter-spacing: 0.12em; }
+#modal-form .gh-who { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+#modal-form .gh-who > span:not(.av) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#modal-form .gh label.chk1 { white-space: normal; align-items: flex-start; line-height: 1.45; }
+#modal-form .gh label.chk1 input { margin-top: 3px; }
+#modal-form .gh-keep { display: flex; gap: 8px; flex-wrap: wrap; }
+/* a kept book's long name wraps inside its button, never past the panel */
+#modal-form .gh-keep .btn { white-space: normal; text-align: left; max-width: 100%; padding-top: 8px; padding-bottom: 8px; line-height: 1.35; }
 
 /* the agents' form: one form for a new agent and for a known agent's limit */
 .old .add { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; padding-top: 16px; border-top: 1px solid var(--border); }
