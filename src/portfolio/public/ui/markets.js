@@ -3,7 +3,9 @@
    Predictions (Yes/No cards whose prices are asked again only while a card is in view and the page is in view: GET /api/account/quotes),
    and Watching — the owner's watchlist, and under it the owner's PRICE ALERTS. Over the All tab THE PULSE (after OpenStock's dashboard):
    the US stock market's session with a countdown, and the day in six figures — the S&P 500, Nasdaq 100, Dow and Russell 2000 by the ETFs
-   that track them, Bitcoin and Ethereum — each a tile that opens the market. One market in THE ONE DRAWER (openMarket; a holding opens it
+   that track them, Bitcoin and Ethereum — each a tile that opens the market. The HEATMAP tab (ui/heatmap.js, after Finviz's map of the
+   market): the US stock market's day as one picture, the largest companies as tiles sized by market cap and coloured by the day's change,
+   packed by sector, each tile opening its market here. One market in THE ONE DRAWER (openMarket; a holding opens it
    by its key through openAsset, asset.js): its price, its history, every venue's price for it, what is held — positions to close, orders to
    cancel, what was paid — its price alerts, what the agents are doing in it, and its lines on the statement. Markets manages no accounts:
    connections live under Portfolio › Accounts and the Connect picker.
@@ -537,7 +539,11 @@ function mkTabIds(body) {
 }
 const mkHasWatching = () => !!A && ((A.watch || []).length > 0 || (A.alerts || []).length > 0 || (A.alertsFired || []).length > 0);
 function mkTabs(p, body) {
-  const items = [...(p.q ? [["", "All results"]] : []), ...mkTabIds(body), ...(mkHasWatching() ? [["watching", "Watching"]] : [])];
+  // the heatmap after Stocks (after everything the account lists, where no Stocks tab is in the read yet), the page's own tab as Watching is
+  const ids = mkTabIds(body);
+  const atStocks = ids.findIndex(([id]) => id === "stocks");
+  ids.splice(atStocks >= 0 ? atStocks + 1 : ids.length, 0, ["heatmap", "Heatmap"]);
+  const items = [...(p.q ? [["", "All results"]] : []), ...ids, ...(mkHasWatching() ? [["watching", "Watching"]] : [])];
   return `<div class="tabs mk-tabs" role="group" aria-label="Markets">${items.map(([id, l]) => `<button type="button" data-act="tab" data-tab="${esc(id)}" data-fk="tab:${esc(id)}" aria-pressed="${String(id === p.tab)}">${esc(l)}</button>`).join("")}</div>`;
 }
 
@@ -749,10 +755,10 @@ function mkParams(params) {
   let tab = String((params && params.tab) || "");
   const legacy = Object.prototype.hasOwnProperty.call(MKT_LEGACY_TABS, tab);
   if (legacy) tab = MKT_LEGACY_TABS[tab];
-  const known = ["watching", ...MKT_TAB_IDS].includes(tab);
+  const known = ["watching", "heatmap", ...MKT_TAB_IDS].includes(tab);
   if (!known) tab = q ? "" : "all";
-  // a search typed while watching is a search of every market (the watchlist is not searched)
-  const searchedWatching = tab === "watching" && !!q;
+  // a search typed while watching, or on the heatmap, is a search of every market (neither the watchlist nor the map is searched)
+  const searchedWatching = (tab === "watching" || tab === "heatmap") && !!q;
   if (searchedWatching) tab = "";
   const sort = MKT_SORTS.includes(params && params.sort) ? params.sort : "";
   return { tab, q, sort, bogus: !!(params && params.tab) && (!known || legacy || searchedWatching) };
@@ -813,6 +819,11 @@ function renderMarkets(ctx) {
   if (p.tab === "watching") {
     body = `${mkWatchingHtml(ctx.lens)}${mkAlertsHtml(ctx.lens)}`;
     foot = mkFootHtml(null);
+  } else if (p.tab === "heatmap") {
+    // the map (ui/heatmap.js), and the All read for the tab bar's names, asked once while it draws
+    body = typeof hmHtml === "function" ? hmHtml(p, ctx) : "";
+    foot = typeof hmFootBody === "function" ? mkFootHtml(hmFootBody()) : "";
+    mkPrefetch();
   } else {
     const path = mkPath(p);
     const g = MKT.got.get(path);
@@ -833,6 +844,7 @@ function renderMarkets(ctx) {
     else body = mkSkel();
   }
   paint(ctx.el, `<div class="mk">${mkTabs(p, tabsFrom || (MKT.good && MKT.good.body))}${body}${foot}${mkCredit(MKT.reg)}</div>`);
+  if (p.tab === "heatmap" && typeof hmMount === "function") hmMount(ctx.el);
   mkObserve(ctx.el);
   mkPeekKeep();
   mkStart();
@@ -852,6 +864,8 @@ function mkPaneClick(e) {
     case "retry": for (const g of MKT.got.values()) g.at = 0; return void mkRedraw();
     case "connect": return void connectVia(b.dataset.connector, { name: b.dataset.name });
     case "alert-off": return void mkAlertOff(b.dataset.id);
+    // the heatmap's picks (ui/heatmap.js): how many companies, the colour scale
+    case "hm-n": case "hm-scale": return void (typeof hmAct === "function" && hmAct(b));
     default: return void (item && mkAct(b, item));
   }
 }

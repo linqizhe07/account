@@ -18,6 +18,7 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <link rel="stylesheet" href="/account.css" />
 <link rel="stylesheet" href="/ui/portfolio.css" />
 <link rel="stylesheet" href="/ui/markets.css" />
+<link rel="stylesheet" href="/ui/heatmap.css" />
 <link rel="stylesheet" href="/ui/trade.css" />
 <link rel="stylesheet" href="/ui/terminal.css" />
 <link rel="stylesheet" href="/ui/chart.css" />
@@ -153,6 +154,8 @@ try { if (/^#\/(trade|superagent)(\?|$)/.test(location.hash)) document.documentE
 <script defer src="/ui/memory.js"></script>
 <script defer src="/ui/earn.js"></script>
 <script defer src="/ui/markets.js"></script>
+<!-- the heatmap (ui/heatmap.js): the Markets pane's Heatmap tab, drawn by markets.js, so it comes after it -->
+<script defer src="/ui/heatmap.js"></script>
 <script defer src="/ui/trade.js"></script>
 <script defer src="/ui/chart.js"></script>
 <script defer src="/ui/book.js"></script>

@@ -64,6 +64,7 @@ import type { Payment } from "./account/payments.ts";
 import { exploreAcross, type Exploration, type ExploreSort, type ExploreVenue } from "./live/explore.ts";
 import { fixedHosts, holdBackMs, KEEP_MS as LISTING_KEEP_MS, publicSources, type PublicSource } from "./live/public-markets.ts";
 import { SEC_HOSTS, SEC_TICKER, SEC_TIMEOUT_MS, SecEdgar, secUserAgent, type Financials } from "./live/edgar.ts";
+import { HEATMAP_DEFAULT, HEATMAP_MAX, HEATMAP_TIMEOUT_MS, NASDAQ_HOSTS, UsHeatmap, type Heatmap } from "./live/heatmap.ts";
 import { TABS, type TabId } from "./live/categories.ts";
 import { CHAIN_BY_ID, CHAINS, type ChainName } from "./live/chain.ts";
 import { mountPayees, type PayeeWorld } from "./account/payees.ts";
@@ -75,7 +76,7 @@ import { exchangeEarner, type EarnPosition, type EarnProduct, type LiveEarner } 
 import { exchangeEarnHook } from "./live/exchange-trade.ts";
 import type { LiveVenue } from "./account/live-moves.ts";
 import { CANDLE_INTERVALS, CANDLE_RANGES, DONE, floorTo, HISTORY_MOST, inDollars, INTERVAL_MS, type Candle, type CandleInterval, type CandlePage, type CandleRange, type CandleWindow, type FundingLine, type LiveTrader, type Market, type MarketKind, type MarketStats, type OrderBook, type Position, type PublicTrade } from "./live/trade.ts";
-import { historyKeep, INTERVAL_RANGE, keepMsOf, PAGE_MOST, pageOf, pageWeight, RANGE_BAR, rangeSince, sessionsSince, windowKey } from "./live/history.ts";
+import { historyKeep, hostLane, INTERVAL_RANGE, keepMsOf, PAGE_MOST, pageOf, pageWeight, RANGE_BAR, rangeSince, sessionsSince, windowKey } from "./live/history.ts";
 import { compareAcross, normalBase, type Comparison, type PlaceRule } from "./live/compare.ts";
 import { fold, paperFillLine, type StatementLine } from "./account/statement.ts";
 import { WalletProofs } from "./live/proof.ts";
@@ -914,6 +915,29 @@ export class PortfolioService {
       this.edgarMade = new SecEdgar({ http: fixedHosts(deps.http, SEC_HOSTS, SEC_TIMEOUT_MS), clock: deps.clock, userAgent: this.opts.sec?.userAgent ?? secUserAgent(this.opts.sec?.env ?? process.env) });
     }
     return this.edgarMade;
+  }
+
+  /** THE HEATMAP: the US stock market's day as one picture — the `n` largest US-listed companies by market cap (live/heatmap.ts: Nasdaq's
+   * stock screener sizes the tiles, Nasdaq's real-time quotes colour them, twenty a call), grouped and summed by sector; `sector` keeps one
+   * sector's tiles among them. The same question is answered from what was found for fifteen seconds; the reader keeps each quote longer
+   * (45 s in a session, ten minutes while the market is closed). A read: nothing is ordered */
+  async heatmap(o: { n?: number | undefined; sector?: string | undefined } = {}): Promise<Heatmap | Refusal> {
+    if (!this.account) return no("E_ACCOUNT_BAD_ACTION", { message: "the account layer is not mounted" });
+    const n = o.n === undefined ? HEATMAP_DEFAULT : Math.floor(o.n);
+    if (!(n >= 1 && n <= HEATMAP_MAX)) return no("E_ACCOUNT_BAD_ACTION", { message: `a heatmap is of 1 to ${HEATMAP_MAX} of the largest companies` });
+    const sector = (o.sector ?? "").trim();
+    if (sector.length > 40) return no("E_ACCOUNT_BAD_ACTION", { message: "a sector's name is at most 40 characters" });
+    return this.marketReads.get(`heatmap|${n}|${sector.toLowerCase()}`, 15_000, () => this.heat().read({ n, ...(sector ? { sector } : {}) }));
+  }
+  private heatMade: UsHeatmap | undefined;
+  /** the heatmap's reader, made once: the live connection's network behind the fixed-host guard for Nasdaq's host, each GET waiting its
+   * turn in the account's own line for Nasdaq (history.ts hostLane), the one the real-time quote chain waits in */
+  private heat(): UsHeatmap {
+    if (!this.heatMade) {
+      const deps = this.liveDeps();
+      this.heatMade = new UsHeatmap({ http: fixedHosts(deps.http, NASDAQ_HOSTS, HEATMAP_TIMEOUT_MS), clock: deps.clock, pace: hostLane });
+    }
+    return this.heatMade;
   }
 
   /** the keyless public sources, made once and kept (what each keeps — its answers for a while, its exchange client — lives in it), each

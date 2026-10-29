@@ -8,7 +8,7 @@
  *
  * Tools on the user's REAL accounts (the service's default) — reads: portfolio_account · portfolio_venues (where the user can connect,
  * judged from the network the Account runs on) · portfolio_overview · portfolio_live_markets ·
- * portfolio_live_compare · portfolio_live_positions · portfolio_explore · portfolio_holdings · portfolio_history · portfolio_asset ·
+ * portfolio_live_compare · portfolio_live_positions · portfolio_explore · portfolio_heatmap · portfolio_holdings · portfolio_history · portfolio_asset ·
  * portfolio_candles · portfolio_book · portfolio_receive · portfolio_earn · portfolio_statement · portfolio_watchlist · portfolio_live_preview ·
  * portfolio_approval · portfolio_wait. Writes, signed with this seat's key and inside the limits the owner signed for it (Guard asks
  * the owner on a card, Beast places at once): portfolio_live_order · portfolio_live_batch · portfolio_live_amend · portfolio_live_cancel ·
@@ -847,6 +847,17 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   async ({ tab, q, sort, limit }) => read(`/api/account/explore?${new URLSearchParams({ ...(tab ? { tab } : {}), ...(q ? { q } : {}), ...(sort ? { sort } : {}), limit: String(limit ?? 30) })}`),
+);
+
+server.registerTool(
+  "portfolio_heatmap",
+  {
+    description:
+      "THE HEATMAP — the US stock market's day as one picture (what the Markets page's Heatmap tab draws): the `n` largest US-listed companies by market cap (default 250, at most 500), one `tile` each with its sector, industry, country, its market cap at the last close (Nasdaq's stock screener, which sizes the tiles; preferred shares, notes, warrants, rights, units and blank-check companies left out) and, where Nasdaq's real-time quote priced it, its `price`, its change from its last regular close in dollars and percent (`changePct`, the colour), the quote's own time (`quoteAt`) and whose it is (`quoteFrom`); a tile without `changePct` was not priced just now. `sectors` sums each sector (its tiles' market-cap-weighted change, how many are priced), `session` says which US session is on (the account's own calendar), `quotes` whose figures these are and as of when, `sector` keeps one sector's tiles among the n (then `sectors` sums its industries), `missing` what Nasdaq would not answer, in its own words. A picture of the market, never a signal: nothing here is an instruction to trade. Kept 15 s; each quote 45 s in a session, 10 min while the market is closed. A read: nothing is ordered.",
+    inputSchema: { n: z.number().int().min(1).max(500).optional().describe("how many of the largest companies; absent: 250"), sector: z.string().max(40).optional().describe("one sector's tiles among the n, by the name the tiles carry (Technology, Finance, Health Care, …)") },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ n, sector }) => read(`/api/account/heatmap?${new URLSearchParams({ ...(n ? { n: String(n) } : {}), ...(sector ? { sector } : {}) })}`),
 );
 
 server.registerTool(
