@@ -133,6 +133,13 @@
  *                                                        a key from SEC EDGAR's XBRL company facts (live/edgar.ts); the SEC asks every reader
  *                                                        to say who they are, so SEC_CONTACT (an email address) names this account to it —
  *                                                        unset, a refusal that says so. Nothing estimated; kept twelve hours in memory
+ *   GET  /api/account/heatmap?n=250&sector=              THE HEATMAP (live/heatmap.ts): the US stock market's day as one picture — the `n`
+ *                                                        largest US-listed companies by market cap (100 · 250 · 500 on the page; 1 to 500
+ *                                                        here), each a tile sized by its cap at the last close (Nasdaq's stock screener) and
+ *                                                        coloured by its change from its last regular close (Nasdaq's own real-time quote,
+ *                                                        twenty a call), the sectors summed beside them; `sector` keeps one sector's tiles
+ *                                                        among the n. Kept 15 s; each quote 45 s in a session, 10 min while the market is
+ *                                                        closed; nothing estimated — a share Nasdaq did not price carries no change
  *   GET  /api/account/book?venue=&symbol=&depth=20        one market's order book, best first (a market whose source has no book: its best
  *                                                        bid and ask only, depth "top"); kept a second and a half
  *   GET  /api/account/trades?venue=&symbol=&limit=30      one market's latest trades, newest first; kept three seconds (a source that
@@ -839,6 +846,16 @@ export async function startPortfolioServer(opts: PortfolioServerOptions): Promis
     const q = strings(req, res, { symbol: 12 });
     if (!q) return;
     answerOf(res, await svc.financials(q.symbol));
+  }));
+
+  // THE HEATMAP: the US stock market's day as one picture — the largest listed companies by market cap, each with its change from its last
+  // regular close, grouped by sector, read keyless from Nasdaq (service.ts heatmap, live/heatmap.ts); the Markets pane's Heatmap tab. A read
+  app.get("/api/account/heatmap", wrap(async (req, res) => {
+    if (!mounted(res)) return;
+    const q = strings(req, res, { n: 4, sector: 40 });
+    if (!q) return;
+    if (q.n !== "" && !/^\d{1,3}$/.test(q.n)) return void bad(res, '"n" is a whole number of companies, 1 to 500');
+    answerOf(res, await svc.heatmap({ ...(q.n ? { n: Number(q.n) } : {}), ...(q.sector ? { sector: q.sector } : {}) }));
   }));
 
   // one market's order book (best first, `depth` levels a side, 1 to 50) and its latest trades (newest first, `limit`, 1 to 100): a connected

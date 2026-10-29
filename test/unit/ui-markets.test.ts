@@ -420,7 +420,8 @@ describe("the Markets pane", () => {
     await settle();
     const html = p.run<string>("EL.innerHTML");
     const tabs = [...html.matchAll(/data-act="tab" data-tab="([a-z]*)"[^>]*aria-pressed="(true|false)">([^<]+)</g)].map((m) => `${m[3]}${m[2] === "true" ? "*" : ""}`);
-    expect(tabs).toEqual(["All*", "Crypto", "Predictions", "Watching"]);
+    // the page's own Heatmap after the account's tabs (after Stocks where that is listed), Watching last
+    expect(tabs).toEqual(["All*", "Crypto", "Predictions", "Heatmap", "Watching"]);
     // one table, no Now sections, no Venues board
     expect(html.match(/<table class="t mk-t">/g)).toHaveLength(1);
     expect(html).not.toMatch(/<h2[^>]*>(Closing soon|Movers|Most traded)<\/h2>/);
@@ -534,7 +535,7 @@ describe("the Markets pane", () => {
     await settle();
     const html = p.run<string>("EL.innerHTML");
     const tabs = [...html.matchAll(/data-act="tab" data-tab="([a-z]*)"[^>]*aria-pressed="(true|false)">([^<]+)</g)].map((m) => `${m[3]}${m[2] === "true" ? "*" : ""}`);
-    expect(tabs).toEqual(["All", "Crypto", "Perps", "Pre-IPO*", "Predictions"]);
+    expect(tabs).toEqual(["All", "Crypto", "Perps", "Pre-IPO*", "Predictions", "Heatmap"]);
     expect(html).not.toContain('data-tab="venues"');
   });
 

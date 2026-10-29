@@ -74,6 +74,12 @@
   /* a Yes and a No to press: the up and down colours on a fill of their own */
   --up-fill: rgba(0, 132, 61, 0.1);
   --down-fill: rgba(218, 41, 28, 0.09);
+  /* the heatmap's tiles (ui/heatmap.css): the Account's green and red mixed into this grey as deep as a share's move, white words on
+     all three (white on the grey 5.0:1 here, on the green 4.8, on the red 4.9) */
+  --hm-flat: #70706b;
+  --hm-up: var(--green);
+  --hm-down: var(--red);
+  --hm-text: #ffffff;
   --hover: rgba(17, 17, 17, 0.05);
   --area: rgba(17, 17, 17, 0.05);
   --scrim: rgba(251, 251, 250, 0.5);
@@ -143,6 +149,8 @@
   --down: #ff7360;
   --up-fill: rgba(59, 179, 96, 0.14);
   --down-fill: rgba(255, 115, 96, 0.13);
+  /* the heatmap's grey on Black: its green and red stay the full ones (--green, --red), never the tints, so white words hold */
+  --hm-flat: #3a3a3f;
   --hover: rgba(255, 255, 255, 0.06);
   --area: rgba(255, 255, 255, 0.06);
   --scrim: rgba(0, 0, 0, 0.55);
@@ -209,6 +217,7 @@
     --down: #ff7360;
     --up-fill: rgba(59, 179, 96, 0.14);
     --down-fill: rgba(255, 115, 96, 0.13);
+    --hm-flat: #3a3a3f;
     --hover: rgba(255, 255, 255, 0.06);
     --area: rgba(255, 255, 255, 0.06);
     --scrim: rgba(0, 0, 0, 0.55);

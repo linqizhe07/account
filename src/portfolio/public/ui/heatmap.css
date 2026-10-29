@@ -1,0 +1,48 @@
+/* The heatmap (ui/heatmap.js), in the ocean look: one glass card the width of the pane, the market packed inside it — each sector a band
+   with a quiet name strip on the second surface, each share a tile filled with the Account's green or red mixed into a neutral grey as deep
+   as its move (--t, 0 to 1 of the scale chosen: the stylesheet mixes the colour, the script only says how much), white words on it (the
+   grey is dark enough for them at 4.5:1 in both backgrounds, and the green and the red are darker still). The session line and the picks
+   over it, the colour scale under it, the hover card the Markets pane's own (.mk-peek). Colours, radii and fonts only from ui/tokens.css
+   (--hm-flat, --hm-up, --hm-down, --hm-text), so Light and Black alike. Motion: a tile's colour fades to its next on a fresh read; a layout
+   change moves tiles at once (a resize is the owner's own motion) */
+
+.hm { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.hm-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.hm-line { min-width: 0; margin: 0; }
+.hm-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-left: auto; }
+.hm-crumb { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: -4px 0 0; font-size: 13px; text-shadow: var(--halo); }
+.hm-crumb .hm-grp-c { font-weight: 700; }
+
+/* the map: a glass card with nothing but the market in it; its height is set by the script from its width */
+.hm-map { position: relative; width: 100%; min-width: 0; overflow: hidden; border-radius: var(--radius-m); background: var(--surface); box-shadow: inset 0 0 0 1px var(--card-border); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); contain: strict; }
+.hm-skel { display: flex; align-items: center; justify-content: center; }
+/* a sector's (an industry's) band */
+.hm-grp { position: absolute; overflow: hidden; }
+/* its name strip: a button on the sectors (it zooms in), a plain strip inside a sector; its cap-weighted change beside the name */
+.hm-grp-h { position: absolute; left: 1px; top: 1px; height: 17px; display: block; line-height: 17px; padding: 0 6px; margin: 0; border: 0; border-radius: 0; min-height: 0; min-width: 0; background: var(--surface-2); color: var(--dim); font-family: var(--font-sans); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; box-sizing: border-box; }
+.hm-grp-h .hm-grp-c { margin-left: 4px; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+button.hm-grp-h { cursor: pointer; }
+button.hm-grp-h:hover, button.hm-grp-h:focus-visible { color: var(--text); background: linear-gradient(var(--hover), var(--hover)) var(--surface-2); }
+button.hm-grp-h:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+/* a tile: a button filled by its move; the words are centred and clipped, never wrapped */
+.hm-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; margin: 0; padding: 0; border: 0; border-radius: 2px; min-height: 0; min-width: 0; overflow: hidden; box-sizing: border-box; color: var(--hm-text); background: color-mix(in oklab, var(--hm-up) calc(var(--t, 0) * 100%), var(--hm-flat)); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14); text-align: center; line-height: 1; cursor: pointer; transition: background-color 500ms ease-out; }
+.hm-tile.down { background: color-mix(in oklab, var(--hm-down) calc(var(--t, 0) * 100%), var(--hm-flat)); }
+.hm-tile.flat { background: var(--hm-flat); }
+.hm-tile:hover, .hm-tile:focus-visible { z-index: 2; outline: 2px solid var(--text); outline-offset: -2px; filter: brightness(1.14); }
+.scrolling .hm-tile { transition: none; }
+.hm-sym { font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; }
+.hm-chg { font-weight: 600; opacity: 0.92; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* a change up or down in a name strip or the crumb: the Account's pair */
+.hm-grp-c.up { color: var(--up); }
+.hm-grp-c.down { color: var(--down); }
+
+/* the colour scale: seven swatches from −scale to +scale, mixed as the tiles are */
+.hm-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--text); text-shadow: var(--halo); font-variant-numeric: tabular-nums; }
+.hm-sw { display: inline-block; width: 26px; height: 12px; border-radius: 2px; background: color-mix(in oklab, var(--hm-up) calc(var(--t, 0) * 100%), var(--hm-flat)); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14); }
+.hm-sw.down { background: color-mix(in oklab, var(--hm-down) calc(var(--t, 0) * 100%), var(--hm-flat)); }
+.hm-sw.flat { background: var(--hm-flat); }
+.hm-legend .dim { margin-left: 6px; }
+
+@media (prefers-reduced-motion: reduce) { .hm-tile { transition: none; } }
+@media (max-width: 640px) { .hm-tools { margin-left: 0; } .hm-grp-h { font-size: 9px; padding: 0 4px; } }
